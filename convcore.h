@@ -76,4 +76,8 @@ void CmiSyncBroadcastAllAndFree(int size, void *msg);
 
 void CmiNodeBarrier(void);
 
+//node queue
+ConverseQueue<CmiMessage> *CmiGetNodeQueue();
+void CmiSyncNodeSendAndFree(unsigned int destNode, unsigned int size, void *msg);
+
 #endif

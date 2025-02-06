@@ -4,15 +4,16 @@
 
 CpvDeclare(int, test);
 CpvDeclare(int, exitHandlerId);
+CpvDeclare(int, nodeHandlerId);
 
 void stop_handler(void *vmsg)
 {
   CsdExitScheduler();
 }
 
-void ping_handler(void *vmsg)
+void nodeQueueTest(void *msg)
 {
-  printf("PING HANDLER CALLED\n");
+  printf("NODE QUEUE TEST on pe %d\n", CmiMyRank());
   for(int i=0; i<CmiMyNodeSize(); i++)
   {
     CmiMessage *msg = new CmiMessage;
@@ -22,6 +23,15 @@ void ping_handler(void *vmsg)
 
     CmiSyncSendAndFree(i, msg->header.messageSize, msg);
   }
+}
+
+void ping_handler(void *vmsg)
+{
+  printf("PING HANDLER CALLED\n");
+  CmiMessage *msg = new CmiMessage;
+  msg->header.handlerId = CpvAccess(nodeHandlerId);
+  msg->header.messageSize = sizeof(CmiMessage);
+  CmiSyncNodeSendAndFree(0, msg->header.messageSize, msg);
 }
 
 CmiStartFn mymain(int argc, char **argv)
@@ -66,6 +76,8 @@ CmiStartFn mymain(int argc, char **argv)
 
   CpvInitialize(int, exitHandlerId);
   CpvAccess(exitHandlerId) = CmiRegisterHandler(stop_handler);
+  CpvInitialize(int, nodeHandlerId);
+  CpvAccess(nodeHandlerId) = CmiRegisterHandler(nodeQueueTest);
 
   // printf("Answer to the Ultimate Question of Life, the Universe, and Everything: %d\n", CpvAccess(test));
   return 0;
