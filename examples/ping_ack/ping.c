@@ -23,6 +23,8 @@ void print_results() {
 //CpmInvokable ping_stop()
 void ping_stop_handler(void *msg)
 {
+  if(CmiMyPE()==0)
+    printf("\nProgram End");
   CmiFree(msg);
   CsdExitScheduler();
 }

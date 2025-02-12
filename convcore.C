@@ -55,6 +55,9 @@ void CommRemoteHandlerNode(comm_backend::Status status) {
     CmiNodeQueue->push(status.msg);
 }
 
+/* defined in cpuaffinity.C */
+void CmiInitCPUAffinityUtil(void);
+
 void CmiCallHandler(int handler, void *msg)
 {
     CmiGetHandlerTable()->at(handler).hdlr(msg);
@@ -64,6 +67,9 @@ void converseRunPe(int rank)
 {
     // init state
     CmiInitState(rank);
+
+    CmiInitState(rank);
+    CmiSetCPUAffinityLogical(pe);
 
     // barrier to ensure all global structs are initialized
     CmiNodeBarrier();
@@ -160,6 +166,9 @@ void CmiInitState(int rank)
     Cmi_myrank = rank;
     CmiSetIdle(false);
     CmiSetIdleTime(0.0);
+
+    CmiInitHwlocTopology();
+    CmiInitCPUAffinityUtil();
 
     // allocate global entries
     ConverseQueue<void *> *queue = new ConverseQueue<void *>();
