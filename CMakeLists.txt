@@ -61,7 +61,7 @@ if(RECONVERSE_TRY_ENABLE_COMM_LCI1)
     target_link_libraries(reconverse PRIVATE LCI::LCI)
     target_sources(reconverse PRIVATE comm_backend/lci1/comm_backend_lci1.C)
   else()
-    message(WARNING "LCI is not found. The LCI backend if not enabled.")
+    message(WARNING "LCI is not found. The LCI backend is not enabled.")
   endif()
 endif()
 
