@@ -32,15 +32,8 @@ typedef struct CthThreadBase
   char      *data;       /* thread private data */
   size_t     datasize;   /* size of thread-private data, in bytes */
 
-  //int isMigratable; /* thread is migratable (isomalloc or aliased stack) */
-
   void      *stack; /*Pointer to thread stack*/
   int        stacksize; /*Size of thread stack (bytes)*/
-  //struct CthThreadListener *listener; /* pointer to the first of the listeners */
-
-  //int interceptionDeactivations;
-  //CmiIsomallocContext isomallocContext;
-
   int magic; /* magic number for checking corruption */
 
 } CthThreadBase;
@@ -109,7 +102,6 @@ void CthEnqueueNormalThread(CthThreadToken* token, int s,
 {
   CmiSetHandler(token, CpvAccess(CthResumeNormalThreadIdx));
   CmiGetQueue(CmiMyPe())->push(token);
-  //CsdEnqueueGeneral(token, s, pb, prio);
 }
 
 void CthEnqueueSchedulingThread(CthThreadToken* token, int s, 
@@ -118,7 +110,6 @@ void CthEnqueueSchedulingThread(CthThreadToken* token, int s,
   CmiSetHandler(token, CpvAccess(CthResumeSchedulingThreadIdx));
   CpvStaticDeclare(int      , CthResumeSchedulingThreadIdx);
   CmiGetQueue(CmiMyPe())->push(token);
-  //CsdEnqueueGeneral(token, s, pb, prio);
 }
 
 static CthThread CthSuspendNormalThread(void)
@@ -139,13 +130,6 @@ static void CthBaseInit(char **argv)
 
   CpvInitialize(int,  _defaultStackSize);
   CpvAccess(_defaultStackSize)=CMK_STACKSIZE_DEFAULT;
-/*
-  CmiGetArgIntDesc(argv,"+stacksize",&CthCpvAccess(_defaultStackSize),
-      "Default user-level thread stack size");  
-*/
-  /*if (CmiGetArgStringDesc(argv,"+stacksize",&str,"Default user-level thread stack size"))  {
-      CpvAccess(_defaultStackSize) = CmiReadSize(str);
-  }*/
 
   CpvInitialize(CthThread,  CthCurrent);
   CpvInitialize(char *, CthData);
@@ -185,19 +169,12 @@ static void CthThreadInit(CthThread t)
 
   CthSetStrategyDefault(S(th));
 
-  //th->isMigratable=0;
-  //th->isomallocContext.opaque = nullptr;
-  //th->interceptionDeactivations = 1;
-
   th->stack=NULL;
   th->stacksize=0;
 
   th->tid.id[0] = CmiMyPe();
   th->tid.id[1] = std::atomic_fetch_add(&serialno, 1);
-  //CmiMemoryAtomicFetchAndInc(serialno, th->tid.id[1]);
   th->tid.id[2] = 0;
-
-  //th->listener = NULL;
 
   th->magic = THD_MAGIC_NUM;
 }
@@ -222,11 +199,6 @@ void CthInit(char **argv)
   CthThreadInit(t);
   CpvInitialize(CthThread, doomedThreadPool);
   CpvAccess(doomedThreadPool) = (CthThread)NULL;
-
-  /* don't trust the _defaultStackSize */
- /*if (CmiMyRank() == 0) {
-    CmiThreadIs_flag |= CMI_THREAD_IS_CONTEXT;
- }*/
 }
 
 static void *CthAllocateStack(CthThreadBase *th, int *stackSize, int useMigratable)
@@ -272,7 +244,6 @@ static CthThread CthCreateInner(CthVoidFn fn, void *arg, int size, int migratabl
   result->context.uc_stack.ss_flags = 0;
   result->context.uc_link = 0;
 
-  //CthAliasEnable(B(result)); /* Change to new thread's stack while building context */
   errno = 0;
   makeJcontext(&result->context, (uFcontext_fn_t)CthStartThread, fn, arg);
 
@@ -280,9 +251,6 @@ static CthThread CthCreateInner(CthVoidFn fn, void *arg, int size, int migratabl
     perror("makecontext"); 
     CmiAbort("CthCreateInner: makecontext failed.\n");
   }
-  //CthAliasEnable(B(CpvAccess(CthCurrent)));
-
-  //CthInterceptionsCreate(result);
 
   return result;  
 }
@@ -294,7 +262,6 @@ CthThread CthCreate(CthVoidFn fn, void *arg, int size)
 
 static void CthThreadBaseFree(CthThreadBase *th)
 {
-  //struct CthThreadListener *l,*lnext;
   /*
    * remove the token if it is not queued in the converse scheduler		
    */
@@ -306,22 +273,8 @@ static void CthThreadBaseFree(CthThreadBase *th)
   /* Call the free function pointer on all the listeners on
      this thread and also delete the thread listener objects
      */
-  /*for(l=th->listener;l!=NULL;l=lnext){
-    lnext=l->next;
-    l->next=0;
-    if (l->free) l->free(l);
-  }
-  th->listener = NULL;*/
   free(th->data);
 
-
-  /*if (th->isMigratable) {
-    if (th->isomallocContext.opaque)
-    {
-      CmiIsomallocContextDelete(th->isomallocContext);
-      th->isomallocContext.opaque = nullptr;
-    }
-  }*/
   if (th->stack!=NULL) {
     free(th->stack);
   }
@@ -342,10 +295,6 @@ static void CthThreadFree(CthThread t)
 
 static void CthBaseResume(CthThread t)
 {
-  /*struct CthThreadListener *l;
-  for(l=B(t)->listener;l!=NULL;l=l->next){
-    if (l->resume) l->resume(l);
-  }*/
   CthFixData(t); /*Thread-local storage may have changed in other thread.*/
   CpvAccess(CthCurrent) = t;
   CpvAccess(CthData) = B(t)->data;
@@ -390,12 +339,6 @@ void CthSuspend(void)
   if (cur->suspendable == 0)
     CmiAbort("Fatal Error> trying to suspend a non-suspendable thread!\n");
 
-  /*
-     Call the suspend function on listeners
-     */
-  //for(l=cur->listener;l!=NULL;l=l->next){
-  //  if (l->suspend) l->suspend(l);
- // }
   CthThFn choosefn = cur->choosefn;
   if (choosefn == 0) CthNoStrategy();
   next = choosefn(); // If this crashes, disable ASLR.
@@ -512,7 +455,7 @@ void CthSchedInit()
   CpvAccess(CthResumeSchedulingThreadIdx) =
     CmiRegisterHandler((CmiHandler)CthResumeSchedulingThread);
   CthSetStrategy(CthSelf(),
-		 CthEnqueueSchedulingThread,
-		 CthSuspendSchedulingThread);
+		CthEnqueueSchedulingThread,
+		CthSuspendSchedulingThread);
 
 }

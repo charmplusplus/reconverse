@@ -145,5 +145,20 @@ typedef CthThread   (*CthThFn)(void);
 CthThreadToken *CthGetToken(CthThread);
 
 void CthInit(char **argv);
+void CthSchedInit();
+
+CthThread CthSelf(void);
+
+CthThread CthCreate(CthVoidFn fn, void *arg, int size);
+
+static void CthThreadFree(CthThread t);
+
+void CthResume(CthThread t);
+
+void CthSuspend(void);
+
+void CthAwaken(CthThread th);
+
+void CthYield(void);
 
 #endif
