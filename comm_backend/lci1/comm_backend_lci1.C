@@ -111,6 +111,9 @@ void CommBackendLCI1::sendAm(int rank, void* msg, size_t size, CompHandler local
       buffer.segment = LCI_SEGMENT_ALL;
       ret = LCI_putla(m_ep, buffer, m_local_comp, rank, remoteComp, LCI_DEFAULT_COMP_REMOTE, reinterpret_cast<void*>(localComp));
     }
+    if (ret == LCI_ERR_RETRY) {
+      progress();
+    }
   } while (ret == LCI_ERR_RETRY);
 }
 
