@@ -43,7 +43,7 @@ void runThread(void* msg) {
   (void)msg;
   char myId = 'A' + CpvAccess(data).nThreadStart++;
   threadStackChecker sc(myId);
-  VERBOSE(printf("Created thread %c at %p\n", myId, &myId);)
+  printf("Created thread %c at %p, mype = %d\n", myId, &myId, CmiMyPe());
 
   for (int iter = 0; iter < NITER; iter++) {
     VERBOSE(char buf[NITER + 2];

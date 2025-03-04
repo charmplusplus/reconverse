@@ -69,7 +69,7 @@ void converseRunPe(int rank)
     // barrier to ensure all global structs are initialized
     CmiNodeBarrier();
 
-    CthInit((char**) &args);
+    CthInit(NULL);
     CthSchedInit();
 
     // call initial function and start scheduler
