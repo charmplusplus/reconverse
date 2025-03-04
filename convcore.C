@@ -105,7 +105,6 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched, int initret)
     // int plusPSet = CmiGetArgInt(argv,"+pe",&Cmi_npes);
 
     // NOTE: calling CmiNumPes() here it sometimes returns zero
-    printf("Charm++> Running in SMP mode: %d processes\n", Cmi_npes);
 
     Cmi_argc = argc - 2; // TODO: Cmi_argc doesn't include runtime args?
     Cmi_argv = (char **)malloc(sizeof(char *) * (argc + 1));
@@ -115,6 +114,7 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched, int initret)
 
     comm_backend::init(&argc, &Cmi_argv);
     Cmi_mynode = comm_backend::getMyNodeId();
+    if(Cmi_mynode==0) printf("Charm++> Running in SMP mode: %d processes\n", Cmi_npes);
     Cmi_numnodes = comm_backend::getNumNodes();
     // Need to discuss this with the team
     if (Cmi_npes < Cmi_numnodes)
