@@ -42,7 +42,6 @@ int getNumNodes()
 AmHandler registerAmHandler(CompHandler handler)
 {
   if (gCommBackend == nullptr) {
-    fprintf(stderr, "Error: commBackend is null\n");
     return -1;
   }
   return gCommBackend->registerAmHandler(handler);
@@ -51,7 +50,6 @@ AmHandler registerAmHandler(CompHandler handler)
 void sendAm(int rank, void* msg, size_t size, CompHandler localComp, AmHandler remoteComp)
 {
   if (gCommBackend == nullptr) {
-    fprintf(stderr, "Error: commBackend is null\n");
     return;
   }
   gCommBackend->sendAm(rank, msg, size, localComp, remoteComp);
@@ -60,7 +58,6 @@ void sendAm(int rank, void* msg, size_t size, CompHandler localComp, AmHandler r
 bool progress(void)
 {
   if (gCommBackend == nullptr) {
-    fprintf(stderr, "Error: commBackend is null\n");
     return false;
   }
   return gCommBackend->progress();
@@ -69,7 +66,6 @@ bool progress(void)
 void barrier(void)
 {
   if (gCommBackend == nullptr) {
-    fprintf(stderr, "Error: commBackend is null\n");
     return;
   }
   gCommBackend->barrier();

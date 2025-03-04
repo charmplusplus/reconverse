@@ -44,35 +44,26 @@ add_subdirectory(comm_backend)
 # ##############################################################################
 
 # LCI1
-find_package(
-  LCI
-  CONFIG
-  HINTS
-  ${LCI_ROOT}
-  $ENV{LCI_ROOT}
-  PATH_SUFFIXES
-  lib/cmake
-  lib64/cmake)
-if(RECONVERSE_TRY_ENABLE_COMM_LCI1
-   AND NOT LCI_WITH_LCT_ONLY
-   AND LCI_VERSION VERSION_LESS 2.0.0)
-  set(RECONVERSE_ENABLE_COMM_LCI1 ON)
-  target_link_libraries(reconverse PRIVATE LCI::LCI)
-  target_sources(reconverse PRIVATE comm_backend/lci1/comm_backend_lci1.C)
-else()
-  message(WARNING "LCI is not found. The LCI backend if not enabled.")
+if(RECONVERSE_TRY_ENABLE_COMM_LCI1)
+  find_package(
+    LCI
+    CONFIG
+    HINTS
+    ${LCI_ROOT}
+    $ENV{LCI_ROOT}
+    PATH_SUFFIXES
+    lib/cmake
+    lib64/cmake)
+  if(LCI_FOUND
+    AND NOT LCI_WITH_LCT_ONLY
+    AND LCI_VERSION VERSION_LESS 2.0.0)
+    set(RECONVERSE_ENABLE_COMM_LCI1 ON)
+    target_link_libraries(reconverse PRIVATE LCI::LCI)
+    target_sources(reconverse PRIVATE comm_backend/lci1/comm_backend_lci1.C)
+  else()
+    message(WARNING "LCI is not found. The LCI backend if not enabled.")
+  endif()
 endif()
-
-# LCI2
-# if(LCW_TRY_ENABLE_COMM_LCI2
-#    AND NOT LCI_WITH_LCT_ONLY
-#    AND LCI_VERSION VERSION_GREATER_EQUAL 2.0.0)
-#   set(LCW_ENABLE_BACKEND_LCI2 ON)
-#   target_link_libraries(reconverse PRIVATE LCI::LCI)
-#   target_sources(reconverse PRIVATE lci2/comm_backend_lci2.C)
-# else()
-#   message(WARNING "LCI2 is not found. The LCI2 backend if not enabled.")
-# endif()
 
 # ##############################################################################
 # Configure

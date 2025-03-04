@@ -104,9 +104,6 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched, int initret)
     Cmi_npes = atoi(argv[2]);
     // int plusPSet = CmiGetArgInt(argv,"+pe",&Cmi_npes);
 
-    // NOTE: calling CmiNumPes() here it sometimes returns zero
-    printf("Charm++> Running in SMP mode: %d processes\n", Cmi_npes);
-
     Cmi_argc = argc - 2; // TODO: Cmi_argc doesn't include runtime args?
     Cmi_argv = (char **)malloc(sizeof(char *) * (argc + 1));
     int i;
@@ -127,6 +124,9 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched, int initret)
         fprintf(stderr, "Error: Number of PEs must be a multiple of number of nodes\n");
         exit(1);
     }
+    if (Cmi_mynode == 0)
+      printf("Charm++> Running in SMP mode on %d nodes and %d PEs\n",
+             Cmi_numnodes, Cmi_npes);
     Cmi_mynodesize = Cmi_npes / Cmi_numnodes;
     Cmi_nodestart = Cmi_mynode * Cmi_mynodesize;
     // register am handlers
