@@ -1,7 +1,7 @@
 #ifndef CONVCORE_H
 #define CONVCORE_H
 
-#include "converse.h"
+//#include "converse.h"
 #include "queue.h"
 
 typedef struct Header

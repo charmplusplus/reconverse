@@ -32,7 +32,7 @@ find_package(Threads REQUIRED)
 add_library(reconverse)
 set_target_properties(reconverse PROPERTIES CXX_STANDARD 11)
 target_include_directories(reconverse PUBLIC .)
-target_sources(reconverse PRIVATE conv-conds.C convcore.C queue.C scheduler.C)
+target_sources(reconverse PRIVATE conv-conds.C convcore.C queue.C scheduler.C threads.C)
 target_link_libraries(reconverse PUBLIC Threads::Threads)
 
 # ##############################################################################
