@@ -113,6 +113,9 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched, int initret)
     comm_backend::init(&argc, &Cmi_argv);
     Cmi_mynode = comm_backend::getMyNodeId();
     Cmi_numnodes = comm_backend::getNumNodes();
+    if (Cmi_mynode == 0)
+      printf("Charm++> Running in SMP mode on %d nodes and %d PEs\n",
+             Cmi_numnodes, Cmi_npes);
     // Need to discuss this with the team
     if (Cmi_npes < Cmi_numnodes)
     {
@@ -124,9 +127,6 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched, int initret)
         fprintf(stderr, "Error: Number of PEs must be a multiple of number of nodes\n");
         exit(1);
     }
-    if (Cmi_mynode == 0)
-      printf("Charm++> Running in SMP mode on %d nodes and %d PEs\n",
-             Cmi_numnodes, Cmi_npes);
     Cmi_mynodesize = Cmi_npes / Cmi_numnodes;
     Cmi_nodestart = Cmi_mynode * Cmi_mynodesize;
     // register am handlers
