@@ -14,7 +14,7 @@
 #define CpvInitialize(t, v)                            \
     do                                                 \
     {                                                  \
-        if (CmiMyPe())                                 \
+        if (false /* I don't understand */)            \
         {                                              \
             CmiNodeBarrier();                          \
         }                                              \
@@ -26,6 +26,6 @@
     } while (0)
 ;
 
-#define CpvAccess(v) CMK_TAG(Cpv_, v)[CmiMyPe()]
+#define CpvAccess(v) CMK_TAG(Cpv_, v)[CmiMyRank()]
 
 #endif

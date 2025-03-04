@@ -17,7 +17,7 @@ struct Message
 };
 
 void print_results() {
-  printf("msg_size\n%d\n", CpvAccess(msg_size));
+  printf("msg_size = %d\n", CpvAccess(msg_size));
 }
 
 //CpmInvokable ping_stop()
@@ -28,17 +28,15 @@ void ping_stop_handler(void *msg)
 }
 
 void send_msg() {
-  Message *msg = new Message;
-  msg->header.handlerId = CpvAccess(ping_index);
-  msg->header.messageSize = sizeof(Message);
-  msg->header.destPE = CmiMyRank() + CmiMyNodeSize() / 2;
+  int destPE = CmiMyPe() + CmiNumPes() / 2;
+  void *msg = CmiAlloc(CpvAccess(msg_size));
+  CmiSetHandler(msg, CpvAccess(ping_index));
   //payload
-  int total_bytes = CpvAccess(msg_size) - msg->header.messageSize;
-  printf("\ntotal int bytes = %d", total_bytes);
-  int *ints_to_send = (int*)malloc(CpvAccess(msg_size) - msg->header.messageSize);
-  for (int i = 0; i < (CpvAccess(msg_size) - msg->header.messageSize) / sizeof(int); ++i) ints_to_send[i] = i;
-  msg->payload = ints_to_send; //will need to fix this for off-node messages
-  CmiSyncSendAndFree(msg->header.destPE, msg->header.messageSize, msg);
+  int payload_size = CpvAccess(msg_size) - CmiMsgHeaderSizeBytes;
+  printf("total payload bytes = %d\n", payload_size);
+  int *p_payload = (int*)((char*)msg + CmiMsgHeaderSizeBytes);
+  for (int i = 0; i < payload_size / sizeof(int); ++i) p_payload[i] = i;
+  CmiSyncSendAndFree(destPE, CpvAccess(msg_size), msg);
   /*
   struct myMsg *msg;
   msg = (message)CmiAlloc(CpvAccess(msg_size));
@@ -56,29 +54,26 @@ void send_msg() {
 }
 
 void call_exit(){
-  for(int i=0;i<CmiMyNodeSize();i++) {
-    Message *msg = new Message;
-    msg->header.handlerId = CpvAccess(stop_index);
-    msg->header.messageSize = sizeof(Message);
-    msg->header.destPE = i;
-    CmiSyncSendAndFree(i, msg->header.messageSize, msg);
+  for(int i=0;i<CmiNumPes();i++) {
+    void *msg = CmiAlloc(CmiMsgHeaderSizeBytes);
+    CmiSetHandler(msg, CpvAccess(stop_index));
+    CmiSyncSendAndFree(i, CmiMsgHeaderSizeBytes, msg);
   }
 }
 
-void ping_handler(void *vmsg)
+void ping_handler(void *msg)
 {
   int i;
-  Message *msg = (Message*) vmsg;
-  int *incoming_data = msg->payload;
+  int *p_payload = (int*) ((char*) msg + CmiMsgHeaderSizeBytes);
   // if this is a receiving PE
-  if (CmiMyRank() >= CmiMyNodeSize() / 2) {
+  if (CmiMyPe() >= CmiNumPes() / 2) {
     long sum = 0;
     long result = 0;
-    int num_ints = (CpvAccess(msg_size) - sizeof(Message)) / sizeof(int);
+    int num_ints = (CpvAccess(msg_size) - CmiMsgHeaderSizeBytes) / sizeof(int);
     printf("num_ints=%d\n",num_ints);
     double exp_avg = (num_ints - 1) / 2;
     for (i = 0; i < num_ints; ++i) {
-      sum += incoming_data[i];
+      sum += p_payload[i];
     }
     if(result < 0) {
       printf("Error! in computation");
@@ -92,16 +87,14 @@ void ping_handler(void *vmsg)
     // else
     //   CmiPrintf("Calculation OK\n"); // DEBUG: Computation Check
       
-    CmiFree(vmsg);
-    Message *msg = new Message;
-    msg->header.handlerId = CpvAccess(ackmsg_index);
-    msg->header.messageSize = sizeof(Message);
-    msg->header.destPE = 0;
+    CmiFree(msg);
+    Message *msg = (Message*) CmiAlloc(sizeof(Message));
+    CmiSetHandler(msg, CpvAccess(ackmsg_index));
     /*
     msg = (message)CmiAlloc(CpvAccess(msg_size));
     CmiSetHandler(msg, CpvAccess(ackmsg_index));
     */
-    CmiSyncSendAndFree(0, CpvAccess(msg_size), msg);
+   CmiSyncSendAndFree(0, CpvAccess(msg_size), msg);
   } else
     printf("\nError: Only node-1 can be receiving node!!!!\n");
 }
@@ -113,7 +106,7 @@ void pe0_ack_handler(void *vmsg)
    //Pe-0 receives all acks
   CpvAccess(ack_count) = 1 + CpvAccess(ack_count);
 
-  if(CpvAccess(ack_count) == CmiMyNodeSize()/2) {
+  if(CpvAccess(ack_count) == CmiNumPes()/2) {
     CpvAccess(ack_count) = 0;
 
     CmiFree(msg);
@@ -127,16 +120,16 @@ void pe0_ack_handler(void *vmsg)
 
 void ping_init()
 {
-  int totalpes = CmiMyNodeSize(); //p=num_pes
-  int pes_per_node = totalpes/2; //q=p/2
-  if (CmiMyNodeSize()%2 !=0) {
+  int totalpes = CmiNumPes(); //p=num_pes
+  int npes_as_sender = totalpes/2; //q=p/2
+  if (CmiNumPes()%2 !=0) {
     printf("note: this test requires at multiple of 2 pes, skipping test.\n");
     printf("exiting.\n");
     CsdExitScheduler();
     call_exit();
 //    Cpm_ping_stop(CpmSend(CpmALL));
   } else {
-    if(CmiMyRank() < pes_per_node)
+    if(CmiMyPe() < npes_as_sender)
       send_msg();
   }
 }
@@ -170,7 +163,7 @@ void ping_moduleinit(int argc, char **argv)
 
   // Update the argc after runtime parameters are extracted out
   //argc = CmiGetArgc(argv);
-  if(CmiMyRank() < CmiMyNodeSize()/2)
+  if(CmiMyPe() < CmiNumPes()/2)
     ping_init();
 }
 
