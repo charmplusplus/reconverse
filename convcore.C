@@ -3,6 +3,7 @@
 #include "scheduler.h"
 #include "barrier.h"
 #include "queue.h"
+#include "converse.h"
 
 #include <pthread.h>
 #include <stdio.h>
@@ -67,6 +68,9 @@ void converseRunPe(int rank)
 
     // barrier to ensure all global structs are initialized
     CmiNodeBarrier();
+
+    CthInit(NULL);
+    CthSchedInit();
 
     // call initial function and start scheduler
     Cmi_startfn(Cmi_argc, Cmi_argv);

@@ -1,6 +1,7 @@
 #include "scheduler.h"
 #include "convcore.h"
 #include "queue.h"
+#include "converse.h"
 #include <thread>
 
 void CsdScheduler()
