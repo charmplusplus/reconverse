@@ -10,6 +10,11 @@
 #include <vector>
 #include <cstring>
 #include <cstdarg>
+#include <assert.h>
+
+
+#define TREE_BCAST_BRANCH 4 //number of each children each node will have 
+#define TREE_BCAST_HANDLER 999
 
 // GLOBALS
 int Cmi_argc;
@@ -209,6 +214,44 @@ void CmiSyncSendAndFree(int destPE, int messageSize, void *msg)
     }
 }
 
+static void treeBroadcastSend(int size, void* msg, int pe, int numchildren) {
+    for (int i = 1; i <= numchildren; i++) {
+        int child = (pe * numchildren) + i; 
+        if (child >= Cmi_npes) {
+            break; 
+        }
+        CmiSyncSend(child, size, msg);
+        treeBroadcastSend(size, msg, child, numchildren);
+    }
+}
+
+void CmiTreeBroadcastFromZero(int size, void* msg)
+{
+    CmiState* cs = CmiGetState();
+    // do we need implement threads???? Because it is the case in the sendToPeers function 
+    if (cs->pe != 0) {
+        fprintf(stderr, "Error: CmiTreeBroadcastFromZero should only be called from PE 0\n");
+        return;
+    }
+    treeBroadcastSend(size, msg, cs->pe, TREE_BCAST_BRANCH);
+
+}
+
+//where are the handler functions defined 
+//do we have to use threads 
+//does this have to be asycnrhounosy 
+//is message in thsi case the function that wil utlimatel call treeBraodCastSEend(from zero)
+void CmiTreeBroadcastFromAny(int size, void* msg)
+{
+    CmiState* cs = CmiGetState();
+    if (cs->pe == 0) {
+        treeBroadcastSend(size, msg, cs->pe, TREE_BCAST_BRANCH);
+    } else {
+        CmiSetHandler(msg, TREE_BCAST_HANDLER); 
+        CmiSyncSend(0, size, msg);
+    }
+}
+
 void CmiSyncBroadcast(int size, void *msg)
 {
     CmiState *cs = CmiGetState();
@@ -244,6 +287,8 @@ void CmiSyncBroadcastAllAndFree(int size, void *msg)
 
     CmiSyncSendAndFree(cs->pe, size, msg);
 }
+
+
 
 // HANDLER TOOLS
 int CmiRegisterHandler(CmiHandler h)

@@ -34,7 +34,7 @@ void CmiCallHandler(int handlerId, void *msg);
 typedef struct HandlerInfo
 {
     CmiHandler hdlr;
-    void *userPtr;
+    void *userPtr; //does this point to the mesage data itself 
 } CmiHandlerInfo;
 
 std::vector<CmiHandlerInfo> *CmiGetHandlerTable();
