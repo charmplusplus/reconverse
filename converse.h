@@ -21,6 +21,8 @@ int CmiMyNode();
 int CmiMyNodeSize();
 int CmiMyRank();
 int CmiNumPes();
+int CmiNodeOf(int pe);
+int CmiRankOf(int pe);
 int CmiStopFlag();
 
 void CmiSetHandler(void *msg, int handlerId);

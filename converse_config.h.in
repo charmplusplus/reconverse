@@ -1,0 +1,6 @@
+#ifndef CONVERSE_CONFIG_H
+#define CONVERSE_CONFIG_H
+
+#cmakedefine RECONVERSE_ENABLE_COMM_LCI1
+
+#endif

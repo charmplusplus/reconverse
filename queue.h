@@ -13,6 +13,14 @@ public:
     static void release();
 };
 
+class QueueResult{
+    public:
+    void *msg;
+    operator bool(){
+        return msg != NULL;
+    }
+};
+
 // An MPSC queue that can be used to send messages between threads.
 template <typename ConcreteQ, typename MessageType, typename AccessControlPolicy>
 class MPSCQueue
@@ -61,7 +69,64 @@ public:
     }
 };
 
+// Type for node queue (will have to implement atomics later)
+template <typename ConcreteQ, typename MessageType, typename AccessControlPolicy>
+class MPMCQueue
+{
+    ConcreteQ q;
+
+public:
+
+
+    QueueResult pop()
+    {
+        AccessControlPolicy::acquire();
+        // This will not work for atomics.
+        // It's fine for now: internal implementation detail.
+
+        QueueResult result;
+        if (q.size() == 0)
+        {
+            result.msg = NULL;
+        }
+        else
+        { 
+            result.msg = q.front();
+            q.pop();
+        }
+
+        AccessControlPolicy::release();
+        return result;
+    }
+
+    void push(MessageType message)
+    {
+        AccessControlPolicy::acquire();
+        q.push(message);
+        AccessControlPolicy::release();
+    }
+
+    bool empty()
+    {
+
+        return this->size() == 0;
+    }
+
+    size_t size()
+    {
+        AccessControlPolicy::acquire();
+        size_t result = q.size();
+        AccessControlPolicy::release();
+
+        return result;
+    }
+};
+
+
 template <typename MessageType>
 using ConverseQueue = MPSCQueue<std::queue<MessageType>, MessageType, MutexAccessControl>;
+
+template <typename MessageType>
+using ConverseNodeQueue = MPMCQueue<std::queue<MessageType>, MessageType, MutexAccessControl>;
 
 #endif

@@ -23,6 +23,9 @@ option(BUILD_SHARED_LIBS "Build using shared libraries" ON)
 option(RECONVERSE_BUILD_EXAMPLES "Build examples" ON)
 option(RECONVERSE_BUILD_TESTS "Build tests" ON)
 
+option(RECONVERSE_TRY_ENABLE_COMM_LCI1 "whether to enable the LCIv1 backend" ON)
+# option(LCW_TRY_ENABLE_COMM_LCI2 "whether to enable the LCIv2 backend" ON)
+
 function(charm_determine_arch output input)
   if(input STREQUAL "x86_64" OR input STREQUAL "AMD64")
     set(retval "x86_64")
@@ -68,8 +71,42 @@ find_package(Threads REQUIRED)
 add_library(reconverse $<TARGET_OBJECTS:boost-context>)
 set_target_properties(reconverse PROPERTIES CXX_STANDARD 11)
 target_include_directories(reconverse PUBLIC .)
-target_sources(reconverse PRIVATE conv-conds.C convcore.C queue.C scheduler.C threads.C)
+target_sources(reconverse PRIVATE conv-conds.C convcore.C queue.C scheduler.C comm_backend/comm_backend_internal.C threads.C)
 target_link_libraries(reconverse PUBLIC Threads::Threads)
+add_subdirectory(comm_backend)
+
+# ##############################################################################
+# Communication Backends
+# ##############################################################################
+
+# LCI1
+if(RECONVERSE_TRY_ENABLE_COMM_LCI1)
+  find_package(
+    LCI
+    CONFIG
+    HINTS
+    ${LCI_ROOT}
+    $ENV{LCI_ROOT}
+    PATH_SUFFIXES
+    lib/cmake
+    lib64/cmake)
+  if(LCI_FOUND
+    AND NOT LCI_WITH_LCT_ONLY
+    AND LCI_VERSION VERSION_LESS 2.0.0)
+    set(RECONVERSE_ENABLE_COMM_LCI1 ON)
+    target_link_libraries(reconverse PRIVATE LCI::LCI)
+    target_sources(reconverse PRIVATE comm_backend/lci1/comm_backend_lci1.C)
+  else()
+    message(WARNING "LCI is not found. The LCI backend is not enabled.")
+  endif()
+endif()
+
+# ##############################################################################
+# Configure
+# ##############################################################################
+configure_file(converse_config.h.in ${CMAKE_BINARY_DIR}/converse_config.h)
+target_include_directories(reconverse PUBLIC $<BUILD_INTERFACE:${CMAKE_BINARY_DIR}>
+                                              $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
 
 # ##############################################################################
 # Add Subdirectories

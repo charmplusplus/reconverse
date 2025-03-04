@@ -9,24 +9,35 @@ void CsdScheduler()
     // get pthread level queue
 
     ConverseQueue<void *> *queue = CmiGetQueue(CmiMyRank());
-    ConverseQueue<void *> *nodeQueue = CmiGetNodeQueue();
+    ConverseNodeQueue<void *> *nodeQueue = CmiGetNodeQueue();
 
     while (CmiStopFlag() == 0)
     {
+        
+        CcdRaiseCondition(CcdSCHEDLOOP);
+
         // poll node queue
         if (!nodeQueue->empty())
         {
-            // get next event (guaranteed to be there because only single consumer)
-            void *msg = nodeQueue->pop();
+            QueueResult result = nodeQueue->pop();
+            if(result)
+            {
+                void *msg = result.msg;
+                // process event
+                CmiMessageHeader *header = (CmiMessageHeader *)msg;
+                void *data = (void *)((char *)msg + CmiMsgHeaderSizeBytes);
+                int handler = header->handlerId;
 
-            // process event
-            CmiMessageHeader *header = (CmiMessageHeader *)msg;
-            void *data = (void *)((char *)msg + CmiMsgHeaderSizeBytes);
-            int handler = header->handlerId;
+                // call handler
+                CmiCallHandler(handler, data);
 
-            // call handler
-            CmiCallHandler(handler, data);
-            continue;
+                //release idle if necessary
+                if(CmiGetIdle())
+                {
+                    CmiSetIdle(false);
+                    CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
+                }
+            }
         }
 
         // poll thread queue
@@ -42,6 +53,36 @@ void CsdScheduler()
 
             // call handler
             CmiCallHandler(handler, msg);
+
+            //release idle if necessary
+            if(CmiGetIdle())
+            {
+                CmiSetIdle(false);
+                CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
+            }
+        }
+
+        //the processor is idle
+        else
+        {
+            // if not already idle, set idle and raise condition
+            if(!CmiGetIdle())
+            {
+                CmiSetIdle(true);
+                CmiSetIdleTime(CmiWallTimer());
+                CcdRaiseCondition(CcdPROCESSOR_BEGIN_IDLE);
+            }
+            // if already idle, call still idle and (maybe) long idle
+            else
+            {
+                CcdRaiseCondition(CcdPROCESSOR_STILL_IDLE);
+                if(CmiWallTimer() - CmiGetIdleTime() > 10.0)
+                {
+                    CcdRaiseCondition(CcdPROCESSOR_LONG_IDLE);
+                }
+            }
+            // poll the communication layer
+            comm_backend::progress();
         }
 
         CcdCallBacks();
