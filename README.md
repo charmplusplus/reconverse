@@ -22,7 +22,7 @@ $ cd lci
 $ export CMAKE_INSTALL_PREFIX=/u/<username> (or somewhere else you prefer)
 $ export OFI_ROOT=/opt/cray/libfabric/1.15.2.0
 $ cmake -DLCI_SERVER=ofi .
-$ make intall
+$ make install
 $ cd ..
 $ git clone https://github.com/charmplusplus/reconverse.git
 $ cd reconverse
