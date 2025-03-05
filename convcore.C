@@ -365,6 +365,17 @@ CmiHandler CmiGetHandlerFunction(void *msg)
     return CmiGetHandlerTable()->at(handlerId).hdlr;
 }
 
+void CmiHandleMessage(void *msg)
+{
+    // process event
+    CmiMessageHeader *header = (CmiMessageHeader *)msg;
+    void *data = (void *)((char *)msg + CmiMsgHeaderSizeBytes);
+    int handler = header->handlerId;
+
+    // call handler
+    CmiCallHandler(handler, data);
+}
+
 // TODO: implement CmiPrintf
 int CmiPrintf(const char *format, ...)
 {
