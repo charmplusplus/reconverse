@@ -38,6 +38,8 @@ int CmiNumNodes();
 int CmiNodeOf(int pe);
 int CmiRankOf(int pe);
 int CmiStopFlag();
+#define CmiNodeSize(n) (CmiMyNodeSize())
+int CmiNodeFirst(int node);
 
 void CmiSetHandler(void *msg, int handlerId);
 void CmiNodeBarrier();
