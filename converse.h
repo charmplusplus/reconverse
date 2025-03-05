@@ -24,7 +24,12 @@ int CmiNodeOf(int pe);
 int CmiRankOf(int pe);
 int CmiStopFlag();
 
+// handler things
 void CmiSetHandler(void *msg, int handlerId);
+int CmiGetHandler(void *msg);
+CmiHandler CmiGetHandlerFunction(int n);
+
+// Barrier functions
 void CmiNodeBarrier();
 void CmiNodeAllBarrier();
 
