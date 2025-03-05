@@ -201,6 +201,11 @@ int CmiMyNodeSize()
     return Cmi_mynodesize;
 }
 
+int CmiNumNodes()
+{
+    return Cmi_numnodes;
+}
+
 int CmiNumPes()
 {
     return Cmi_npes;
