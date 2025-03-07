@@ -7,6 +7,8 @@ project(
     "Simplified re-implementation of Converse: a communication and scheduling layer, and user-level threads, used by Charm++"
   HOMEPAGE_URL "https://github.com/charmplusplus/reconverse")
 
+enable_testing()
+
 cmake_policy(SET CMP0079 NEW)
 
 enable_language(CXX)
