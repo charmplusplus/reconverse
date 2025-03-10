@@ -201,6 +201,11 @@ int CmiMyNodeSize()
     return Cmi_mynodesize;
 }
 
+int CmiNumNodes()
+{
+    return Cmi_numnodes;
+}
+
 int CmiNumPes()
 {
     return Cmi_npes;
@@ -214,6 +219,11 @@ int CmiNodeOf(int pe)
 int CmiRankOf(int pe)
 {
     return pe % Cmi_mynodesize;
+}
+
+int CmiNodeFirst(int node)
+{
+    return node * Cmi_mynodesize;
 }
 
 std::vector<CmiHandlerInfo> *CmiGetHandlerTable()

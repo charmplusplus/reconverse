@@ -3,6 +3,16 @@
 
 #include "CpvMacros.h" // for backward compatibility
 
+typedef struct Header
+{
+    int handlerId;
+    int messageId;
+    int messageSize;
+    int destPE;
+} CmiMessageHeader;
+
+#define CmiMsgHeaderSizeBytes sizeof(CmiMessageHeader)
+
 typedef void (*CmiStartFn)(int argc, char **argv);
 void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched = 0, int initret = 0);
 
@@ -14,15 +24,22 @@ typedef void (*CmiHandlerEx)(void *msg, void *userPtr);
 
 int CmiRegisterHandler(CmiHandler h);
 
+// message allocation
+void *CmiAlloc(int size);
+void CmiFree(void *msg);
+
 // state getters
 int CmiMyPe();
 int CmiMyNode();
 int CmiMyNodeSize();
 int CmiMyRank();
 int CmiNumPes();
+int CmiNumNodes();
 int CmiNodeOf(int pe);
 int CmiRankOf(int pe);
 int CmiStopFlag();
+#define CmiNodeSize(n) (CmiMyNodeSize())
+int CmiNodeFirst(int node);
 
 void CmiSetHandler(void *msg, int handlerId);
 void CmiNodeBarrier();
@@ -86,5 +103,48 @@ void CcdCancelCallOnCondition(int condnum, int idx);
 void CcdCancelCallOnConditionKeep(int condnum, int idx);
 void CcdRaiseCondition(int condnum);
 void CcdCallBacks(void);
+
+//error checking
+#define CmiAssert(expr) ((void)0)
+#define CmiAssertMsg(expr, ...) ((void)0)
+#define _MEMCHECK(p) do{}while(0)
+
+//spantree
+//later: fix the naming of these macros to be clearer
+#define CMK_SPANTREE_MAXSPAN 4
+#define CST_W  (CMK_SPANTREE_MAXSPAN)
+#define CST_NN (CmiNumNodes())
+#define CmiNodeSpanTreeParent(n) ((n)?(((n)-1)/CST_W):(-1))
+#define CmiNodeSpanTreeChildren(n,c) do {\
+          int _i; \
+          for(_i=0; _i<CST_W; _i++) { \
+            int _x = (n)*CST_W+_i+1; \
+            if(_x<CST_NN) (c)[_i]=_x; \
+          }\
+        } while(0)
+#define CmiNumNodeSpanTreeChildren(n) ((((n)+1)*CST_W<CST_NN)? CST_W : \
+          ((((n)*CST_W+1)>=CST_NN)?0:((CST_NN-1)-(n)*CST_W)))
+#define CST_R(p) (CmiRankOf(p))
+#define CST_NF(n) (CmiNodeFirst(n))
+#define CST_SP(n) (CmiNodeSpanTreeParent(n))
+#define CST_ND(p) (CmiNodeOf(p))
+#define CST_NS(p) (CmiNodeSize(CST_ND(p)))
+#define CmiSpanTreeParent(p) ((p)?(CST_R(p)?(CST_NF(CST_ND(p))+(CST_R(p)-1)/CST_W):CST_NF(CST_SP(CST_ND(p)))):(-1))
+#define CST_C(p) (((CST_R(p)+1)*CST_W<CST_NS(p))?CST_W:(((CST_R(p)*CST_W+1)>=CST_NS(p))?0:((CST_NS(p)-1)-CST_R(p)*CST_W)))
+#define CST_SC(p) (CmiNumNodeSpanTreeChildren(CST_ND(p)))
+#define CmiNumSpanTreeChildren(p) (CST_R(p)?CST_C(p):(CST_SC(p)+CST_C(p)))
+#define CmiSpanTreeChildren(p,c) do {\
+          int _i,_c=0; \
+          if(CST_R(p)==0) { \
+            for(_i=0;_i<CST_W;_i++) { \
+              int _x = CST_ND(p)*CST_W+_i+1; \
+              if(_x<CST_NN) (c)[_c++]=CST_NF(_x); \
+            }\
+          } \
+          for(_i=0;_i<CST_W;_i++) { \
+            int _x = CST_R(p)*CST_W+_i+1; \
+            if(_x<CST_NS(p)) (c)[_c++]=CST_NF(CST_ND(p))+_x; \
+          }\
+        } while(0)
 
 #endif
