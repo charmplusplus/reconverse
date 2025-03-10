@@ -80,6 +80,8 @@ void CsdScheduler()
                     CcdRaiseCondition(CcdPROCESSOR_LONG_IDLE);
                 }
             }
+            // poll the communication layer
+            comm_backend::progress();
         }
 
         CcdCallBacks();

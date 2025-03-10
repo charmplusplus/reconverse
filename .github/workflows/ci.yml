@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    name: Build and Test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify Installation
+        run: |
+          cmake --version
+
+      - name: Configure
+        shell: bash
+        run: |
+            cmake \
+                -Bbuild \
+                -DCMAKE_BUILD_TYPE=Debug \
+                .
+
+      - name: Build
+        shell: bash
+        run: |
+            cmake --build build --target all
+
+      - name: Test
+        shell: bash
+        run: |
+            cd build
+            ctest --extra-verbose --timeout 60

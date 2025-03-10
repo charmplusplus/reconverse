@@ -2,17 +2,9 @@
 #define CONVCORE_H
 
 #include "converse.h"
+#include "converse_config.h"
+#include "comm_backend/comm_backend.h"
 #include "queue.h"
-
-typedef struct Header
-{
-    int handlerId;
-    int messageId;
-    int messageSize;
-    int destPE;
-} CmiMessageHeader;
-
-#define CmiMsgHeaderSizeBytes sizeof(CmiMessageHeader)
 
 // typedef struct CmiMessageStruct
 // {
@@ -21,7 +13,7 @@ typedef struct Header
 // } CmiMessage;
 
 void CmiStartThreads(char **argv);
-void *converseRunPe(void *arg);
+void converseRunPe(int rank);
 
 // HANDLERS
 // TODO: what is CmiHandlerEx in old converse?
@@ -55,10 +47,6 @@ typedef struct State
 CmiState *CmiGetState(void);
 void CmiInitState(int pe);
 ConverseQueue<void *> *CmiGetQueue(int pe);
-
-// message allocation
-void *CmiAlloc(int size);
-void CmiFree(void *msg);
 
 // message sending
 void CmiPushPE(int destPE, int messageSize, void *msg);
