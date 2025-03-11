@@ -1,5 +1,4 @@
 //+pe <N> threads, each running a scheduler
-#include "conv-header.h"
 #include "convcore.h"
 #include "scheduler.h"
 #include "barrier.h"
