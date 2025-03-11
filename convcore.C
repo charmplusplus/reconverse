@@ -16,7 +16,7 @@
 int Cmi_argc;
 static char **Cmi_argv;
 int Cmi_npes;
-int Cmi_nranks;                                // TODO: this isnt used in old converse, but we need to know how many PEs are on our node?
+int Cmi_nranks; // TODO: this isnt used in old converse, but we need to know how many PEs are on our node?
 int Cmi_mynode;
 int Cmi_mynodesize;
 int Cmi_numnodes;
@@ -24,7 +24,6 @@ int Cmi_nodestart;
 std::vector<CmiHandlerInfo> **CmiHandlerTable; // array of handler vectors
 ConverseNodeQueue<void *> *CmiNodeQueue;
 double Cmi_startTime;
-
 
 // PE LOCALS that need global access sometimes
 static ConverseQueue<void *> **Cmi_queues; // array of queue pointers
@@ -45,13 +44,15 @@ void CommLocalHandler(comm_backend::Status status)
     CmiFree(status.msg);
 }
 
-void CommRemoteHandlerPE(comm_backend::Status status) {
+void CommRemoteHandlerPE(comm_backend::Status status)
+{
     CmiMessageHeader *header = (CmiMessageHeader *)status.msg;
     int destPE = header->destPE;
     CmiPushPE(destPE, status.size, status.msg);
 }
 
-void CommRemoteHandlerNode(comm_backend::Status status) {
+void CommRemoteHandlerNode(comm_backend::Status status)
+{
     CmiNodeQueue->push(status.msg);
 }
 
@@ -100,7 +101,7 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched, int initret)
 {
 
     Cmi_startTime = getCurrentTime();
-    
+
     Cmi_npes = atoi(argv[2]);
     // int plusPSet = CmiGetArgInt(argv,"+pe",&Cmi_npes);
 
@@ -114,8 +115,8 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched, int initret)
     Cmi_mynode = comm_backend::getMyNodeId();
     Cmi_numnodes = comm_backend::getNumNodes();
     if (Cmi_mynode == 0)
-      printf("Charm++> Running in SMP mode on %d nodes and %d PEs\n",
-             Cmi_numnodes, Cmi_npes);
+        printf("Charm++> Running in SMP mode on %d nodes and %d PEs\n",
+               Cmi_numnodes, Cmi_npes);
     // Need to discuss this with the team
     if (Cmi_npes < Cmi_numnodes)
     {
@@ -137,7 +138,7 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched, int initret)
 
     CmiStartThreads();
     free(Cmi_argv);
-    
+
     comm_backend::exit();
 }
 
@@ -257,7 +258,7 @@ void CmiSyncSend(int destPE, int messageSize, void *msg)
 void CmiSyncSendAndFree(int destPE, int messageSize, void *msg)
 {
     // printf("Sending message to PE %d\n", destPE);
-    CmiMessageHeader *header = static_cast<CmiMessageHeader*>(msg);
+    CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
     header->destPE = destPE;
     header->messageSize = messageSize;
     int destNode = CmiNodeOf(destPE);
@@ -358,6 +359,28 @@ void CmiSetHandler(void *msg, int handlerId)
     header->handlerId = handlerId;
 }
 
+int CmiGetHandler(void *msg)
+{
+    CmiMessageHeader *header = (CmiMessageHeader *)msg;
+    int handlerId = header->handlerId;
+    return handlerId;
+}
+
+CmiHandler CmiGetHandlerFunction(void *msg)
+{
+    int handlerId = CmiGetHandler(msg);
+    return CmiGetHandlerTable()->at(handlerId).hdlr;
+}
+
+void CmiHandleMessage(void *msg)
+{
+    // process event
+    CmiMessageHeader *header = (CmiMessageHeader *)msg;
+    int handler = header->handlerId;
+
+    // call handler (takes in pointer to whole message)
+    CmiCallHandler(handler, msg);
+}
 // TODO: implement CmiPrintf
 int CmiPrintf(const char *format, ...)
 {
@@ -416,7 +439,6 @@ void CmiSetIdle(bool idle)
 {
     idle_condition = idle;
 }
-
 
 double CmiGetIdleTime()
 {
