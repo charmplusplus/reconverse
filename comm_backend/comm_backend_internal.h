@@ -21,6 +21,7 @@ class CommBackendBase
   // return true if there is more work to do
   virtual bool progress(void) = 0;
   virtual void barrier(void) = 0;
+  virtual ~CommBackendBase() {};
 };
 
 } // namespace comm_backend
