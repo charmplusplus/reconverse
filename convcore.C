@@ -379,11 +379,10 @@ void CmiHandleMessage(void *msg)
 {
     // process event
     CmiMessageHeader *header = (CmiMessageHeader *)msg;
-    void *data = (void *)((char *)msg + CmiMsgHeaderSizeBytes);
     int handler = header->handlerId;
 
-    // call handler
-    CmiCallHandler(handler, data);
+    // call handler (takes in pointer to whole message)
+    CmiCallHandler(handler, msg);
 }
 
 // TODO: implement CmiPrintf
