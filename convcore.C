@@ -69,7 +69,7 @@ void converseRunPe(int rank)
     CmiInitState(rank);
 
     CmiInitState(rank);
-    CmiSetCPUAffinityLogical(pe);
+    CmiSetCPUAffinityLogical(rank);
 
     // barrier to ensure all global structs are initialized
     CmiNodeBarrier();

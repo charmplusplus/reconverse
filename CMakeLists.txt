@@ -35,8 +35,8 @@ find_package(Threads REQUIRED)
 add_library(reconverse)
 set_target_properties(reconverse PROPERTIES CXX_STANDARD 11)
 target_include_directories(reconverse PUBLIC .)
-target_sources(reconverse PRIVATE conv-conds.C convcore.C queue.C scheduler.C comm_backend/comm_backend_internal.C)
-target_link_libraries(reconverse PUBLIC Threads::Threads)
+target_sources(reconverse PRIVATE conv-conds.C convcore.C queue.C scheduler.C cpuaffinity.C comm_backend/comm_backend_internal.C)
+target_link_libraries(reconverse PUBLIC Threads::Threads -lhwloc)
 add_subdirectory(comm_backend)
 
 # ##############################################################################

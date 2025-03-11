@@ -23,7 +23,7 @@ void print_results() {
 //CpmInvokable ping_stop()
 void ping_stop_handler(void *msg)
 {
-  if(CmiMyPE()==0)
+  if(CmiMyPe()==0)
     printf("\nProgram End");
   CmiFree(msg);
   CsdExitScheduler();
@@ -67,6 +67,7 @@ void ping_handler(void *msg)
 {
   int i;
   int *p_payload = (int*) ((char*) msg + CmiMsgHeaderSizeBytes);
+  printf("\nPE-%d on CPU-%d", CmiMyPe(), sched_getcpu());
   // if this is a receiving PE
   if (CmiMyPe() >= CmiNumPes() / 2) {
     long sum = 0;
@@ -124,6 +125,7 @@ void ping_init()
 {
   int totalpes = CmiNumPes(); //p=num_pes
   int npes_as_sender = totalpes/2; //q=p/2
+  printf("\nPE-%d on CPU-%d", CmiMyPe(), sched_getcpu());
   if (CmiNumPes()%2 !=0) {
     printf("note: this test requires at multiple of 2 pes, skipping test.\n");
     printf("exiting.\n");
