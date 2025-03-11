@@ -16,7 +16,7 @@ void stop_handler(void *vmsg)
 
 void ping_handler(void *vmsg)
 {
-  printf("PING HANDLER CALLED ON PE %i\n", CmiMyPe());
+  printf("PING HANDLER CALLED ON PE %i\n", CmiMyPE());
   stop_handler(NULL);
 }
 
@@ -26,7 +26,7 @@ CmiStartFn mymain(int argc, char **argv)
 
   int handlerId = CmiRegisterHandler(ping_handler);
 
-  if (CmiMyPe() == 0)
+  if (CmiMyPE() == 0)
   {
     // create a message
     Message *msg = new Message;
