@@ -1,6 +1,7 @@
 #ifndef CONVERSE_H
 #define CONVERSE_H
 
+#include "conv-header.h"
 #include "CpvMacros.h" // for backward compatibility
 
 typedef struct Header
@@ -109,6 +110,24 @@ void CcdCancelCallOnCondition(int condnum, int idx);
 void CcdCancelCallOnConditionKeep(int condnum, int idx);
 void CcdRaiseCondition(int condnum);
 void CcdCallBacks(void);
+
+/* Command-Line-Argument handling */
+void CmiArgGroup(const char *parentName,const char *groupName);
+int CmiGetArgInt(char **argv,const char *arg,int *optDest);
+int CmiGetArgIntDesc(char **argv,const char *arg,int *optDest,const char *desc);
+int CmiGetArgLong(char **argv,const char *arg,CmiInt8 *optDest);
+int CmiGetArgLongDesc(char **argv,const char *arg,CmiInt8 *optDest,const char *desc);
+int CmiGetArgDouble(char **argv,const char *arg,double *optDest);
+int CmiGetArgDoubleDesc(char **argv,const char *arg,double *optDest,const char *desc);
+int CmiGetArgString(char **argv,const char *arg,char **optDest);
+int CmiGetArgStringDesc(char **argv,const char *arg,char **optDest,const char *desc);
+int CmiGetArgFlag(char **argv,const char *arg);
+int CmiGetArgFlagDesc(char **argv,const char *arg,const char *desc);
+void CmiDeleteArgs(char **argv,int k);
+int CmiGetArgc(char **argv);
+char **CmiCopyArgs(char **argv);
+int CmiArgGivingUsage(void);
+void CmiDeprecateArgInt(char **argv,const char *arg,const char *desc,const char *warning);
 
 //error checking
 #define CmiAssert(expr) ((void)0)
