@@ -41,7 +41,13 @@ int CmiStopFlag();
 #define CmiNodeSize(n) (CmiMyNodeSize())
 int CmiNodeFirst(int node);
 
+// handler things
 void CmiSetHandler(void *msg, int handlerId);
+int CmiGetHandler(void *msg);
+CmiHandler CmiGetHandlerFunction(int n);
+void CmiHandleMessage(void *msg);
+
+// Barrier functions
 void CmiNodeBarrier();
 void CmiNodeAllBarrier();
 
