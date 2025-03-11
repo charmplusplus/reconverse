@@ -2,6 +2,8 @@
 #define CONVERSE_H
 
 #include "CpvMacros.h" // for backward compatibility
+#include <cstdlib>
+#include <cstdio>
 
 typedef struct Header
 {
@@ -105,9 +107,38 @@ void CcdRaiseCondition(int condnum);
 void CcdCallBacks(void);
 
 //error checking
-#define CmiAssert(expr) ((void)0)
-#define CmiAssertMsg(expr, ...) ((void)0)
-#define _MEMCHECK(p) do{}while(0)
+
+//do we want asserts to be defaulted to be on or off(right now it is on)
+#ifndef CMK_OPTIMIZE
+  #define CMK_OPTIMIZE 0 
+#endif
+
+#if CMK_OPTIMIZE 
+  #define CmiAssert(expr) ((void)0)
+  #define CmiAssertMsg(expr, ...) ((void)0)
+#else 
+  #define CmiAssert(expr) do {                                                                 \
+      if (!(expr)) {                                                                           \
+        fprintf(stderr, "Assertion %s failed: file %s, line %d\n", #expr, __FILE__, __LINE__); \
+        abort();                                                                               \
+      }                                                                                        \
+  } while (0)
+
+  #define CmiAssertMsg(expr, ...) do {    \
+    if (!(expr)) {                        \ 
+      fprintf(stderr, __VA_ARGS__);       \
+      fprintf(stderr, "\n");              \
+      abort();                            \
+    }                                     \
+  } while (0)
+#endif 
+
+#define _MEMCHECK(p) do{ \
+  if (!p) { \
+    fprintf(stderr, "Memory allocation check failed: %s:%d\n", __FILE__, __LINE__); \
+    abort(); \
+  } \
+} while(0)
 
 //spantree
 //later: fix the naming of these macros to be clearer

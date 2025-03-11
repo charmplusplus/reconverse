@@ -1,3 +1,7 @@
+//is this convcore.C supposed to represent the entire converse system with
+//the possibility of multiple physical nodes or just one phsycial machine
+
+
 //+pe <N> threads, each running a scheduler
 #include "convcore.h"
 #include "scheduler.h"
@@ -12,6 +16,8 @@
 #include <cstdarg>
 #include <thread>
 #include <assert.h>
+#include <sys/stat.h>
+#include <errno.h>
 
 
 #define TREE_BCAST_BRANCH 4 //number of each children each node will have 
@@ -244,11 +250,19 @@ void CmiPushPE(int destPE, int messageSize, void *msg)
 
 void *CmiAlloc(int size)
 {
+    if (size <= 0) {
+        CmiPrintf("CmiAlloc: size <= 0\n");
+        return nullptr; 
+    }
     return malloc(size);
 }
 
 void CmiFree(void *msg)
 {
+    if (msg == nullptr) {
+        CmiPrintf("CmiFree: msg is nullptr\n");
+        return; 
+    }
     free(msg);
 }
 
@@ -276,43 +290,6 @@ void CmiSyncSendAndFree(int destPE, int messageSize, void *msg)
     }
 }
 
-static void treeBroadcastSend(int size, void* msg, int pe, int numchildren) {
-    for (int i = 1; i <= numchildren; i++) {
-        int child = (pe * numchildren) + i; 
-        if (child >= Cmi_npes) {
-            break; 
-        }
-        CmiSyncSend(child, size, msg);
-        treeBroadcastSend(size, msg, child, numchildren);
-    }
-}
-
-void CmiTreeBroadcastFromZero(int size, void* msg)
-{
-    CmiState* cs = CmiGetState();
-    // do we need implement threads???? Because it is the case in the sendToPeers function 
-    if (cs->pe != 0) {
-        fprintf(stderr, "Error: CmiTreeBroadcastFromZero should only be called from PE 0\n");
-        return;
-    }
-    treeBroadcastSend(size, msg, cs->pe, TREE_BCAST_BRANCH);
-
-}
-
-//where are the handler functions defined 
-//do we have to use threads 
-//does this have to be asycnrhounosy 
-//is message in thsi case the function that wil utlimatel call treeBraodCastSEend(from zero)
-void CmiTreeBroadcastFromAny(int size, void* msg)
-{
-    CmiState* cs = CmiGetState();
-    if (cs->pe == 0) {
-        treeBroadcastSend(size, msg, cs->pe, TREE_BCAST_BRANCH);
-    } else {
-        CmiSetHandler(msg, TREE_BCAST_HANDLER); 
-        CmiSyncSend(0, size, msg);
-    }
-}
 
 void CmiSyncBroadcast(int size, void *msg)
 {
@@ -349,8 +326,6 @@ void CmiSyncBroadcastAllAndFree(int size, void *msg)
 
     CmiSyncSendAndFree(cs->pe, size, msg);
 }
-
-
 
 // HANDLER TOOLS
 int CmiRegisterHandler(CmiHandler h)
@@ -438,7 +413,14 @@ int CmiGetArgc(char **argv)
 // TODO: implement
 void CmiAbort(const char *format, ...)
 {
-    printf("CMI ABORT\n");
+    printf("CMI ABORT: ");
+
+    va_list args; 
+    va_start(args, format);
+    vprintf(format, args);
+    va_end(args);
+
+    printf("\n");
     abort();
 }
 
@@ -472,3 +454,105 @@ void CmiSetIdleTime(double time)
 {
     idle_time = time;
 }
+
+
+//new stuff from me 
+/** tree broadcast stuff starts here  */
+static void treeBroadcastSend(int size, void* msg, int pe, int numchildren) {
+    for (int i = 1; i <= numchildren; i++) {
+        int child = (pe * numchildren) + i; 
+        if (child >= Cmi_npes) {
+            break; 
+        }
+        CmiSyncSend(child, size, msg);
+        treeBroadcastSend(size, msg, child, numchildren);
+    }
+}
+
+void CmiTreeBroadcastFromZero(int size, void* msg)
+{
+    CmiState* cs = CmiGetState();
+    // do we need implement threads???? Because it is the case in the sendToPeers function 
+    if (cs->pe != 0) {
+        fprintf(stderr, "Error: CmiTreeBroadcastFromZero should only be called from PE 0\n");
+        return;
+    }
+    treeBroadcastSend(size, msg, cs->pe, TREE_BCAST_BRANCH);
+
+}
+
+//where are the handler functions defined 
+//do we have to use threads 
+//does this have to be asycnrhounosy 
+//is message in thsi case the function that wil utlimatel call treeBraodCastSEend(from zero)
+void CmiTreeBroadcastFromAny(int size, void* msg)
+{
+    CmiState* cs = CmiGetState();
+    if (cs->pe == 0) {
+        treeBroadcastSend(size, msg, cs->pe, TREE_BCAST_BRANCH);
+    } else {
+        CmiSetHandler(msg, TREE_BCAST_HANDLER); 
+        CmiSyncSend(0, size, msg);
+    }
+}
+/** tree broadcast stuff ends here  */
+
+int CmiMakedir(const char* dirpath) 
+{
+    //do we want to give mode access are default it to something like 0755
+    mode_t defaultmode = 0755;
+    int res = mkdir(dirpath, defaultmode);
+    if (res == -1) {
+        if (res == EEXIST) {
+            return 0; 
+        } else {
+            printf("CmiMkdir: Error creating directory %s: %s\n", dirpath, strerror(errno));
+            return -1;
+        }
+    } 
+
+    return 0; 
+}
+
+int CmiNumCores() 
+{
+#if defined(__linux__)
+    return sysconf(_SC_NPROCESSORS_ONLN);
+#elif defined(__APPLE__) || defined(__MACH__)
+    int cores; 
+    size_t len = sizeof(cores);
+    int res = sysctlbyname("hw.ncpu", &cores, &len, NULL, 0);
+    if (res == 0) {
+        return cores; 
+    }
+#else 
+    printf("CmiNumCores: Unsupported platform\n");
+    return 0; 
+#endif
+}
+
+int CmiGetPageSize()
+{
+#if defined(__linux__)
+    long pageSize = sysconf(_SC_PAGESIZE);
+    if (pageSize == -1) {
+        printf("CmiGetPageSize: Error retrieving page size\n");
+        return 0; 
+    }
+    return static_cast<int>pageSize; 
+#elif defined(__APPLE__) || defined(__MACH__)
+    int pageSize;
+    size_t sz = sizeof(pageSize);
+    if (sysctlbyname("hw.pagesize", &pageSize, &sz, NULL, 0) == 0) {
+        return pageSize;
+    } else {
+        printf("CmiGetPageSize: Error retrieving page size\n");
+        return 0;
+    }
+#else
+    CmiPrintf("CmiGetPageSize: Unsupported platform\n");
+    return 0;
+#endif
+}
+
+
