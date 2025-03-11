@@ -21,9 +21,7 @@ int Cmi_mynode;
 int Cmi_mynodesize;
 int Cmi_numnodes;
 int Cmi_nodestart;
-
 std::vector<CmiHandlerInfo> **CmiHandlerTable; // array of handler vectors
-
 ConverseNodeQueue<void *> *CmiNodeQueue;
 double Cmi_startTime;
 
@@ -320,7 +318,6 @@ int CmiRegisterHandler(CmiHandler h)
     return handlerVector->size() - 1;
 }
 
-// BARRIERS
 void CmiNodeBarrier(void)
 {
     static Barrier nodeBarrier(CmiMyNodeSize());
@@ -384,7 +381,6 @@ void CmiHandleMessage(void *msg)
     // call handler (takes in pointer to whole message)
     CmiCallHandler(handler, msg);
 }
-
 // TODO: implement CmiPrintf
 int CmiPrintf(const char *format, ...)
 {
