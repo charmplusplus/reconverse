@@ -27,6 +27,7 @@ option(RECONVERSE_BUILD_TESTS "Build tests" ON)
 
 option(RECONVERSE_TRY_ENABLE_COMM_LCI1 "whether to enable the LCIv1 backend" ON)
 # option(LCW_TRY_ENABLE_COMM_LCI2 "whether to enable the LCIv2 backend" ON)
+option(SPANTREE "whether to enable spanning tree collectives" ON)
 
 # ##############################################################################
 # Add Library

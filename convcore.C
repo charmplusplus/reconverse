@@ -261,6 +261,7 @@ void CmiSyncSendAndFree(int destPE, int messageSize, void *msg)
     CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
     header->destPE = destPE;
     header->messageSize = messageSize;
+
     int destNode = CmiNodeOf(destPE);
     if (CmiMyNode() == destNode)
     {
@@ -271,18 +272,26 @@ void CmiSyncSendAndFree(int destPE, int messageSize, void *msg)
         comm_backend::sendAm(destNode, msg, messageSize, CommLocalHandler, AmHandlerPE);
     }
 }
-
+/* Broadcast to everyone but the source pe. Source does not "free". */
 void CmiSyncBroadcast(int size, void *msg)
 {
-    CmiState *cs = CmiGetState();
+    int pe = CmiMyPe();
 
-    for (int i = cs->pe + 1; i < Cmi_npes; i++)
+    CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
+    header->bcastSource = pe + 1;
+    header->messageSize = size;
+
+#ifdef SPANTREE
+    CmiSyncSend(0, size, msg);
+#else
+    for (int i = 0; i < pe; i++)
         CmiSyncSend(i, size, msg);
 
-    for (int i = 0; i < cs->pe; i++)
+    for (int i = pe + 1; i < Cmi_npes; i++)
         CmiSyncSend(i, size, msg);
+#endif
 }
-
+/* Broadcast to everyone but the source pe. Source "frees" the message. */
 void CmiSyncBroadcastAndFree(int size, void *msg)
 {
     CmiSyncBroadcast(size, msg);
@@ -291,21 +300,22 @@ void CmiSyncBroadcastAndFree(int size, void *msg)
 
 void CmiSyncBroadcastAll(int size, void *msg)
 {
+    CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
+    header->bcastSource = CmiMyPe() + 1;
+    header->messageSize = size;
+#ifdef SPANTREE
+    CmiSyncSend(0, size, msg);
+    CmiSyncSend(CmiMyPe(), size, msg);
+#else
     for (int i = 0; i < Cmi_npes; i++)
         CmiSyncSend(i, size, msg);
+#endif
 }
 
 void CmiSyncBroadcastAllAndFree(int size, void *msg)
 {
-    CmiState *cs = CmiGetState();
-
-    for (int i = cs->pe + 1; i < Cmi_npes; i++)
-        CmiSyncSend(i, size, msg);
-
-    for (int i = 0; i < cs->pe; i++)
-        CmiSyncSend(i, size, msg);
-
-    CmiSyncSendAndFree(cs->pe, size, msg);
+    CmiSyncBroadcastAll(size, msg);
+    CmiSyncSendAndFree(CmiMyPe(), size, msg);
 }
 
 // HANDLER TOOLS
@@ -377,6 +387,25 @@ void CmiHandleMessage(void *msg)
     // process event
     CmiMessageHeader *header = (CmiMessageHeader *)msg;
     int handler = header->handlerId;
+    int size = header->messageSize;
+
+#ifdef SPANTREE
+    if (header->bcastSource != 0)
+    {
+        int mype = CmiMyPe();
+        int numChildren = CmiNumSpanTreeChildren(mype);
+        int children[numChildren];
+        CmiSpanTreeChildren(mype, children);
+
+        // send broadcast to all children
+        for (int i = 0; i < numChildren; i++)
+        {
+            if (children[i] == header->bcastSource - 1)
+                continue;
+            CmiSyncSend(children[i], size, msg);
+        }
+    }
+#endif
 
     // call handler (takes in pointer to whole message)
     CmiCallHandler(handler, msg);
