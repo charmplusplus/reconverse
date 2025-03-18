@@ -1,7 +1,7 @@
 # reconverse-pingpong
 Basic implementation of a new communication layer for Charm++
 
-## Install and run
+## Build Reconverse
 
 If you want to run Reconverse locally (single node), all you have to do is the following:  
 
@@ -13,8 +13,70 @@ $ cmake -DRECONVERSE_TRY_ENABLE_COMM_LCI1=OFF ..
 $ make
 ```
 
-If you want to run Reconverse in multi-node mode, you first need to install LCI (https://github.com/uiuc-hpc/lci). Note that multi-node is currently only supported on Linux-based systems.  
-Building multi-node Reconverse may be different based on your platform. Here is an example build procedure on NCSA's Delta machine using the OFI layer:  
+Currently, Reconverse multi-node support is based on LCI (https://github.com/uiuc-hpc/lci). You could either install LCI by your own or use the cmake autofetch support.
+
+To use the cmake autofetch support:
+```
+$ cd reconverse
+$ mkdir build
+$ cd build
+$ cmake -DRECONVERSE_TRY_ENABLE_COMM_LCI1=ON -DRECONVERSE_AUTOFETCH_LCI1=ON ..
+$ make
+```
+
+Additional cmake variable can be passed to further fine-tune the build of LCI. Useful ones include
+- `-DLCT_PMI_BACKEND_ENABLE_MPI=ON` (Default: `OFF`): let LCI bootstrap with MPI. This can be useful when the running environment does not have PMI support.
+- `-DLCI_SERVER=[ofi|ibv]`: explicitly select the LCI backend to be libfabric (ofi) or libibverbs (ibv). `ibv` should be used for Infiniband and RoCE clusters. `ofi` should be used for shared memory system (e.g. laptop) and slingshot-11 clusters.
+
+Note: LCI by default will automatically probe and select available network backends, but this procedure sometimes leads to unsatifactory results (e.g. on Delta where libibverbs is installed but no Infiniband devices available). 
+
+### Run Reconverse
+
+In the build/examples/<program_name> folder, run the `reconverse_<program_name>` executable. Currently, the first arguments must be `+pe <num_pes>`.  
+
+### Build and run Reconverse on your own laptop
+
+#### Prerequisite:
+- `libfabric` as LCI's network backend for shared memory system.
+- `mpi` to bootstrap LCI.
+You can install them with
+```
+$ sudo apt install libfabric-bin libfabric-dev openmpi-bin openmpi-common openmpi-doc libopenmpi-dev
+```
+
+#### Build reconverse
+```
+$ git clone https://github.com/charmplusplus/reconverse.git
+$ cd reconverse
+$ mkdir build
+$ cd build
+$ cmake -DRECONVERSE_TRY_ENABLE_COMM_LCI1=ON -DRECONVERSE_AUTOFETCH_LCI1=ON -DLCI_SERVER=ofi -DLCT_PMI_BACKEND_ENABLE_MPI=ON ..
+$ make
+```
+Note: if you installed `libfabric` or `mpi` in a non-standard location, you may need to set `CMAKE_PREFIX_PATH` to the correct path.
+
+#### Run reconverse
+```
+$ cd build/examples/pingpong
+$ mpirun -n 2 ./reconverse_ping_ack +pe 4
+```
+
+### Build and run Reconverse on NCSA Delta
+
+#### Build reconverse
+To use CMake Autofetch support:
+```
+$ git clone https://github.com/charmplusplus/reconverse.git
+$ cd reconverse
+$ mkdir build
+$ cd build
+$ cmake -DRECONVERSE_TRY_ENABLE_COMM_LCI1=ON -DRECONVERSE_AUTOFETCH_LCI1=ON -DLCI_SERVER=ofi ..
+$ make
+```
+
+Note: NCSA has built-in PMI support. LCI will automatically detect and use it.
+
+If you want to install LCI by yourself, here is an example build procedure on NCSA's Delta machine using the OFI layer:
 
 ```
 $ git clone https://github.com/uiuc-hpc/lci.git
@@ -31,4 +93,8 @@ $ cmake ..
 $ make
 ```
 
-In the build/examples/<program_name> folder, run the `reconverse_<program_name>` executable. Currently, the first arguments must be `+pe <num_pes>`.  
+#### Run reconverse
+```
+$ cd build/examples/pingpong
+$ srun -n 2 ./reconverse_ping_ack +pe 4
+```
