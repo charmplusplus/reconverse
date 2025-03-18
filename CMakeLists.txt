@@ -26,7 +26,16 @@ option(RECONVERSE_BUILD_EXAMPLES "Build examples" ON)
 option(RECONVERSE_BUILD_TESTS "Build tests" ON)
 
 option(RECONVERSE_TRY_ENABLE_COMM_LCI1 "whether to enable the LCIv1 backend" ON)
+option(RECONVERSE_AUTOFETCH_LCI1
+       "whether to autofetch LCIv1 if LCI1 cannot be found" OFF)
+set(RECONVERSE_AUTOFETCH_LCI1_TAG
+    "470c7974c0b073026eb4180e0e739540fb487f3e"
+    CACHE STRING "The tag to fetch for LCIv1") # master branch as of 2025-03-17
 # option(LCW_TRY_ENABLE_COMM_LCI2 "whether to enable the LCIv2 backend" ON)
+
+set(RECONVERSE_TEST_LAUNCHER
+    "mpirun"
+    CACHE STRING "The executable to run multiple processes in CTest")
 
 # ##############################################################################
 # Add Library
@@ -37,7 +46,8 @@ find_package(Threads REQUIRED)
 add_library(reconverse)
 set_target_properties(reconverse PROPERTIES CXX_STANDARD 11)
 target_include_directories(reconverse PUBLIC .)
-target_sources(reconverse PRIVATE conv-conds.C convcore.C queue.C scheduler.C comm_backend/comm_backend_internal.C)
+target_sources(reconverse PRIVATE conv-conds.C convcore.C queue.C scheduler.C
+                                  comm_backend/comm_backend_internal.C)
 target_link_libraries(reconverse PUBLIC Threads::Threads)
 add_subdirectory(comm_backend)
 
@@ -47,6 +57,7 @@ add_subdirectory(comm_backend)
 
 # LCI1
 if(RECONVERSE_TRY_ENABLE_COMM_LCI1)
+  # Try to find LCIv1 externally
   find_package(
     LCI
     CONFIG
@@ -57,13 +68,40 @@ if(RECONVERSE_TRY_ENABLE_COMM_LCI1)
     lib/cmake
     lib64/cmake)
   if(LCI_FOUND
-    AND NOT LCI_WITH_LCT_ONLY
-    AND LCI_VERSION VERSION_LESS 2.0.0)
+     AND NOT LCI_WITH_LCT_ONLY
+     AND LCI_VERSION VERSION_LESS 2.0.0)
     set(RECONVERSE_ENABLE_COMM_LCI1 ON)
+  endif()
+
+  if(NOT RECONVERSE_ENABLE_COMM_LCI1 AND RECONVERSE_AUTOFETCH_LCI1)
+    if(FETCHCONTENT_SOURCE_DIR_LCI)
+      message(
+        STATUS
+          "LCI will be include through FetchContent from ${FETCHCONTENT_SOURCE_DIR_LCI}"
+      )
+    else()
+      message(
+        STATUS
+          "LCI will be include throught FetchContent from GIT_TAG ${RECONVERSE_AUTOFETCH_LCI1_TAG}"
+      )
+    endif()
+    include(FetchContent)
+    FetchContent_Declare(
+      lci
+      GIT_REPOSITORY https://github.com/uiuc-hpc/lci.git
+      GIT_TAG ${RECONVERSE_AUTOFETCH_LCI1_TAG})
+    FetchContent_MakeAvailable(lci)
+    set(RECONVERSE_ENABLE_COMM_LCI1 ON)
+  endif()
+
+  if(RECONVERSE_ENABLE_COMM_LCI1)
     target_link_libraries(reconverse PRIVATE LCI::LCI)
     target_sources(reconverse PRIVATE comm_backend/lci1/comm_backend_lci1.C)
   else()
-    message(WARNING "LCI is not found. The LCI backend is not enabled.")
+    message(
+      WARNING
+        "LCI is not found. The LCI backend is not enabled. Try setting RECONVERSE_AUTOFETCH_LCI1=ON to fetch LCIv1 automatically."
+    )
   endif()
 endif()
 
@@ -71,8 +109,9 @@ endif()
 # Configure
 # ##############################################################################
 configure_file(converse_config.h.in ${CMAKE_BINARY_DIR}/converse_config.h)
-target_include_directories(reconverse PUBLIC $<BUILD_INTERFACE:${CMAKE_BINARY_DIR}>
-                                              $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+target_include_directories(
+  reconverse PUBLIC $<BUILD_INTERFACE:${CMAKE_BINARY_DIR}>
+                    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
 
 # ##############################################################################
 # Add Subdirectories
