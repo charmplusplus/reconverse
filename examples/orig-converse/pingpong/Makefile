@@ -5,7 +5,7 @@ CXXFLAGS := -std=c++11 -pthread -I $(CONVERSE_SRC)
 
 # Source files
 COMMON_SRCS := $(CONVERSE_SRC)/convcore.C $(CONVERSE_SRC)/scheduler.C $(CONVERSE_SRC)/queue.C $(CONVERSE_SRC)/conv-conds.C
-HDRS := $(CONVERSE_SRC)/convcore.h $(CONVERSE_SRC)/scheduler.h $(CONVERSE_SRC)/queue.h $(CONVERSE_SRC)/barrier.h
+HDRS := $(CONVERSE_SRC)/converse_internal.h $(CONVERSE_SRC)/scheduler.h $(CONVERSE_SRC)/queue.h $(CONVERSE_SRC)/barrier.h
 
 # Default target
 all: pingpong pingpong_multipairs

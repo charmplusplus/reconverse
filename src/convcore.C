@@ -1,5 +1,5 @@
 //+pe <N> threads, each running a scheduler
-#include "convcore.h"
+#include "converse_internal.h"
 #include "scheduler.h"
 #include "barrier.h"
 #include "queue.h"

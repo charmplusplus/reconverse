@@ -1,5 +1,5 @@
 #include "scheduler.h"
-#include "convcore.h"
+#include "converse_internal.h"
 #include "queue.h"
 #include <thread>
 
