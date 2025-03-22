@@ -42,6 +42,9 @@ int CmiStopFlag();
 #define CmiNodeSize(n) (CmiMyNodeSize())
 int CmiNodeFirst(int node);
 
+#define CmiSyncListSend(n,l,s,m)        (CmiSyncListSendFn((n),(l),(s),(char *)(m)))
+#define CmiSyncListSendAndFree(n,l,s,m) (CmiFreeListSendFn((n),(l),(s),(char *)(m)))
+
 // handler things
 void CmiSetHandler(void *msg, int handlerId);
 int CmiGetHandler(void *msg);
