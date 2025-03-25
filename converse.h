@@ -53,6 +53,7 @@ void CmiAbort(const char *format, ...);
 void CmiInitCPUTopology(char **argv);
 void CmiInitCPUAffinity(char **argv);
 
+// Timer/time related functions
 double getCurrentTime(void);
 double CmiWallTimer(void);
 

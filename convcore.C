@@ -22,6 +22,8 @@
 
 #define TREE_BCAST_BRANCH 4 //number of each children each node will have 
 #define TREE_BCAST_HANDLER 999
+#define CMI_EXIT_HANDLER -1 
+
 
 // GLOBALS
 int Cmi_argc;
@@ -68,7 +70,11 @@ void CommRemoteHandlerNode(comm_backend::Status status) {
 
 void CmiCallHandler(int handler, void *msg)
 {
-    CmiGetHandlerTable()->at(handler).hdlr(msg);
+    if (handler == CMI_EXIT_HANDLER) {
+        CmiHandleExitMessage(msg);
+    } else {
+        CmiGetHandlerTable()->at(handler).hdlr(msg);
+    }
 }
 
 void converseRunPe(int rank)
@@ -159,6 +165,7 @@ CmiGetState(void)
     return Cmi_state;
 };
 
+
 void CmiInitState(int rank)
 {
     // allocate state
@@ -178,6 +185,9 @@ void CmiInitState(int rank)
 
     Cmi_queues[Cmi_myrank] = queue;
     CmiHandlerTable[Cmi_myrank] = handlerTable;
+
+    //add exit handler here?
+
 
     CcdModuleInit();
 }
@@ -327,6 +337,22 @@ void CmiSyncBroadcastAllAndFree(int size, void *msg)
     CmiSyncSendAndFree(cs->pe, size, msg);
 }
 
+//EXIT TOOLS 
+void CmiHandleExitMessage(void* msg)
+{
+    CmiGetState()->stopFlag = 1; 
+}
+
+void CmiExitHandler(int status) {
+    CmiMessageHeader exitMsg; 
+    exitMsg.handlerId = CMI_EXIT_HANDLER; 
+    CmiSyncBroadcastAll(sizeof(exitMsg), &exitMsg);
+
+    //just in case? 
+    CmiGetState()->stopFlag = 1; 
+    exit(status);
+}
+
 // HANDLER TOOLS
 int CmiRegisterHandler(CmiHandler h)
 {
@@ -410,7 +436,23 @@ int CmiGetArgc(char **argv)
     return Cmi_argc;
 }
 
+void CmiExit(int status)
+{
+    CmiExitHandler(status);
+}
+
 // TODO: implement
+/**
+ * this is weird abort is handled in the og converse 
+ * extern "C" void CmiAbort(const char *fmt, ...) {
+	fprintf(stderr, "Fatal error> ");
+	va_list p; va_start(p, fmt);
+	vfprintf(stderr, fmt, p);
+	va_end(p);
+	fprintf(stderr, "\n");
+	abort();
+}
+ */
 void CmiAbort(const char *format, ...)
 {
     printf("CMI ABORT: ");
@@ -421,7 +463,8 @@ void CmiAbort(const char *format, ...)
     va_end(args);
 
     printf("\n");
-    abort();
+    
+    CmiExitHandler(1);
 }
 
 // TODO: implememt
