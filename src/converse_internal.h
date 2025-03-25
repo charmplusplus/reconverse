@@ -31,8 +31,6 @@ typedef struct HandlerInfo
 
 std::vector<CmiHandlerInfo> *CmiGetHandlerTable();
 
-/*Cmi Functions*/
-
 typedef struct State
 {
     int pe;
@@ -48,28 +46,15 @@ CmiState *CmiGetState(void);
 void CmiInitState(int pe);
 ConverseQueue<void *> *CmiGetQueue(int pe);
 
-// message sending
 void CmiPushPE(int destPE, int messageSize, void *msg);
-void CmiSyncSend(int destPE, int messageSize, void *msg);
-void CmiSyncSendAndFree(int destPE, int messageSize, void *msg);
-
-// broadcasts
-void CmiSyncBroadcast(int size, void *msg);
-void CmiSyncBroadcastAndFree(int size, void *msg);
-void CmiSyncBroadcastAll(int size, void *msg);
-void CmiSyncBroadcastAllAndFree(int size, void *msg);
 
 // node queue
 ConverseNodeQueue<void *> *CmiGetNodeQueue();
-void CmiSyncNodeSendAndFree(unsigned int destNode, unsigned int size, void *msg);
 
 //idle
 bool CmiGetIdle();
 void CmiSetIdle(bool idle);
 double CmiGetIdleTime();
 void CmiSetIdleTime(double time);
-
-int CmiPrintf(const char *format, ...);
-int CmiGetArgc(char **argv);
 
 #endif

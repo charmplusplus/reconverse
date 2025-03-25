@@ -1,8 +1,43 @@
 #ifndef CONVERSE_H
 #define CONVERSE_H
 
-#include "conv-header.h"
-#include "CpvMacros.h" // for backward compatibility
+#include <cinttypes>
+
+using CmiInt1 = std::int8_t;
+using CmiInt2 = std::int16_t;
+using CmiInt4 = std::int32_t;
+using CmiInt8 = std::int64_t;
+using CmiUint1 = std::uint8_t;
+using CmiUint2 = std::uint16_t;
+using CmiUint4 = std::uint32_t;
+using CmiUint8 = std::uint64_t;
+
+// NOTE: these are solely for backwards compatibility
+// Do not use in reconverse impl
+
+#define CMK_TAG(x, y) x##y##_
+
+#define CpvDeclare(t, v) t *CMK_TAG(Cpv_, v)
+#define CpvStaticDeclare(t, v) static t *CMK_TAG(Cpv_, v)
+
+#define CpvInitialize(t, v)                            \
+    do                                                 \
+    {                                                  \
+        if (false /* I don't understand */)            \
+        {                                              \
+            CmiNodeBarrier();                          \
+        }                                              \
+        else                                           \
+        {                                              \
+            CMK_TAG(Cpv_, v) = new t[CmiMyNodeSize()]; \
+            CmiNodeBarrier();                          \
+        }                                              \
+    } while (0)
+;
+
+#define CpvAccess(v) CMK_TAG(Cpv_, v)[CmiMyRank()]
+
+// End of NOTE
 
 typedef struct Header
 {
@@ -22,7 +57,6 @@ static CmiStartFn Cmi_startfn;
 // handler tools
 typedef void (*CmiHandler)(void *msg);
 typedef void (*CmiHandlerEx)(void *msg, void *userPtr);
-
 int CmiRegisterHandler(CmiHandler h);
 
 // message allocation
@@ -48,12 +82,26 @@ int CmiGetHandler(void *msg);
 CmiHandler CmiGetHandlerFunction(int n);
 void CmiHandleMessage(void *msg);
 
+// message sending
+void CmiSyncSend(int destPE, int messageSize, void *msg);
+void CmiSyncSendAndFree(int destPE, int messageSize, void *msg);
+
+// broadcasts
+void CmiSyncBroadcast(int size, void *msg);
+void CmiSyncBroadcastAndFree(int size, void *msg);
+void CmiSyncBroadcastAll(int size, void *msg);
+void CmiSyncBroadcastAllAndFree(int size, void *msg);
+void CmiSyncNodeSendAndFree(unsigned int destNode, unsigned int size, void *msg);
+
 // Barrier functions
 void CmiNodeBarrier();
 void CmiNodeAllBarrier();
 
 void CsdExitScheduler();
 
+// Utility functions
+int CmiPrintf(const char *format, ...);
+int CmiGetArgc(char **argv);
 void CmiAbort(const char *format, ...);
 void CmiInitCPUTopology(char **argv);
 void CmiInitCPUAffinity(char **argv);
@@ -207,5 +255,4 @@ void CldEnqueueWithinNode(void *msg, int infofn);
             if(_x<CST_NS(p)) (c)[_c++]=CST_NF(CST_ND(p))+_x; \
           }\
         } while(0)
-
 #endif
