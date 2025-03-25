@@ -4,7 +4,7 @@ CXXFLAGS := -std=c++11 -pthread -I ../..
 
 # Source files
 SRCS := broadcast.C ../../convcore.C ../../scheduler.C ../../queue.C ../../conv-conds.C
-HDRS := ../../convcore.h ../../scheduler.h ../../queue.h ../../barrier.h
+HDRS := ../../converse_internal.h ../../scheduler.h ../../queue.h ../../barrier.h
 
 # Output executable
 TARGET := test
