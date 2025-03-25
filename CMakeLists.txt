@@ -12,7 +12,7 @@ enable_testing()
 cmake_policy(SET CMP0079 NEW)
 
 enable_language(CXX)
-list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake_modules")
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake_modules")
 
 include(AddReconverse)
 

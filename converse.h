@@ -134,6 +134,42 @@ void CmiDeprecateArgInt(char **argv,const char *arg,const char *desc,const char 
 #define CmiAssertMsg(expr, ...) ((void)0)
 #define _MEMCHECK(p) do{}while(0)
 
+//node lock
+typedef int CmiNodeLock;
+
+//Cld
+#define CMK_MULTICAST_GROUP_TYPE struct { unsigned pe, id; }
+typedef CMK_MULTICAST_GROUP_TYPE CmiGroup;
+
+#define CLD_ANYWHERE (-1)
+#define CLD_BROADCAST (-2)
+#define CLD_BROADCAST_ALL (-3)
+
+typedef void (*CldPackFn)(void *msg);
+
+typedef void (*CldInfoFn)(void *msg, 
+                          CldPackFn *packer,
+                          int *len,
+                          int *queueing,
+                          int *priobits, 
+                          unsigned int **prioptr);
+
+typedef int (*CldEstimator)(void);
+
+int CldRegisterInfoFn(CldInfoFn fn);
+int CldRegisterPackFn(CldPackFn fn);
+void CldRegisterEstimator(CldEstimator fn);
+int CldEstimate(void);
+const char *CldGetStrategy(void);
+
+void CldEnqueue(int pe, void *msg, int infofn);
+void CldEnqueueMulti(int npes, const int *pes, void *msg, int infofn);
+void CldEnqueueGroup(CmiGroup grp, void *msg, int infofn);
+// CldNodeEnqueue enqueues a single message for a node, whereas
+// CldEnqueueWithinNode enqueues a message for each PE on the node.
+void CldNodeEnqueue(int node, void *msg, int infofn);
+void CldEnqueueWithinNode(void *msg, int infofn);
+
 //spantree
 //later: fix the naming of these macros to be clearer
 #define CMK_SPANTREE_MAXSPAN 4
