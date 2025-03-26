@@ -233,6 +233,23 @@ std::vector<CmiHandlerInfo> *CmiGetHandlerTable()
     return CmiHandlerTable[CmiMyRank()];
 }
 
+CmiHandler CmiHandlerToFunction(int handlerId)
+{
+    return CmiGetHandlerTable()->at(handlerId).hdlr;
+}
+
+int CmiGetInfo(void *msg)
+{
+    CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
+    return header->info;
+}
+
+void CmiSetInfo(void *msg, int infofn)
+{
+    CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
+    header->info = infofn;
+}
+
 void CmiPushPE(int destPE, int messageSize, void *msg)
 {
     int rank = CmiRankOf(destPE);

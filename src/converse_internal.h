@@ -18,9 +18,6 @@ void converseRunPe(int rank);
 // HANDLERS
 // TODO: what is CmiHandlerEx in old converse?
 
-typedef void (*CmiHandler)(void *msg);
-typedef void (*CmiHandlerEx)(void *msg, void *userPtr); // ignore for now
-
 void CmiCallHandler(int handlerId, void *msg);
 
 typedef struct HandlerInfo

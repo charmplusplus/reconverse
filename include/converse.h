@@ -39,13 +39,32 @@ using CmiUint8 = std::uint64_t;
 
 // End of NOTE
 
+typedef void (*CmiHandler)(void *msg);
+typedef void (*CmiHandlerEx)(void *msg, void *userPtr); // ignore for now
+
+typedef void (*CldPackFn)(void *msg);
+
+typedef void (*CldInfoFn)(void *msg, 
+                          CldPackFn *packer,
+                          int *len,
+                          int *queueing,
+                          int *priobits, 
+                          unsigned int **prioptr);
+
+typedef int (*CldEstimator)(void);
+
 typedef struct Header
 {
     int handlerId;
     int messageId;
+    int infoFn;
     int messageSize;
     int destPE;
+    bool nokeep;
 } CmiMessageHeader;
+
+#define CMK_MULTICAST_GROUP_TYPE                struct { unsigned pe, id; }
+typedef CMK_MULTICAST_GROUP_TYPE CmiGroup;
 
 #define CmiMsgHeaderSizeBytes sizeof(CmiMessageHeader)
 
@@ -58,6 +77,9 @@ static CmiStartFn Cmi_startfn;
 typedef void (*CmiHandler)(void *msg);
 typedef void (*CmiHandlerEx)(void *msg, void *userPtr);
 int CmiRegisterHandler(CmiHandler h);
+CmiHandler CmiHandlerToFunction(int handlerId);
+int CmiGetInfo(void *msg);
+void CmiSetInfo(void *msg, int infofn);
 
 // message allocation
 void *CmiAlloc(int size);
@@ -193,17 +215,6 @@ typedef CMK_MULTICAST_GROUP_TYPE CmiGroup;
 #define CLD_BROADCAST (-2)
 #define CLD_BROADCAST_ALL (-3)
 
-typedef void (*CldPackFn)(void *msg);
-
-typedef void (*CldInfoFn)(void *msg, 
-                          CldPackFn *packer,
-                          int *len,
-                          int *queueing,
-                          int *priobits, 
-                          unsigned int **prioptr);
-
-typedef int (*CldEstimator)(void);
-
 int CldRegisterInfoFn(CldInfoFn fn);
 int CldRegisterPackFn(CldPackFn fn);
 void CldRegisterEstimator(CldEstimator fn);
@@ -217,6 +228,9 @@ void CldEnqueueGroup(CmiGroup grp, void *msg, int infofn);
 // CldEnqueueWithinNode enqueues a message for each PE on the node.
 void CldNodeEnqueue(int node, void *msg, int infofn);
 void CldEnqueueWithinNode(void *msg, int infofn);
+
+#define CmiImmIsRunning()        (0)
+#define CMI_MSG_NOKEEP(msg)  ((CmiMsgHeader*) msg)->nokeep
 
 //spantree
 //later: fix the naming of these macros to be clearer
