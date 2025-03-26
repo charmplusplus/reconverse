@@ -26,6 +26,8 @@ std::vector<CmiHandlerInfo> **CmiHandlerTable; // array of handler vectors
 ConverseNodeQueue<void *> *CmiNodeQueue;
 double Cmi_startTime;
 
+void CldModuleInit(char **);
+
 // PE LOCALS that need global access sometimes
 static ConverseQueue<void *> **Cmi_queues; // array of queue pointers
 
@@ -66,6 +68,9 @@ void converseRunPe(int rank)
 {
     // init state
     CmiInitState(rank);
+
+    //init things like cld module, ccs, etc
+    CldModuleInit(char **);
 
     // barrier to ensure all global structs are initialized
     CmiNodeBarrier();
