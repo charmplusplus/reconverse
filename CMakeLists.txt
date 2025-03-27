@@ -48,7 +48,7 @@ add_library(reconverse)
 set_target_properties(reconverse PROPERTIES CXX_STANDARD 11)
 add_subdirectory(include)
 add_subdirectory(src)
-target_link_libraries(reconverse PUBLIC Threads::Threads)
+target_link_libraries(reconverse PUBLIC Threads::Threads -lhwloc)
 
 # ##############################################################################
 # Communication Backends

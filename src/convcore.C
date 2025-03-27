@@ -67,6 +67,8 @@ void converseRunPe(int rank)
     // init state
     CmiInitState(rank);
 
+    CmiSetCPUAffinity(rank);
+
     // barrier to ensure all global structs are initialized
     CmiNodeBarrier();
 
@@ -134,6 +136,8 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched, int initret)
     // register am handlers
     AmHandlerPE = comm_backend::registerAmHandler(CommRemoteHandlerPE);
     AmHandlerNode = comm_backend::registerAmHandler(CommRemoteHandlerNode);
+
+    CmiInitHwlocTopology();
 
     Cmi_startfn = fn;
 
