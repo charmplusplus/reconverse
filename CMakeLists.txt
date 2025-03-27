@@ -44,11 +44,18 @@ set(RECONVERSE_TEST_LAUNCHER
 
 find_package(Threads REQUIRED)
 
+find_library(HWLOC NAMES libhwloc.so libhwloc.dylib PATHS /opt/local/lib /usr/lib /usr/local/lib /usr/local/Cellar/hwloc/2.12.0/lib)
+if(HWLOC)
+  message(STATUS "Found hwloc: ${HWLOC}")
+else()
+  message(FATAL_ERROR "Could not find libhwloc")
+endif()
+
 add_library(reconverse)
 set_target_properties(reconverse PROPERTIES CXX_STANDARD 11)
 add_subdirectory(include)
 add_subdirectory(src)
-target_link_libraries(reconverse PUBLIC Threads::Threads -lhwloc)
+target_link_libraries(reconverse PUBLIC Threads::Threads ${HWLOC})
 
 # ##############################################################################
 # Communication Backends
