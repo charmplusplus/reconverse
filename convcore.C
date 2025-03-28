@@ -476,9 +476,6 @@ void CmiSetIdleTime(double time)
     idle_time = time;
 }
 
-
-/** tree broadcast stuff ends here  */
-
 int CmiMakedir(const char* dirpath) 
 {
     //do we want to give mode access are default it to something like 0755
@@ -494,47 +491,6 @@ int CmiMakedir(const char* dirpath)
     } 
 
     return 0; 
-}
-
-int CmiNumCores() 
-{
-#if defined(__linux__)
-    return sysconf(_SC_NPROCESSORS_ONLN);
-#elif defined(__APPLE__) || defined(__MACH__)
-    int cores; 
-    size_t len = sizeof(cores);
-    int res = sysctlbyname("hw.ncpu", &cores, &len, NULL, 0);
-    if (res == 0) {
-        return cores; 
-    }
-#else 
-    printf("CmiNumCores: Unsupported platform\n");
-    return 0; 
-#endif
-}
-
-int CmiGetPageSize()
-{
-#if defined(__linux__)
-    long pageSize = sysconf(_SC_PAGESIZE);
-    if (pageSize == -1) {
-        printf("CmiGetPageSize: Error retrieving page size\n");
-        return 0; 
-    }
-    return static_cast<int>pageSize; 
-#elif defined(__APPLE__) || defined(__MACH__)
-    int pageSize;
-    size_t sz = sizeof(pageSize);
-    if (sysctlbyname("hw.pagesize", &pageSize, &sz, NULL, 0) == 0) {
-        return pageSize;
-    } else {
-        printf("CmiGetPageSize: Error retrieving page size\n");
-        return 0;
-    }
-#else
-    CmiPrintf("CmiGetPageSize: Unsupported platform\n");
-    return 0;
-#endif
 }
 
 

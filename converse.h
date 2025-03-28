@@ -123,15 +123,15 @@ void CcdCallBacks(void);
   #define CmiAssert(expr) do {                                                                 \
       if (!(expr)) {                                                                           \
         fprintf(stderr, "Assertion %s failed: file %s, line %d\n", #expr, __FILE__, __LINE__); \
-        abort();                                                                               \
+        CmiExit(0);                                                                            \
       }                                                                                        \
   } while (0)
 
   #define CmiAssertMsg(expr, ...) do {    \
-    if (!(expr)) {                        \ 
+    if (!(expr)) {                        \
       fprintf(stderr, __VA_ARGS__);       \
       fprintf(stderr, "\n");              \
-      abort();                            \
+      CmiExit(0);                         \
     }                                     \
   } while (0)
 #endif 

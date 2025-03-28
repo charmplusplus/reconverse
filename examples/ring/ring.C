@@ -37,11 +37,11 @@ void ping_handler(void *vmsg)
   }
   else
   {
-    //CmiExit(0);
-    Message *msg = new Message;
-    msg->header.handlerId = CpvAccess(exitHandlerId);
-    msg->header.messageSize = sizeof(Message);
-    CmiSyncBroadcastAllAndFree(msg->header.messageSize, msg);
+    CmiExit(0);
+    // Message *msg = new Message;
+    // msg->header.handlerId = CpvAccess(exitHandlerId);
+    // msg->header.messageSize = sizeof(Message);
+    // CmiSyncBroadcastAllAndFree(msg->header.messageSize, msg);
   }
 }
 
