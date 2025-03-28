@@ -19,20 +19,17 @@
 #include <sys/stat.h>
 #include <errno.h>
 
-
-#define TREE_BCAST_BRANCH 4 //number of each children each node will have 
-#define TREE_BCAST_HANDLER 999
 #define CMI_EXIT_HANDLER -1 
 
 
 // GLOBALS
 int Cmi_argc;
 static char **Cmi_argv;
-int Cmi_npes;
-int Cmi_nranks;                                // TODO: this isnt used in old converse, but we need to know how many PEs are on our node?
-int Cmi_mynode;
-int Cmi_mynodesize;
-int Cmi_numnodes;
+int Cmi_npes; //total number of PE's across the entire system
+int Cmi_nranks;      // TODO: this isnt used in old converse, but we need to know how many PEs are on our node?
+int Cmi_mynode; 
+int Cmi_mynodesize; //represents the number of PE's/threads on a single physical node. In SMP mode, each PE is run by a seperate thread, so Cmi_nodesize in that case represents the number of threads (PEs) on that machine
+int Cmi_numnodes; //represents the number of physical nodes/systems machine 
 int Cmi_nodestart;
 std::vector<CmiHandlerInfo> **CmiHandlerTable; // array of handler vectors
 ConverseNodeQueue<void *> *CmiNodeQueue;
@@ -71,7 +68,7 @@ void CommRemoteHandlerNode(comm_backend::Status status) {
 void CmiCallHandler(int handler, void *msg)
 {
     if (handler == CMI_EXIT_HANDLER) {
-        CmiHandleExitMessage(msg);
+        CsdExitScheduler();
     } else {
         CmiGetHandlerTable()->at(handler).hdlr(msg);
     }
@@ -338,19 +335,31 @@ void CmiSyncBroadcastAllAndFree(int size, void *msg)
 }
 
 //EXIT TOOLS 
-void CmiHandleExitMessage(void* msg)
-{
-    CmiGetState()->stopFlag = 1; 
-}
 
 void CmiExitHandler(int status) {
-    CmiMessageHeader exitMsg; 
-    exitMsg.handlerId = CMI_EXIT_HANDLER; 
-    CmiSyncBroadcastAll(sizeof(exitMsg), &exitMsg);
 
-    //just in case? 
-    CmiGetState()->stopFlag = 1; 
-    exit(status);
+    CmiMessageHeader exitMsg; //might need to allocate 
+    exitMsg.handlerId = CMI_EXIT_HANDLER; 
+    CmiSyncBroadcastAllAndFree(sizeof(exitMsg), &exitMsg);
+}
+
+void CmiExit(int status)
+{
+    CmiExitHandler(status);
+}
+
+void CmiAbort(const char *format, ...)
+{
+    printf("CMI ABORT: ");
+
+    va_list args; 
+    va_start(args, format);
+    vprintf(format, args);
+    va_end(args);
+
+    printf("\n");
+    
+    CmiExitHandler(1);
 }
 
 // HANDLER TOOLS
@@ -434,37 +443,6 @@ int CmiGetArgc(char **argv)
 {
     // TODO: is this supposed to be argc after runtime params are extracted?
     return Cmi_argc;
-}
-
-void CmiExit(int status)
-{
-    CmiExitHandler(status);
-}
-
-// TODO: implement
-/**
- * this is weird abort is handled in the og converse 
- * extern "C" void CmiAbort(const char *fmt, ...) {
-	fprintf(stderr, "Fatal error> ");
-	va_list p; va_start(p, fmt);
-	vfprintf(stderr, fmt, p);
-	va_end(p);
-	fprintf(stderr, "\n");
-	abort();
-}
- */
-void CmiAbort(const char *format, ...)
-{
-    printf("CMI ABORT: ");
-
-    va_list args; 
-    va_start(args, format);
-    vprintf(format, args);
-    va_end(args);
-
-    printf("\n");
-    
-    CmiExitHandler(1);
 }
 
 // TODO: implememt

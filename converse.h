@@ -49,7 +49,9 @@ void CmiNodeAllBarrier();
 
 void CsdExitScheduler();
 
+void CmiExit(int status);
 void CmiAbort(const char *format, ...);
+
 void CmiInitCPUTopology(char **argv);
 void CmiInitCPUAffinity(char **argv);
 
