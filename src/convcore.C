@@ -425,6 +425,7 @@ void CmiAbort(const char *format, ...) {
   vsnprintf(newmsg, sizeof(newmsg), format, args);
   va_end(args);
   CmiAbortHelper("Called CmiAbort", newmsg, NULL, 1, 0);
+  abort();
 }
 
 
