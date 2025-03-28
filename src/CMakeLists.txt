@@ -1,5 +1,5 @@
 target_include_directories(reconverse PRIVATE .)
-target_sources(reconverse PRIVATE conv-conds.C convcore.C queue.C scheduler.C
+target_sources(reconverse PRIVATE conv-conds.C convcore.C queue.C scheduler.C cpuaffinity.C
                                   comm_backend/comm_backend_internal.C)
 target_include_directories(
   reconverse PRIVATE $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}>
