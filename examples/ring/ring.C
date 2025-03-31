@@ -3,7 +3,6 @@
 #include <pthread.h>
 
 CpvDeclare(int, test);
-CpvDeclare(int, exitHandlerId);
 
 int ping_handlerID;
 int payloadSize = 1 * sizeof(int);
@@ -14,15 +13,13 @@ struct Message
   int data[1];
 };
 
-void stop_handler(void *vmsg)
-{
-  CsdExitScheduler();
-}
-
 void ping_handler(void *vmsg)
 {
   Message *msg = (Message *)vmsg;
   printf("PE %d pinged in ring with index %d.\n", CmiMyRank(), msg->data[0]);
+
+  //test assert statements 
+  CmiAssert(CmiMyRank() == msg->header.destPE);
 
   if (CmiMyRank() != CmiMyNodeSize() - 1)
   {
@@ -38,10 +35,6 @@ void ping_handler(void *vmsg)
   else
   {
     CmiExit(0);
-    // Message *msg = new Message;
-    // msg->header.handlerId = CpvAccess(exitHandlerId);
-    // msg->header.messageSize = sizeof(Message);
-    // CmiSyncBroadcastAllAndFree(msg->header.messageSize, msg);
   }
 }
 
@@ -67,9 +60,6 @@ CmiStartFn mymain(int argc, char **argv)
     // Send from my pe-i on node-0 to q+i on node-1
     CmiSyncSendAndFree(sendToPE, msg->header.messageSize, msg);
   }
-
-  CpvInitialize(int, exitHandlerId);
-  CpvAccess(exitHandlerId) = CmiRegisterHandler(stop_handler);
 
   // printf("Answer to the Ultimate Question of Life, the Universe, and Everything: %d\n", CpvAccess(test));
   return 0;

@@ -337,10 +337,9 @@ void CmiSyncBroadcastAllAndFree(int size, void *msg)
 //EXIT TOOLS 
 
 void CmiExitHandler(int status) {
-
-    CmiMessageHeader exitMsg; //might need to allocate 
-    exitMsg.handlerId = CMI_EXIT_HANDLER; 
-    CmiSyncBroadcastAllAndFree(sizeof(exitMsg), &exitMsg);
+    CmiMessageHeader* exitMsg = new CmiMessageHeader(); //might need to allocate 
+    exitMsg->handlerId = CMI_EXIT_HANDLER; 
+    CmiSyncBroadcastAllAndFree(sizeof(*exitMsg), exitMsg);
 }
 
 void CmiExit(int status)
