@@ -183,9 +183,6 @@ void CmiInitState(int rank)
     Cmi_queues[Cmi_myrank] = queue;
     CmiHandlerTable[Cmi_myrank] = handlerTable;
 
-    //add exit handler here?
-
-
     CcdModuleInit();
 }
 
