@@ -54,4 +54,19 @@ void CmiSetIdle(bool idle);
 double CmiGetIdleTime();
 void CmiSetIdleTime(double time);
 
+//cpu affinity
+typedef struct
+{
+  int num_pus;
+  int num_cores;
+  int num_sockets;
+
+  int total_num_pus;
+} CmiHwlocTopology;
+
+extern CmiHwlocTopology CmiHwlocTopologyLocal;
+
+extern void CmiInitHwlocTopology(void);
+extern int  CmiSetCPUAffinity(int);
+
 #endif

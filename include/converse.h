@@ -57,7 +57,7 @@ typedef struct Header
 {
     int handlerId;
     int messageId;
-    int infoFn;
+    int info;
     int messageSize;
     int destPE;
     bool nokeep;
@@ -208,8 +208,6 @@ void CmiDeprecateArgInt(char **argv,const char *arg,const char *desc,const char 
 typedef int CmiNodeLock;
 
 //Cld
-#define CMK_MULTICAST_GROUP_TYPE struct { unsigned pe, id; }
-typedef CMK_MULTICAST_GROUP_TYPE CmiGroup;
 
 #define CLD_ANYWHERE (-1)
 #define CLD_BROADCAST (-2)
