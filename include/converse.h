@@ -1,11 +1,8 @@
 #ifndef CONVERSE_H
 #define CONVERSE_H
 
-<<<<<<< HEAD:converse.h
-#include "CpvMacros.h" // for backward compatibility
 #include <cstdlib>
 #include <cstdio>
-=======
 #include <cinttypes>
 
 using CmiInt1 = std::int8_t;
@@ -19,6 +16,10 @@ using CmiUint8 = std::uint64_t;
 
 // NOTE: these are solely for backwards compatibility
 // Do not use in reconverse impl
+
+#ifndef CMK_OPTIMIZE
+  #define CMK_OPTIMIZE 0 
+#endif
 
 #define CMK_TAG(x, y) x##y##_
 
@@ -41,9 +42,7 @@ using CmiUint8 = std::uint64_t;
 ;
 
 #define CpvAccess(v) CMK_TAG(Cpv_, v)[CmiMyRank()]
-
 // End of NOTE
->>>>>>> main:include/converse.h
 
 typedef struct Header
 {
@@ -105,14 +104,14 @@ void CmiNodeAllBarrier();
 
 void CsdExitScheduler();
 
-<<<<<<< HEAD:converse.h
+// Exit Functions 
 void CmiExit(int status);
-=======
+void CmiAbort(const char *format, ...);
+
 // Utility functions
 int CmiPrintf(const char *format, ...);
 int CmiGetArgc(char **argv);
->>>>>>> main:include/converse.h
-void CmiAbort(const char *format, ...);
+
 
 void CmiInitCPUTopology(char **argv);
 void CmiInitCPUAffinity(char **argv);
@@ -192,10 +191,6 @@ void CmiDeprecateArgInt(char **argv,const char *arg,const char *desc,const char 
 //error checking
 
 //do we want asserts to be defaulted to be on or off(right now it is on)
-#ifndef CMK_OPTIMIZE
-  #define CMK_OPTIMIZE 0 
-#endif
-
 #if CMK_OPTIMIZE 
   #define CmiAssert(expr) ((void)0)
   #define CmiAssertMsg(expr, ...) ((void)0)
@@ -215,13 +210,6 @@ void CmiDeprecateArgInt(char **argv,const char *arg,const char *desc,const char 
     }                                     \
   } while (0)
 #endif 
-
-#define _MEMCHECK(p) do{ \
-  if (!p) { \
-    fprintf(stderr, "Memory allocation check failed: %s:%d\n", __FILE__, __LINE__); \
-    abort(); \
-  } \
-} while(0)
 
 //spantree
 //later: fix the naming of these macros to be clearer
