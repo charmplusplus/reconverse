@@ -14,16 +14,29 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build libfabric-bin libfabric-dev openmpi-bin openmpi-common openmpi-doc libopenmpi-dev
+
       - name: Verify Installation
         run: |
           cmake --version
+          ninja --version
+          mpicc --version
+          mpirun --version
+          fi_info --version
 
       - name: Configure
         shell: bash
         run: |
             cmake \
                 -Bbuild \
+                -GNinja \
                 -DCMAKE_BUILD_TYPE=Debug \
+                -DRECONVERSE_AUTOFETCH_LCI1=ON \
+                -DLCI_SERVER=ofi \
+                -DLCT_PMI_BACKEND_ENABLE_MPI=ON \
                 .
 
       - name: Build
