@@ -38,17 +38,21 @@ set(RECONVERSE_TEST_LAUNCHER
     "mpirun"
     CACHE STRING "The executable to run multiple processes in CTest")
 
+option(ENABLE_CPU_AFFINITY "Enable cpu affinity with hwloc" OFF)
+
 # ##############################################################################
 # Add Library
 # ##############################################################################
 
 find_package(Threads REQUIRED)
 
-find_library(HWLOC NAMES libhwloc.so libhwloc.dylib PATHS /opt/local/lib /usr/lib /usr/local/lib /usr/local/Cellar/hwloc/2.12.0/lib)
-if(HWLOC)
-  message(STATUS "Found hwloc: ${HWLOC}")
-else()
-  message(FATAL_ERROR "Could not find libhwloc")
+if(ENABLE_CPU_AFFINITY)
+  find_library(HWLOC NAMES libhwloc.so libhwloc.dylib PATHS /opt/local/lib /usr/lib /usr/local/lib /usr/local/Cellar/hwloc/2.12.0/lib)
+  if(HWLOC)
+    message(STATUS "Found hwloc: ${HWLOC}")
+  else()
+    message(FATAL_ERROR "Could not find libhwloc")
+  endif()
 endif()
 
 add_library(reconverse)
@@ -71,4 +75,11 @@ endif()
 
 if(RECONVERSE_BUILD_TESTS)
   add_subdirectory(test)
+endif()
+
+if(ENABLE_CPU_AFFINITY)
+  add_definitions(-DSET_CPU_AFFINITY)
+  message(STATUS "CPU affinity enabled")
+else()
+  message(STATUS "CPU affinity disabled")
 endif()
