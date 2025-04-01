@@ -46,11 +46,13 @@ option(ENABLE_CPU_AFFINITY "Enable cpu affinity with hwloc" OFF)
 
 find_package(Threads REQUIRED)
 
-find_library(HWLOC NAMES libhwloc.so libhwloc.dylib PATHS /opt/local/lib /usr/lib /usr/local/lib /usr/local/Cellar/hwloc/2.12.0/lib)
-if(HWLOC)
-  message(STATUS "Found hwloc: ${HWLOC}")
-else()
-  message(FATAL_ERROR "Could not find libhwloc")
+if(ENABLE_CPU_AFFINITY)
+  find_library(HWLOC NAMES libhwloc.so libhwloc.dylib PATHS /opt/local/lib /usr/lib /usr/local/lib /usr/local/Cellar/hwloc/2.12.0/lib)
+  if(HWLOC)
+    message(STATUS "Found hwloc: ${HWLOC}")
+  else()
+    message(FATAL_ERROR "Could not find libhwloc")
+  endif()
 endif()
 
 add_library(reconverse)
