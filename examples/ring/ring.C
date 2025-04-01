@@ -18,7 +18,7 @@ void ping_handler(void *vmsg)
   Message *msg = (Message *)vmsg;
   printf("PE %d pinged in ring with index %d.\n", CmiMyRank(), msg->data[0]);
 
-  //test assert statements 
+  //test assert statements are working
   CmiAssert(CmiMyRank() == msg->header.destPE);
 
   if (CmiMyRank() != CmiMyNodeSize() - 1)

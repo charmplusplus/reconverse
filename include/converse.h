@@ -1,3 +1,5 @@
+//function declarations that a user program can call 
+
 #ifndef CONVERSE_H
 #define CONVERSE_H
 

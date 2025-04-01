@@ -1,6 +1,6 @@
 #include <iostream> 
 #include <assert.h>
-#include "../barrier.h"
+#include "../src/barrier.h"
 #include <thread>
 #include <vector>
 #include <future>
@@ -26,7 +26,7 @@ void thread_func_throwaway(int var) {
     barrier.wait();
 
     mtx.lock();
-    printf("%ld\n", count);
+    //printf("%ld\n", count);
     if (count != NUM_THREADS) {
         pass1 = 0; 
     }
@@ -45,7 +45,7 @@ void thread_func_reusable(int var) {
         barrier.wait();
         
         mtx.lock();
-        printf("%ld\n", count);
+        //printf("%ld\n", count);
         if (count % NUM_THREADS) {
             pass2 = 0;
         }
