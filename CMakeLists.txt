@@ -34,6 +34,13 @@ option(RECONVERSE_TRY_ENABLE_COMM_LCI1 "whether to enable the LCIv1 backend" ON)
 
 find_package(Threads REQUIRED)
 
+find_library(HWLOC NAMES libhwloc.so libhwloc.dylib PATHS /opt/local/lib /usr/lib /usr/local/lib /usr/local/Cellar/hwloc/2.12.0/lib /opt/homebrew/Cellar/hwloc/2.12.0/lib)
+if(HWLOC)
+  message(STATUS "Found hwloc: ${HWLOC}")
+else()
+  message(FATAL_ERROR "Could not find libhwloc")
+endif()
+
 add_library(reconverse)
 set_target_properties(reconverse PROPERTIES CXX_STANDARD 11)
 target_include_directories(reconverse PUBLIC .)
