@@ -38,6 +38,8 @@ set(RECONVERSE_TEST_LAUNCHER
     "mpirun"
     CACHE STRING "The executable to run multiple processes in CTest")
 
+option(ENABLE_CPU_AFFINITY "Enable cpu affinity with hwloc" OFF)
+
 # ##############################################################################
 # Add Library
 # ##############################################################################
@@ -71,4 +73,11 @@ endif()
 
 if(RECONVERSE_BUILD_TESTS)
   add_subdirectory(test)
+endif()
+
+if(ENABLE_CPU_AFFINITY)
+  add_definitions(-DSET_CPU_AFFINITY)
+  message(STATUS "CPU affinity enabled")
+else()
+  message(STATUS "CPU affinity disabled")
 endif()
