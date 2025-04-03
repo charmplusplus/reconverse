@@ -3,11 +3,15 @@
 #include "queue.h"
 #include <thread>
 
+/**
+ * The main scheduler loop for the Charm++ runtime.
+ */
 void CsdScheduler()
 {
     // get pthread level queue
-
     ConverseQueue<void *> *queue = CmiGetQueue(CmiMyRank());
+
+    // get node level queue 
     ConverseNodeQueue<void *> *nodeQueue = CmiGetNodeQueue();
 
     while (CmiStopFlag() == 0)

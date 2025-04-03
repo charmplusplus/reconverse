@@ -1,3 +1,5 @@
+//functions declarations internal to converse 
+
 #ifndef CONVCORE_H
 #define CONVCORE_H
 
@@ -26,7 +28,7 @@ void CmiCallHandler(int handlerId, void *msg);
 typedef struct HandlerInfo
 {
     CmiHandler hdlr;
-    void *userPtr;
+    void *userPtr; //does this point to the mesage data itself 
 } CmiHandlerInfo;
 
 std::vector<CmiHandlerInfo> *CmiGetHandlerTable();
@@ -50,6 +52,9 @@ void CmiPushPE(int destPE, int messageSize, void *msg);
 
 // node queue
 ConverseNodeQueue<void *> *CmiGetNodeQueue();
+
+// exit handler function 
+void CmiExitHandler(int status);
 
 //idle
 bool CmiGetIdle();
