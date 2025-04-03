@@ -34,6 +34,8 @@ set(RECONVERSE_AUTOFETCH_LCI1_TAG
     CACHE STRING "The tag to fetch for LCIv1") # master branch as of 2025-03-17
 # option(LCW_TRY_ENABLE_COMM_LCI2 "whether to enable the LCIv2 backend" ON)
 
+option(SPANTREE "whether to enable spanning tree collectives" ON)
+
 set(RECONVERSE_TEST_LAUNCHER
     "mpirun"
     CACHE STRING "The executable to run multiple processes in CTest")
