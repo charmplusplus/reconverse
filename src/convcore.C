@@ -271,6 +271,12 @@ void CmiSyncSendAndFree(int destPE, int messageSize, void *msg)
     header->destPE = destPE;
     header->messageSize = messageSize;
     int destNode = CmiNodeOf(destPE);
+
+    if (destNode >= Cmi_numnodes || destNode < 0)
+    {
+        CmiAbort("Destnode %d out of range %d\n", destPE, Cmi_numnodes);
+    }
+
     if (CmiMyNode() == destNode)
     {
         CmiPushPE(destPE, messageSize, msg);
@@ -315,6 +321,7 @@ void CmiSyncBroadcastAll(int size, void *msg)
     header->messageSize = size;
 #ifdef SPANTREE
     CmiSyncSend(0, size, msg);
+    header->bcastSource = 0;
     CmiSyncSend(CmiMyPe(), size, msg);
 #else
 
@@ -364,6 +371,12 @@ ConverseNodeQueue<void *> *CmiGetNodeQueue()
 
 void CmiSyncNodeSendAndFree(unsigned int destNode, unsigned int size, void *msg)
 {
+
+    if (destNode >= Cmi_numnodes || destNode < 0)
+    {
+        CmiAbort("Destnode %d out of range %d\n", destNode, Cmi_numnodes);
+    }
+
     if (CmiMyNode() == destNode)
     {
         CmiNodeQueue->push(msg);
@@ -413,9 +426,11 @@ void CmiHandleMessage(void *msg)
         // send broadcast to all children
         for (int i = 0; i < numChildren; i++)
         {
-            if (children[i] == header->bcastSource - 1)
-                continue;
             CmiSyncSend(children[i], size, msg);
+        }
+        if (header->bcastSource - 1 == mype)
+        {
+            return;
         }
     }
 #endif
