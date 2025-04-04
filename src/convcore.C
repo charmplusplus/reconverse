@@ -264,12 +264,34 @@ void CmiSyncSend(int destPE, int messageSize, void *msg)
     CmiSyncSendAndFree(destPE, messageSize, copymsg);
 }
 
+void CmiBCastSyncSend(int destPE, int messageSize, void *msg)
+{
+    char *copymsg = (char *)CmiAlloc(messageSize);
+    std::memcpy(copymsg, msg, messageSize);
+    CmiBCastSyncSendAndFree(destPE, messageSize, copymsg);
+}
+
 void CmiSyncSendAndFree(int destPE, int messageSize, void *msg)
 {
     // printf("Sending message to PE %d\n", destPE);
     CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
     header->destPE = destPE;
     header->messageSize = messageSize;
+    header->bcastSource = 0;
+    CmiGSendAndFree(destPE, messageSize, msg);
+}
+
+void CmiBCastSyncSendAndFree(int destPE, int messageSize, void *msg)
+{
+    // printf("Sending message to PE %d\n", destPE);
+    CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
+    header->destPE = destPE;
+    header->messageSize = messageSize;
+    CmiGSendAndFree(destPE, messageSize, msg);
+}
+
+void CmiGSendAndFree(int destPE, int messageSize, void *msg)
+{
     int destNode = CmiNodeOf(destPE);
 
     if (destNode >= Cmi_numnodes || destNode < 0)
@@ -297,7 +319,7 @@ void CmiSyncBroadcast(int size, void *msg)
     header->messageSize = size;
 
 #ifdef SPANTREE
-    CmiSyncSend(0, size, msg);
+    CmiBCastSyncSend(0, size, msg);
 #else
 
     for (int i = pe + 1; i < Cmi_npes; i++)
@@ -320,9 +342,9 @@ void CmiSyncBroadcastAll(int size, void *msg)
     header->bcastSource = CmiMyPe() + 1;
     header->messageSize = size;
 #ifdef SPANTREE
-    CmiSyncSend(0, size, msg);
+    CmiBCastSyncSend(0, size, msg);
     header->bcastSource = 0;
-    CmiSyncSend(CmiMyPe(), size, msg);
+    CmiBCastSyncSend(CmiMyPe(), size, msg);
 #else
 
     for (int i = 0; i < Cmi_npes; i++)
@@ -426,7 +448,7 @@ void CmiHandleMessage(void *msg)
         // send broadcast to all children
         for (int i = 0; i < numChildren; i++)
         {
-            CmiSyncSend(children[i], size, msg);
+            CmiBCastSyncSend(children[i], size, msg);
         }
         if (header->bcastSource - 1 == mype)
         {
