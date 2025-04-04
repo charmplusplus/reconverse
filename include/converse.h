@@ -45,6 +45,7 @@ typedef struct Header
     int messageId;
     int messageSize;
     int destPE;
+    int bcastSource; // 0 if not a broadcast message, else the source PE + 1
 } CmiMessageHeader;
 
 #define CmiMsgHeaderSizeBytes sizeof(CmiMessageHeader)
