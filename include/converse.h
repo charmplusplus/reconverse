@@ -106,6 +106,18 @@ void CmiAbort(const char *format, ...);
 void CmiInitCPUTopology(char **argv);
 void CmiInitCPUAffinity(char **argv);
 
+void __CmiEnforceMsgHelper(const char* expr, const char* fileName,
+			   int lineNum, const char* msg, ...);
+
+#define CmiEnforce(condition)                            \
+  do                                                     \
+  {                                                      \
+    if (!(condition))                                    \
+    {                                                    \
+      __CmiEnforceMsgHelper(#condition, __FILE__, __LINE__, ""); \
+    }                                                    \
+  } while (0)
+
 double getCurrentTime(void);
 double CmiWallTimer(void);
 
