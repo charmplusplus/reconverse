@@ -344,20 +344,6 @@ void CmiExit(int status)
     CmiExitHandler(status);
 }
 
-void CmiAbort(const char *format, ...)
-{
-    printf("CMI ABORT: ");
-
-    va_list args; 
-    va_start(args, format);
-    vprintf(format, args);
-    va_end(args);
-
-    printf("\n");
-    
-    CmiExitHandler(1);
-}
-
 // HANDLER TOOLS
 int CmiRegisterHandler(CmiHandler h)
 {
@@ -457,6 +443,29 @@ double CmiWallTimer()
     return getCurrentTime() - Cmi_startTime;
 }
 
+void CmiAbortHelper(const char *source, const char *message, const char *suggestion,
+                    int tellDebugger, int framesToSkip) {
+    CmiPrintf("------- Processor %d Exiting: %s ------\n"
+             "Reason: %s\n", CmiMyPe(), source, message);
+}
+
+void CmiAbort(const char *format, ...) {
+  char newmsg[256];
+  va_list args;
+  va_start(args, format);
+  vsnprintf(newmsg, sizeof(newmsg), format, args);
+  va_end(args);
+  CmiAbortHelper("Called CmiAbort", newmsg, NULL, 1, 0);
+  CmiExitHandler(1);
+}
+
+
+void __CmiEnforceMsgHelper(const char* expr, const char* fileName,
+			   int lineNum, const char* msg, ...) 
+{
+    CmiAbort("[%d] Assertion \"%s\" failed in file %s line %d.\n", CmiMyPe(), expr,
+             fileName, lineNum);
+}
 
 // TODO: implememt
 void CmiInitCPUTopology(char **argv)
