@@ -13,14 +13,17 @@
 #include <thread>
 #include <cinttypes>
 
+#define CMI_EXIT_HANDLER -1 
+
+
 // GLOBALS
 int Cmi_argc;
 static char **Cmi_argv;
-int Cmi_npes;
-int Cmi_nranks; // TODO: this isnt used in old converse, but we need to know how many PEs are on our node?
-int Cmi_mynode;
-int Cmi_mynodesize;
-int Cmi_numnodes;
+int Cmi_npes; //total number of PE's across the entire system
+int Cmi_nranks;      // TODO: this isnt used in old converse, but we need to know how many PEs are on our node?
+int Cmi_mynode; 
+int Cmi_mynodesize; //represents the number of PE's/threads on a single physical node. In SMP mode, each PE is run by a seperate thread, so Cmi_nodesize in that case represents the number of threads (PEs) on that machine
+int Cmi_numnodes; //represents the number of physical nodes/systems machine 
 int Cmi_nodestart;
 std::vector<CmiHandlerInfo> **CmiHandlerTable; // array of handler vectors
 ConverseNodeQueue<void *> *CmiNodeQueue;
@@ -45,21 +48,24 @@ void CommLocalHandler(comm_backend::Status status)
     CmiFree(status.msg);
 }
 
-void CommRemoteHandlerPE(comm_backend::Status status)
+void CommRemoteHandlerPE(comm_backend::Status status) 
 {
     CmiMessageHeader *header = (CmiMessageHeader *)status.msg;
     int destPE = header->destPE;
     CmiPushPE(destPE, status.size, status.msg);
 }
 
-void CommRemoteHandlerNode(comm_backend::Status status)
-{
+void CommRemoteHandlerNode(comm_backend::Status status) {
     CmiNodeQueue->push(status.msg);
 }
 
 void CmiCallHandler(int handler, void *msg)
 {
-    CmiGetHandlerTable()->at(handler).hdlr(msg);
+    if (handler == CMI_EXIT_HANDLER) {
+        CsdExitScheduler();
+    } else {
+        CmiGetHandlerTable()->at(handler).hdlr(msg);
+    }
 }
 
 void converseRunPe(int rank)
@@ -106,7 +112,7 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched, int initret)
 {
 
     Cmi_startTime = getCurrentTime();
-
+    
     Cmi_npes = atoi(argv[2]);
     // int plusPSet = CmiGetArgInt(argv,"+pe",&Cmi_npes);
 
@@ -120,8 +126,8 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched, int initret)
     Cmi_mynode = comm_backend::getMyNodeId();
     Cmi_numnodes = comm_backend::getNumNodes();
     if (Cmi_mynode == 0)
-        printf("Charm++> Running in SMP mode on %d nodes and %d PEs\n",
-               Cmi_numnodes, Cmi_npes);
+      printf("Charm++> Running in SMP mode on %d nodes and %d PEs\n",
+             Cmi_numnodes, Cmi_npes);
     // Need to discuss this with the team
     if (Cmi_npes < Cmi_numnodes)
     {
@@ -147,7 +153,7 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched, int initret)
 
     CmiStartThreads();
     free(Cmi_argv);
-
+    
     comm_backend::exit();
 }
 
@@ -249,11 +255,19 @@ void CmiPushPE(int destPE, int messageSize, void *msg)
 
 void *CmiAlloc(int size)
 {
+    if (size <= 0) {
+        CmiPrintf("CmiAlloc: size <= 0\n");
+        return nullptr; 
+    }
     return malloc(size);
 }
 
 void CmiFree(void *msg)
 {
+    if (msg == nullptr) {
+        CmiPrintf("CmiFree: msg is nullptr\n");
+        return; 
+    }
     free(msg);
 }
 
@@ -347,6 +361,19 @@ void CmiSyncBroadcastAllAndFree(int size, void *msg)
 {
     CmiSyncBroadcastAll(size, msg);
     CmiFree(msg);
+}
+
+//EXIT TOOLS 
+
+void CmiExitHandler(int status) {
+    CmiMessageHeader* exitMsg = new CmiMessageHeader(); //might need to allocate 
+    exitMsg->handlerId = CMI_EXIT_HANDLER; 
+    CmiSyncBroadcastAllAndFree(sizeof(*exitMsg), exitMsg);
+}
+
+void CmiExit(int status)
+{
+    CmiExitHandler(status);
 }
 
 // HANDLER TOOLS
@@ -488,7 +515,7 @@ void CmiAbort(const char *format, ...) {
   vsnprintf(newmsg, sizeof(newmsg), format, args);
   va_end(args);
   CmiAbortHelper("Called CmiAbort", newmsg, NULL, 1, 0);
-  abort();
+  CmiExitHandler(1);
 }
 
 
