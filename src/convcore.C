@@ -260,7 +260,7 @@ void CmiFree(void *msg)
 void CmiSyncSend(int destPE, int messageSize, void *msg)
 {
     char *copymsg = (char *)CmiAlloc(messageSize);
-    std::memcpy(copymsg, msg, messageSize);
+    std::memcpy(copymsg, msg, messageSize); //optionally avoid memcpy and block instead
     CmiSyncSendAndFree(destPE, messageSize, copymsg);
 }
 
@@ -268,7 +268,7 @@ void CmiBCastSyncSend(int destPE, int messageSize, void *msg)
 {
     char *copymsg = (char *)CmiAlloc(messageSize);
     std::memcpy(copymsg, msg, messageSize);
-    CmiBCastSyncSendAndFree(destPE, messageSize, copymsg);
+    CmiGSendAndFree(destPE, messageSize, copymsg);
 }
 
 void CmiSyncSendAndFree(int destPE, int messageSize, void *msg)
@@ -278,15 +278,6 @@ void CmiSyncSendAndFree(int destPE, int messageSize, void *msg)
     header->destPE = destPE;
     header->messageSize = messageSize;
     header->bcastSource = 0;
-    CmiGSendAndFree(destPE, messageSize, msg);
-}
-
-void CmiBCastSyncSendAndFree(int destPE, int messageSize, void *msg)
-{
-    // printf("Sending message to PE %d\n", destPE);
-    CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
-    header->destPE = destPE;
-    header->messageSize = messageSize;
     CmiGSendAndFree(destPE, messageSize, msg);
 }
 
@@ -305,7 +296,7 @@ void CmiGSendAndFree(int destPE, int messageSize, void *msg)
     }
     else
     {
-        comm_backend::sendAm(destNode, msg, messageSize, CommLocalHandler, AmHandlerPE);
+        comm_backend::sendAm(destNode, msg, messageSize, CommLocalHandler, AmHandlerPE); //Commlocalhandler will free msg
     }
 }
 
