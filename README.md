@@ -13,6 +13,11 @@ $ cmake -DRECONVERSE_TRY_ENABLE_COMM_LCI1=OFF ..
 $ make
 ```
 
+## Runtime options
+- -DENABLE_CPU_AFFINITY (off by default): Enable setting CPU affinity with HWLOC (must have HWLOC installed)
+
+## LCI
+
 Currently, Reconverse multi-node support is based on LCI (https://github.com/uiuc-hpc/lci). You could either install LCI by your own or use the cmake autofetch support.
 
 To use the cmake autofetch support:

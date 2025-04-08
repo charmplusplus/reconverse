@@ -71,7 +71,9 @@ void converseRunPe(int rank)
 
     //init things like cld module, ccs, etc
     CldModuleInit(Cmi_argv);
+#ifdef SET_CPU_AFFINITY
     CmiSetCPUAffinity(rank);
+#endif
 
     // barrier to ensure all global structs are initialized
     CmiNodeBarrier();
@@ -141,7 +143,9 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched, int initret)
     AmHandlerPE = comm_backend::registerAmHandler(CommRemoteHandlerPE);
     AmHandlerNode = comm_backend::registerAmHandler(CommRemoteHandlerNode);
 
+#ifdef SET_CPU_AFFINITY
     CmiInitHwlocTopology();
+#endif
 
     Cmi_startfn = fn;
 
@@ -433,11 +437,28 @@ double CmiWallTimer()
     return getCurrentTime() - Cmi_startTime;
 }
 
-// TODO: implement
-void CmiAbort(const char *format, ...)
+void CmiAbortHelper(const char *source, const char *message, const char *suggestion,
+                    int tellDebugger, int framesToSkip) {
+    CmiPrintf("------- Processor %d Exiting: %s ------\n"
+             "Reason: %s\n", CmiMyPe(), source, message);
+}
+
+void CmiAbort(const char *format, ...) {
+  char newmsg[256];
+  va_list args;
+  va_start(args, format);
+  vsnprintf(newmsg, sizeof(newmsg), format, args);
+  va_end(args);
+  CmiAbortHelper("Called CmiAbort", newmsg, NULL, 1, 0);
+  abort();
+}
+
+
+void __CmiEnforceMsgHelper(const char* expr, const char* fileName,
+			   int lineNum, const char* msg, ...) 
 {
-    printf("CMI ABORT\n");
-    abort();
+    CmiAbort("[%d] Assertion \"%s\" failed in file %s line %d.\n", CmiMyPe(), expr,
+             fileName, lineNum);
 }
 
 // TODO: implememt

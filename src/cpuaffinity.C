@@ -1,4 +1,4 @@
-
+#ifdef SET_CPU_AFFINITY
 /*
  This scheme relies on using IP address to identify hosts and assign
  cpu affinity.
@@ -103,3 +103,4 @@ int CmiSetCPUAffinity(int mycore)
 
   return result;
 }
+#endif
