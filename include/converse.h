@@ -1,7 +1,11 @@
+//function declarations that a user program can call 
+
 #ifndef CONVERSE_H
 #define CONVERSE_H
 
 #include <cinttypes>
+#include <cstdlib>
+#include <cstdio>
 
 using CmiInt1 = std::int8_t;
 using CmiInt2 = std::int16_t;
@@ -99,10 +103,15 @@ void CmiNodeAllBarrier();
 
 void CsdExitScheduler();
 
+// Exit functions 
+void CmiExit(int status);
+void CmiAbort(const char *format, ...);
+
 // Utility functions
 int CmiPrintf(const char *format, ...);
 int CmiGetArgc(char **argv);
 void CmiAbort(const char *format, ...);
+
 void CmiInitCPUTopology(char **argv);
 void CmiInitCPUAffinity(char **argv);
 
@@ -190,9 +199,38 @@ int CmiArgGivingUsage(void);
 void CmiDeprecateArgInt(char **argv,const char *arg,const char *desc,const char *warning);
 
 //error checking
-#define CmiAssert(expr) ((void)0)
-#define CmiAssertMsg(expr, ...) ((void)0)
-#define _MEMCHECK(p) do{}while(0)
+
+//do we want asserts to be defaulted to be on or off(right now it is on)
+#ifndef CMK_OPTIMIZE
+  #define CMK_OPTIMIZE 0 
+#endif
+
+#if CMK_OPTIMIZE 
+  #define CmiAssert(expr) ((void)0)
+  #define CmiAssertMsg(expr, ...) ((void)0)
+#else 
+  #define CmiAssert(expr) do {                                                                 \
+      if (!(expr)) {                                                                           \
+        fprintf(stderr, "Assertion %s failed: file %s, line %d\n", #expr, __FILE__, __LINE__); \
+        CmiExit(0);                                                                            \
+      }                                                                                        \
+  } while (0)
+
+  #define CmiAssertMsg(expr, ...) do {    \
+    if (!(expr)) {                        \
+      fprintf(stderr, __VA_ARGS__);       \
+      fprintf(stderr, "\n");              \
+      CmiExit(0);                         \
+    }                                     \
+  } while (0)
+#endif 
+
+#define _MEMCHECK(p) do{ \
+  if (!p) { \
+    fprintf(stderr, "Memory allocation check failed: %s:%d\n", __FILE__, __LINE__); \
+    abort(); \
+  } \
+} while(0)
 
 //spantree
 //later: fix the naming of these macros to be clearer

@@ -5,6 +5,7 @@
 #include <condition_variable>
 #include <mutex>
 #include <assert.h>
+#include <iostream>
 
 bool testSimplePushPop()
 {
@@ -75,5 +76,6 @@ int main()
 {
     assert(testSimplePushPop());
     assert(testMultiThreadedPushPop());
+    std::cout << "All tests have passed" << std::endl; 
     return 0;
 }
