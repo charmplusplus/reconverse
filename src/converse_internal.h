@@ -24,6 +24,9 @@ typedef void (*CmiHandler)(void *msg);
 typedef void (*CmiHandlerEx)(void *msg, void *userPtr); // ignore for now
 
 void CmiCallHandler(int handlerId, void *msg);
+void CmiGSendAndFree(int destPE, int messageSize, void *msg);
+void CmiBCastSyncSend(int destPE, int messageSize, void *msg);
+void CmiBCastSyncSendAndFree(int destPE, int messageSize, void *msg);
 
 typedef struct HandlerInfo
 {
