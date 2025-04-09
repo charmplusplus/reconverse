@@ -299,6 +299,22 @@ void CmiSyncSend(int destPE, int messageSize, void *msg)
     CmiSyncSendAndFree(destPE, messageSize, copymsg);
 }
 
+void CmiSyncListSend(int npes, const int *pes, int len, void *msg)
+{
+    for (int i = 0; i < npes; i++)
+    {
+        CmiSyncSend(pes[i], len, msg);
+    }
+}
+
+void CmiSyncListSendAndFree(int npes, const int *pes, int len, void *msg)
+{
+    for (int i = 0; i < npes; i++)
+    {
+        CmiSyncSendAndFree(pes[i], len, msg);
+    }
+}
+
 void CmiBCastSyncSend(int destPE, int messageSize, void *msg)
 {
     char *copymsg = (char *)CmiAlloc(messageSize);

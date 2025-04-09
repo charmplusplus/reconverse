@@ -3,7 +3,7 @@
  processor is not specified.
 */
 
-#include "converse.h"
+#include "converse_internal.h"
 //#include "queueing.h"
 #include "cldb.h"
 #include <stdlib.h>
@@ -25,7 +25,7 @@ void CldHandler(char *msg)
   ifn = (CldInfoFn)CmiHandlerToFunction(CmiGetInfo(msg));
   ifn(msg, &pfn, &len, &queueing, &priobits, &prioptr);
   //CsdEnqueueGeneral(msg, queueing, priobits, prioptr);
-  CmiPushPE(CmiMyPE(), len, msg); //use priority queue when we add priority queue
+  CmiPushPE(CmiMyPe(), len, msg); //use priority queue when we add priority queue
 }
 
 void CldEnqueueGroup(CmiGroup grp, void *msg, int infofn)
@@ -92,7 +92,7 @@ void CldEnqueue(int pe, void *msg, int infofn)
     ifn(msg, &pfn, &len, &queueing, &priobits, &prioptr);
     /* CsdEnqueueGeneral is not thread or SIGIO safe */
     //CsdEnqueueGeneral(msg, queueing, priobits, prioptr);
-    CmiPushPE(CmiMyPE(), len, msg); //use priority queue when we add priority queue
+    CmiPushPE(CmiMyPe(), len, msg); //use priority queue when we add priority queue
   } else {
     ifn(msg, &pfn, &len, &queueing, &priobits, &prioptr);
     if (pfn) {
@@ -118,7 +118,7 @@ void CldNodeEnqueue(int node, void *msg, int infofn)
   if (node == CmiMyNode() && !CmiImmIsRunning()) {
     ifn(msg, &pfn, &len, &queueing, &priobits, &prioptr); 
     //CsdNodeEnqueueGeneral(msg, queueing, priobits, prioptr); 
-    CmiNodeQueue->push(msg); //use priority queue when we add priority queue
+    CmiGetNodeQueue()->push(msg); //use priority queue when we add priority queue
   } else {
     ifn(msg, &pfn, &len, &queueing, &priobits, &prioptr);
     if (pfn) {

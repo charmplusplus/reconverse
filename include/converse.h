@@ -112,6 +112,8 @@ void CmiHandleMessage(void *msg);
 // message sending
 void CmiSyncSend(int destPE, int messageSize, void *msg);
 void CmiSyncSendAndFree(int destPE, int messageSize, void *msg);
+void CmiSyncListSend(int npes, const int *pes, int len, void *msg);
+void CmiSyncListSendAndFree(int npes, const int *pes, int len, void *msg);
 
 // broadcasts
 void CmiSyncBroadcast(int size, void *msg);
@@ -279,7 +281,7 @@ void CldNodeEnqueue(int node, void *msg, int infofn);
 void CldEnqueueWithinNode(void *msg, int infofn);
 
 #define CmiImmIsRunning()        (0)
-#define CMI_MSG_NOKEEP(msg)  ((CmiMsgHeader*) msg)->nokeep
+#define CMI_MSG_NOKEEP(msg)  ((CmiMessageHeader*) msg)->nokeep
 
 //spantree
 //later: fix the naming of these macros to be clearer
