@@ -115,12 +115,23 @@ void CmiSyncSendAndFree(int destPE, int messageSize, void *msg);
 void CmiSyncListSend(int npes, const int *pes, int len, void *msg);
 void CmiSyncListSendAndFree(int npes, const int *pes, int len, void *msg);
 
+#define CmiSyncSendFn(p,s,m)  (CmiSyncSend((p),(s),(void*)(m)))
+#define CmiFreeSendFn(p,s,m)  (CmiSyncSendAndFree((p),(s),(void*)(m)))
+#define CmiSyncListSendFn(n,l,s,m)  (CmiSyncListSend((n),(l),(s),(void*)(m)))
+#define CmiFreeListSendFn(n,l,s,m)  (CmiSyncListSendAndFree((n),(l),(s),(void*)(m)))
+
 // broadcasts
 void CmiSyncBroadcast(int size, void *msg);
 void CmiSyncBroadcastAndFree(int size, void *msg);
 void CmiSyncBroadcastAll(int size, void *msg);
 void CmiSyncBroadcastAllAndFree(int size, void *msg);
 void CmiSyncNodeSendAndFree(unsigned int destNode, unsigned int size, void *msg);
+
+#define CmiSyncBroadcastFn(s,m)  (CmiSyncBroadcast((s),(void*)(m)))
+#define CmiFreeBroadcastFn(s,m)  (CmiSyncBroadcastAndFree((s),(void*)(m)))
+#define CmiSyncBroadcastAllFn(s,m)  (CmiSyncBroadcastAll((s),(void*)(m)))
+#define CmiFreeBroadcastAllFn(s,m)  (CmiSyncBroadcastAllAndFree((s),(void*)(m)))
+#define CmiFreeNodeSendFn(n,s,m)  (CmiSyncNodeSendAndFree((n),(s),(void*)(m)))
 
 // Barrier functions
 void CmiNodeBarrier();
