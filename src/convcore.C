@@ -188,6 +188,9 @@ void CmiInitState(int rank)
     Cmi_queues[Cmi_myrank] = queue;
     CmiHandlerTable[Cmi_myrank] = handlerTable;
 
+    //random
+    CrnInit();
+
     CcdModuleInit();
 }
 
@@ -400,7 +403,14 @@ void CmiSyncBroadcastAllAndFree(int size, void *msg)
     CmiFree(msg);
 }
 
-//EXIT TOOLS 
+void CmiWithinNodeBroadcast(int size, void *msg)
+{
+    for (int i = 0; i < Cmi_mynodesize; i++)
+    {
+        int destPe = CmiMyNode() * Cmi_mynodesize + i;
+        CmiSyncSend(destPe, size, msg);
+    }
+}
 
 void CmiExitHandler(int status) {
     CmiMessageHeader* exitMsg = new CmiMessageHeader(); //might need to allocate 
