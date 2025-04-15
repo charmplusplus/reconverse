@@ -131,6 +131,13 @@ void __CmiEnforceMsgHelper(const char* expr, const char* fileName,
 double getCurrentTime(void);
 double CmiWallTimer(void);
 
+//rand functions that charm uses
+void   CrnSrand(unsigned int);
+int    CrnRand(void);
+double CrnDrand(void);
+int CrnRandRange(int, int);
+double CrnDrandRange(double, double);
+
 //convconds
 #define CcdSCHEDLOOP            0
 #define CcdPROCESSOR_BEGIN_BUSY 1

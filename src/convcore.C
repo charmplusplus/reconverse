@@ -184,6 +184,9 @@ void CmiInitState(int rank)
     Cmi_queues[Cmi_myrank] = queue;
     CmiHandlerTable[Cmi_myrank] = handlerTable;
 
+    //random
+    CrnInit();
+
     CcdModuleInit();
 }
 
