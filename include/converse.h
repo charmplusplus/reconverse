@@ -97,6 +97,7 @@ void CmiSyncBroadcastAndFree(int size, void *msg);
 void CmiSyncBroadcastAll(int size, void *msg);
 void CmiSyncBroadcastAllAndFree(int size, void *msg);
 void CmiSyncNodeSendAndFree(unsigned int destNode, unsigned int size, void *msg);
+void CmiWithinNodeBroadcast(int size, void *msg);
 
 // Barrier functions
 void CmiNodeBarrier();
