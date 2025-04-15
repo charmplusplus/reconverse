@@ -127,6 +127,8 @@ void CmiSyncBroadcastAll(int size, void *msg);
 void CmiSyncBroadcastAllAndFree(int size, void *msg);
 void CmiSyncNodeSendAndFree(unsigned int destNode, unsigned int size, void *msg);
 void CmiWithinNodeBroadcast(int size, void *msg);
+void CmiSyncNodeBroadcastAndFree(int size, void *msg);
+void CmiSyncNodeBroadcastAllAndFree(int size, void *msg);;
 
 #define CmiSyncBroadcastFn(s,m)  (CmiSyncBroadcast((s),(void*)(m)))
 #define CmiFreeBroadcastFn(s,m)  (CmiSyncBroadcastAndFree((s),(void*)(m)))

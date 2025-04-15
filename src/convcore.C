@@ -474,6 +474,24 @@ void CmiSyncNodeSendAndFree(unsigned int destNode, unsigned int size, void *msg)
     }
 }
 
+void CmiSyncNodeBroadcastAndFree(int size, void *msg)
+{
+    for (int i = 0; i < Cmi_numnodes; i++)
+    {
+        if (i == CmiMyNode())
+            continue;
+        CmiSyncNodeSendAndFree(i, size, msg);
+    }
+}
+
+void CmiSyncNodeBroadcastAllAndFree(int size, void *msg)
+{
+    for (int i = 0; i < Cmi_numnodes; i++)
+    {
+        CmiSyncNodeSendAndFree(i, size, msg);
+    }
+}
+
 void CmiSetHandler(void *msg, int handlerId)
 {
     CmiMessageHeader *header = (CmiMessageHeader *)msg;
