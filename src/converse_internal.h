@@ -19,6 +19,8 @@ typedef void (*CmiHandlerEx)(void *msg, void *userPtr); // ignore for now
 
 void CmiCallHandler(int handlerId, void *msg);
 void CmiBcastHandler(void *msg);
+void CmiNodeBcastHandler(void *msg);
+
 typedef struct HandlerInfo
 {
     CmiHandler hdlr;

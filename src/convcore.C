@@ -39,6 +39,7 @@ thread_local double idle_time;
 
 // Special operation handlers (TODO: should these be special values instead like the exit handler)
 int Cmi_bcastHandler;
+int Cmi_nodeBcastHandler;
 int Cmi_reduceHandler;
 int Cmi_multicastHandler;
 
@@ -87,6 +88,7 @@ void converseRunPe(int rank)
 
     // register special operation handlers
     Cmi_bcastHandler = CmiRegisterHandler(CmiBcastHandler);
+    Cmi_nodeBcastHandler = CmiRegisterHandler(CmiNodeBcastHandler);
     // Cmi_reduceHandler = CmiRegisterHandler(CmiReduceHandler);
     // Cmi_multicastHandler = CmiRegisterHandler(CmiMulticastHandler);
 
@@ -379,6 +381,57 @@ void CmiWithinNodeBroadcast(int size, void *msg)
     }
 }
 
+void CmiSyncNodeBroadcast(unsigned int size, void *msg)
+{
+    int node = CmiMyNode();
+
+    CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
+    header->messageSize = size;
+
+#ifdef SPANTREE
+    header->collectiveMetaInfo = node; // used to skip the source
+    header->swapHandlerId = header->handlerId;
+    header->handlerId = Cmi_nodeBcastHandler;
+    CmiSyncNodeSend(0, size, msg);
+#else
+
+    for(int i=node+1; i<Cmi_numnodes; i++)
+        CmiSyncNodeSend(i, size, msg);
+
+    for(int i=0; i<node; i++)  
+        CmiSyncNodeSend(i, size, msg);
+#endif
+}
+
+void CmiSyncNodeBroadcastAndFree(unsigned int size, void *msg)
+{
+    CmiSyncNodeBroadcast(size, msg);
+    CmiFree(msg);
+}
+
+void CmiSyncNodeBroadcastAll(unsigned int size, void *msg)
+{
+    CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
+    header->messageSize = size;
+
+#ifdef SPANTREE
+    header->collectiveMetaInfo = -1; // don't skip the source
+    header->swapHandlerId = header->handlerId;
+    header->handlerId = Cmi_nodeBcastHandler;
+    CmiSyncNodeSend(0, size, msg);
+#else
+
+    for(int i=0; i<Cmi_numnodes; i++)
+        CmiSyncNodeSend(i, size, msg);
+#endif
+}
+
+void CmiSyncNodeBroadcastAllAndFree(unsigned int size, void *msg)
+{
+    CmiSyncNodeBroadcastAll(size, msg);
+    CmiFree(msg);
+}
+
 /* Handler for broadcast via the spanning tree. */
 void CmiBcastHandler(void *msg)
 {
@@ -402,6 +455,29 @@ void CmiBcastHandler(void *msg)
         CmiPrintf("Calling handler %d on PE %d\n", header->swapHandlerId, CmiMyPe());
         CmiCallHandler(header->swapHandlerId, msg);
     }
+}
+
+/* Handler for node broadcast via the spanning tree. */
+void CmiNodeBcastHandler(void *msg)
+{
+    int mynode = CmiMyNode();
+    int numChildren = CmiNumNodeSpanTreeChildren(mynode);
+    int children[numChildren];
+    CmiNodeSpanTreeChildren(mynode, children);
+
+    CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
+
+    // send broadcast to node children
+    for(int i=0; i<numChildren; i++)
+    {
+        CmiSyncNodeSend(children[i], header->messageSize, msg);
+    }
+
+    if (header->collectiveMetaInfo != mynode)
+    {
+        CmiCallHandler(header->swapHandlerId, msg);
+    }
+
 }
 
 // EXIT TOOLS
@@ -467,6 +543,13 @@ void CmiSyncNodeSendAndFree(unsigned int destNode, unsigned int size, void *msg)
     {
         comm_backend::sendAm(destNode, msg, size, CommLocalHandler, AmHandlerNode);
     }
+}
+
+void CmiSyncNodeSend(unsigned int destNode, unsigned int size, void *msg)
+{
+    char *copymsg = (char *)CmiAlloc(size);
+    std::memcpy(copymsg, msg, size); // optionally avoid memcpy and block instead
+    CmiSyncNodeSendAndFree(destNode, size, copymsg);
 }
 
 void CmiSetHandler(void *msg, int handlerId)

@@ -101,8 +101,13 @@ void CmiSyncBroadcast(int size, void *msg);
 void CmiSyncBroadcastAndFree(int size, void *msg);
 void CmiSyncBroadcastAll(int size, void *msg);
 void CmiSyncBroadcastAllAndFree(int size, void *msg);
+void CmiSyncNodeSend(unsigned int destNode, unsigned int size, void *msg);
 void CmiSyncNodeSendAndFree(unsigned int destNode, unsigned int size, void *msg);
 void CmiWithinNodeBroadcast(int size, void *msg);
+void CmiSyncNodeBroadcast(unsigned int size, void *msg);
+void CmiSyncNodeBroadcastAndFree(unsigned int size, void *msg);
+void CmiSyncNodeBroadcastAll(unsigned int size, void *msg);
+void CmiSyncNodeBroadcastAllAndFree(unsigned int size, void *msg);
 
 // Barrier functions
 void CmiNodeBarrier();
