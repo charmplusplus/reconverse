@@ -1,3 +1,5 @@
+//functions declarations internal to converse 
+
 #ifndef CONVCORE_H
 #define CONVCORE_H
 
@@ -22,16 +24,17 @@ typedef void (*CmiHandler)(void *msg);
 typedef void (*CmiHandlerEx)(void *msg, void *userPtr); // ignore for now
 
 void CmiCallHandler(int handlerId, void *msg);
+void CmiGSendAndFree(int destPE, int messageSize, void *msg);
+void CmiBCastSyncSend(int destPE, int messageSize, void *msg);
+void CmiBCastSyncSendAndFree(int destPE, int messageSize, void *msg);
 
 typedef struct HandlerInfo
 {
     CmiHandler hdlr;
-    void *userPtr;
+    void *userPtr; //does this point to the mesage data itself 
 } CmiHandlerInfo;
 
 std::vector<CmiHandlerInfo> *CmiGetHandlerTable();
-
-/*Cmi Functions*/
 
 typedef struct State
 {
@@ -48,20 +51,13 @@ CmiState *CmiGetState(void);
 void CmiInitState(int pe);
 ConverseQueue<void *> *CmiGetQueue(int pe);
 
-// message sending
 void CmiPushPE(int destPE, int messageSize, void *msg);
-void CmiSyncSend(int destPE, int messageSize, void *msg);
-void CmiSyncSendAndFree(int destPE, int messageSize, void *msg);
-
-// broadcasts
-void CmiSyncBroadcast(int size, void *msg);
-void CmiSyncBroadcastAndFree(int size, void *msg);
-void CmiSyncBroadcastAll(int size, void *msg);
-void CmiSyncBroadcastAllAndFree(int size, void *msg);
 
 // node queue
 ConverseNodeQueue<void *> *CmiGetNodeQueue();
-void CmiSyncNodeSendAndFree(unsigned int destNode, unsigned int size, void *msg);
+
+// exit handler function 
+void CmiExitHandler(int status);
 
 //idle
 bool CmiGetIdle();
@@ -69,7 +65,19 @@ void CmiSetIdle(bool idle);
 double CmiGetIdleTime();
 void CmiSetIdleTime(double time);
 
-int CmiPrintf(const char *format, ...);
-int CmiGetArgc(char **argv);
+//cpu affinity
+typedef struct
+{
+  int num_pus;
+  int num_cores;
+  int num_sockets;
+
+  int total_num_pus;
+} CmiHwlocTopology;
+
+extern CmiHwlocTopology CmiHwlocTopologyLocal;
+
+extern void CmiInitHwlocTopology(void);
+extern int  CmiSetCPUAffinity(int);
 
 #endif

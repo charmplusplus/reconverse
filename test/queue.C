@@ -1,10 +1,11 @@
-#include "../queue.h"
+#include "queue.h"
 #include <thread>
 #include <vector>
 #include <algorithm>
 #include <condition_variable>
 #include <mutex>
 #include <assert.h>
+#include <iostream>
 
 bool testSimplePushPop()
 {
@@ -75,5 +76,6 @@ int main()
 {
     assert(testSimplePushPop());
     assert(testMultiThreadedPushPop());
+    std::cout << "All tests have passed" << std::endl; 
     return 0;
 }

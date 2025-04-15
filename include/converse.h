@@ -1,7 +1,47 @@
+//function declarations that a user program can call 
+
 #ifndef CONVERSE_H
 #define CONVERSE_H
 
-#include "CpvMacros.h" // for backward compatibility
+#include <cinttypes>
+#include <cstdlib>
+#include <cstdio>
+
+using CmiInt1 = std::int8_t;
+using CmiInt2 = std::int16_t;
+using CmiInt4 = std::int32_t;
+using CmiInt8 = std::int64_t;
+using CmiUint1 = std::uint8_t;
+using CmiUint2 = std::uint16_t;
+using CmiUint4 = std::uint32_t;
+using CmiUint8 = std::uint64_t;
+
+// NOTE: these are solely for backwards compatibility
+// Do not use in reconverse impl
+
+#define CMK_TAG(x, y) x##y##_
+
+#define CpvDeclare(t, v) t *CMK_TAG(Cpv_, v)
+#define CpvStaticDeclare(t, v) static t *CMK_TAG(Cpv_, v)
+
+#define CpvInitialize(t, v)                            \
+    do                                                 \
+    {                                                  \
+        if (false /* I don't understand */)            \
+        {                                              \
+            CmiNodeBarrier();                          \
+        }                                              \
+        else                                           \
+        {                                              \
+            CMK_TAG(Cpv_, v) = new t[CmiMyNodeSize()]; \
+            CmiNodeBarrier();                          \
+        }                                              \
+    } while (0)
+;
+
+#define CpvAccess(v) CMK_TAG(Cpv_, v)[CmiMyRank()]
+
+// End of NOTE
 
 typedef struct Header
 {
@@ -9,6 +49,7 @@ typedef struct Header
     int messageId;
     int messageSize;
     int destPE;
+    int bcastSource; // 0 if not a broadcast message, else the source PE + 1
 } CmiMessageHeader;
 
 #define CmiMsgHeaderSizeBytes sizeof(CmiMessageHeader)
@@ -21,7 +62,6 @@ static CmiStartFn Cmi_startfn;
 // handler tools
 typedef void (*CmiHandler)(void *msg);
 typedef void (*CmiHandlerEx)(void *msg, void *userPtr);
-
 int CmiRegisterHandler(CmiHandler h);
 
 // message allocation
@@ -53,15 +93,46 @@ int CmiGetHandler(void *msg);
 CmiHandler CmiGetHandlerFunction(int n);
 void CmiHandleMessage(void *msg);
 
+// message sending
+void CmiSyncSend(int destPE, int messageSize, void *msg);
+void CmiSyncSendAndFree(int destPE, int messageSize, void *msg);
+
+// broadcasts
+void CmiSyncBroadcast(int size, void *msg);
+void CmiSyncBroadcastAndFree(int size, void *msg);
+void CmiSyncBroadcastAll(int size, void *msg);
+void CmiSyncBroadcastAllAndFree(int size, void *msg);
+void CmiSyncNodeSendAndFree(unsigned int destNode, unsigned int size, void *msg);
+
 // Barrier functions
 void CmiNodeBarrier();
 void CmiNodeAllBarrier();
 
 void CsdExitScheduler();
 
+// Exit functions 
+void CmiExit(int status);
 void CmiAbort(const char *format, ...);
+
+// Utility functions
+int CmiPrintf(const char *format, ...);
+int CmiGetArgc(char **argv);
+void CmiAbort(const char *format, ...);
+
 void CmiInitCPUTopology(char **argv);
 void CmiInitCPUAffinity(char **argv);
+
+void __CmiEnforceMsgHelper(const char* expr, const char* fileName,
+			   int lineNum, const char* msg, ...);
+
+#define CmiEnforce(condition)                            \
+  do                                                     \
+  {                                                      \
+    if (!(condition))                                    \
+    {                                                    \
+      __CmiEnforceMsgHelper(#condition, __FILE__, __LINE__, ""); \
+    }                                                    \
+  } while (0)
 
 double getCurrentTime(void);
 double CmiWallTimer(void);
@@ -116,10 +187,57 @@ void CcdCancelCallOnConditionKeep(int condnum, int idx);
 void CcdRaiseCondition(int condnum);
 void CcdCallBacks(void);
 
+/* Command-Line-Argument handling */
+void CmiArgGroup(const char *parentName,const char *groupName);
+int CmiGetArgInt(char **argv,const char *arg,int *optDest);
+int CmiGetArgIntDesc(char **argv,const char *arg,int *optDest,const char *desc);
+int CmiGetArgLong(char **argv,const char *arg,CmiInt8 *optDest);
+int CmiGetArgLongDesc(char **argv,const char *arg,CmiInt8 *optDest,const char *desc);
+int CmiGetArgDouble(char **argv,const char *arg,double *optDest);
+int CmiGetArgDoubleDesc(char **argv,const char *arg,double *optDest,const char *desc);
+int CmiGetArgString(char **argv,const char *arg,char **optDest);
+int CmiGetArgStringDesc(char **argv,const char *arg,char **optDest,const char *desc);
+int CmiGetArgFlag(char **argv,const char *arg);
+int CmiGetArgFlagDesc(char **argv,const char *arg,const char *desc);
+void CmiDeleteArgs(char **argv,int k);
+int CmiGetArgc(char **argv);
+char **CmiCopyArgs(char **argv);
+int CmiArgGivingUsage(void);
+void CmiDeprecateArgInt(char **argv,const char *arg,const char *desc,const char *warning);
+
 //error checking
-#define CmiAssert(expr) ((void)0)
-#define CmiAssertMsg(expr, ...) ((void)0)
-#define _MEMCHECK(p) do{}while(0)
+
+//do we want asserts to be defaulted to be on or off(right now it is on)
+#ifndef CMK_OPTIMIZE
+  #define CMK_OPTIMIZE 0 
+#endif
+
+#if CMK_OPTIMIZE 
+  #define CmiAssert(expr) ((void)0)
+  #define CmiAssertMsg(expr, ...) ((void)0)
+#else 
+  #define CmiAssert(expr) do {                                                                 \
+      if (!(expr)) {                                                                           \
+        fprintf(stderr, "Assertion %s failed: file %s, line %d\n", #expr, __FILE__, __LINE__); \
+        CmiExit(0);                                                                            \
+      }                                                                                        \
+  } while (0)
+
+  #define CmiAssertMsg(expr, ...) do {    \
+    if (!(expr)) {                        \
+      fprintf(stderr, __VA_ARGS__);       \
+      fprintf(stderr, "\n");              \
+      CmiExit(0);                         \
+    }                                     \
+  } while (0)
+#endif 
+
+#define _MEMCHECK(p) do{ \
+  if (!p) { \
+    fprintf(stderr, "Memory allocation check failed: %s:%d\n", __FILE__, __LINE__); \
+    abort(); \
+  } \
+} while(0)
 
 //spantree
 //later: fix the naming of these macros to be clearer
@@ -158,5 +276,4 @@ void CcdCallBacks(void);
             if(_x<CST_NS(p)) (c)[_c++]=CST_NF(CST_ND(p))+_x; \
           }\
         } while(0)
-
 #endif

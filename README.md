@@ -13,6 +13,11 @@ $ cmake -DRECONVERSE_TRY_ENABLE_COMM_LCI1=OFF ..
 $ make
 ```
 
+## Runtime options
+- -DENABLE_CPU_AFFINITY (off by default): Enable setting CPU affinity with HWLOC (must have HWLOC installed)
+
+## LCI
+
 Currently, Reconverse multi-node support is based on LCI (https://github.com/uiuc-hpc/lci). You could either install LCI by your own or use the cmake autofetch support.
 
 To use the cmake autofetch support:
@@ -53,12 +58,22 @@ $ cd build
 $ cmake -DRECONVERSE_TRY_ENABLE_COMM_LCI1=ON -DRECONVERSE_AUTOFETCH_LCI1=ON -DLCI_SERVER=ofi -DLCT_PMI_BACKEND_ENABLE_MPI=ON ..
 $ make
 ```
-Note: if you installed `libfabric` or `mpi` in a non-standard location, you may need to set `CMAKE_PREFIX_PATH` to the correct path.
+
+**Note:** if you installed `libfabric` or `mpi` in a non-standard location, CMake *may* complain it cannot find OFI/MPI, in which case you need to let CMake find them by
+```
+export OFI_ROOT=<path_to_libfabric>
+export MPI_ROOT=<path_to_mpi>
+```
 
 #### Run reconverse
 ```
 $ cd build/examples/pingpong
 $ mpirun -n 2 ./reconverse_ping_ack +pe 4
+```
+
+**Note:** if you installed `libfabric` or `mpi` in a non-standard location, the linker *may* complain it cannot find the libfabric/mpi shared library, in which case you need to let the linker find them by
+```
+export LD_LIBRARY_PATH=<path_to_libfabric_lib>:<path_to_mpi_lib>:${LD_LIBRARY_PATH}
 ```
 
 ### Build and run Reconverse on NCSA Delta

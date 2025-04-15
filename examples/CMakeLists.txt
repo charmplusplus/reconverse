@@ -1,6 +1,7 @@
 add_subdirectory(broadcast)
 add_subdirectory(conds)
 add_subdirectory(idle)
+add_subdirectory(kNeighbors)
 add_subdirectory(orig-converse/pingpong)
 add_subdirectory(ping_ack)
 add_subdirectory(ring)
