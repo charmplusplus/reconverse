@@ -13,8 +13,6 @@
 #include <thread>
 #include <cinttypes>
 
-#define CMI_EXIT_HANDLER -1
-
 // GLOBALS
 int Cmi_argc;
 static char **Cmi_argv;
@@ -40,6 +38,7 @@ thread_local double idle_time;
 // Special operation handlers (TODO: should these be special values instead like the exit handler)
 int Cmi_bcastHandler;
 int Cmi_nodeBcastHandler;
+int Cmi_exitHandler;
 int Cmi_reduceHandler;
 int Cmi_multicastHandler;
 
@@ -67,14 +66,7 @@ void CommRemoteHandlerNode(comm_backend::Status status)
 
 void CmiCallHandler(int handler, void *msg)
 {
-    if (handler == CMI_EXIT_HANDLER)
-    {
-        CsdExitScheduler();
-    }
-    else
-    {
-        CmiGetHandlerTable()->at(handler).hdlr(msg);
-    }
+    CmiGetHandlerTable()->at(handler).hdlr(msg);
 }
 
 void converseRunPe(int rank)
@@ -89,6 +81,7 @@ void converseRunPe(int rank)
     // register special operation handlers
     Cmi_bcastHandler = CmiRegisterHandler(CmiBcastHandler);
     Cmi_nodeBcastHandler = CmiRegisterHandler(CmiNodeBcastHandler);
+    Cmi_exitHandler = CmiRegisterHandler(CmiExitHandlerLocal);
     // Cmi_reduceHandler = CmiRegisterHandler(CmiReduceHandler);
     // Cmi_multicastHandler = CmiRegisterHandler(CmiMulticastHandler);
 
@@ -485,11 +478,11 @@ void CmiNodeBcastHandler(void *msg)
 void CmiExitHandler(int status)
 {
     CmiMessageHeader *exitMsg = new CmiMessageHeader(); // might need to allocate
-    exitMsg->handlerId = CMI_EXIT_HANDLER;
+    exitMsg->handlerId = Cmi_exitHandler;
     CmiSyncBroadcastAllAndFree(sizeof(*exitMsg), exitMsg);
 }
 
-void CmiExit(int status)
+void CmiExit(int status) //note: status isn't being used meaningfully
 {
     CmiExitHandler(status);
 }
@@ -520,6 +513,11 @@ void CmiNodeAllBarrier()
 void CsdExitScheduler()
 {
     CmiGetState()->stopFlag = 1;
+}
+
+void CmiExitHandlerLocal(void *msg)
+{
+    CsdExitScheduler();
 }
 
 ConverseNodeQueue<void *> *CmiGetNodeQueue()
