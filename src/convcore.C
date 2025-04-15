@@ -367,8 +367,8 @@ void CmiWithinNodeBroadcast(int size, void *msg)
 {
     for (int i = 0; i < Cmi_mynodesize; i++)
     {
-
-        CmiSyncSend(i, size, msg);
+        int destPe = CmiMyNode() * Cmi_mynodesize + i;
+        CmiSyncSend(destPe, size, msg);
     }
 }
 
