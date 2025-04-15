@@ -1,4 +1,5 @@
 add_subdirectory(broadcast)
+add_subdirectory(within-node-bcast)
 add_subdirectory(conds)
 add_subdirectory(idle)
 add_subdirectory(kNeighbors)

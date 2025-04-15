@@ -363,7 +363,14 @@ void CmiSyncBroadcastAllAndFree(int size, void *msg)
     CmiFree(msg);
 }
 
-//EXIT TOOLS 
+void CmiWithinNodeBroadcast(int size, void *msg)
+{
+    for (int i = 0; i < Cmi_mynodesize; i++)
+    {
+
+        CmiSyncSend(i, size, msg);
+    }
+}
 
 void CmiExitHandler(int status) {
     CmiMessageHeader* exitMsg = new CmiMessageHeader(); //might need to allocate 
