@@ -50,6 +50,7 @@ typedef struct State
 CmiState *CmiGetState(void);
 void CmiInitState(int pe);
 ConverseQueue<void *> *CmiGetQueue(int pe);
+void CrnInit(void);
 
 void CmiPushPE(int destPE, int messageSize, void *msg);
 
