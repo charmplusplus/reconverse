@@ -199,6 +199,14 @@ char **CmiCopyArgs(char **argv);
 int CmiArgGivingUsage(void);
 void CmiDeprecateArgInt(char **argv,const char *arg,const char *desc,const char *warning);
 
+typedef pthread_mutex_t* CmiNodeLock;
+
+CmiNodeLock CmiCreateLock();
+void CmiDestroyLock(CmiNodeLock lock);
+void CmiLock(CmiNodeLock lock);
+void CmiUnlock(CmiNodeLock lock);
+int CmiTryLock(CmiNodeLock lock);
+
 //error checking
 
 //do we want asserts to be defaulted to be on or off(right now it is on)
