@@ -323,7 +323,6 @@ void CmiSyncBroadcast(int size, void *msg)
     int pe = CmiMyPe();
 
     CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
-    header->bcastSource = pe + 1;
     header->messageSize = size;
 
 #ifdef SPANTREE
