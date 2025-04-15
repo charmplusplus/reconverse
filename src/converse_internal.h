@@ -8,12 +8,6 @@
 #include "comm_backend/comm_backend.h"
 #include "queue.h"
 
-// typedef struct CmiMessageStruct
-// {
-//     CmiMessageHeader header;
-//     char data[];
-// } CmiMessage;
-
 void CmiStartThreads(char **argv);
 void converseRunPe(int rank);
 
@@ -24,10 +18,7 @@ typedef void (*CmiHandler)(void *msg);
 typedef void (*CmiHandlerEx)(void *msg, void *userPtr); // ignore for now
 
 void CmiCallHandler(int handlerId, void *msg);
-void CmiGSendAndFree(int destPE, int messageSize, void *msg);
-void CmiBCastSyncSend(int destPE, int messageSize, void *msg);
-void CmiBCastSyncSendAndFree(int destPE, int messageSize, void *msg);
-
+void CmiBcastHandler(void *msg);
 typedef struct HandlerInfo
 {
     CmiHandler hdlr;

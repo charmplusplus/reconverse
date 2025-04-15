@@ -38,6 +38,11 @@ thread_local CmiState *Cmi_state;
 thread_local bool idle_condition;
 thread_local double idle_time;
 
+// Special operation handlers (TODO: should these be special values instead like the exit handler)
+int Cmi_bcastHandler;
+int Cmi_reduceHandler;
+int Cmi_multicastHandler;
+
 // TODO: padding for all these thread_locals and cmistates?
 
 comm_backend::AmHandler AmHandlerPE;
@@ -76,6 +81,11 @@ void converseRunPe(int rank)
 #ifdef SET_CPU_AFFINITY
     CmiSetCPUAffinity(rank);
 #endif
+
+    // register special operation handlers
+    Cmi_bcastHandler = CmiRegisterHandler(CmiBcastHandler);
+    // Cmi_reduceHandler = CmiRegisterHandler(CmiReduceHandler);
+    // Cmi_multicastHandler = CmiRegisterHandler(CmiMulticastHandler);
 
     // barrier to ensure all global structs are initialized
     CmiNodeBarrier();
@@ -274,29 +284,14 @@ void CmiFree(void *msg)
 void CmiSyncSend(int destPE, int messageSize, void *msg)
 {
     char *copymsg = (char *)CmiAlloc(messageSize);
-    std::memcpy(copymsg, msg, messageSize); //optionally avoid memcpy and block instead
+    std::memcpy(copymsg, msg, messageSize); // optionally avoid memcpy and block instead
     CmiSyncSendAndFree(destPE, messageSize, copymsg);
-}
-
-void CmiBCastSyncSend(int destPE, int messageSize, void *msg)
-{
-    char *copymsg = (char *)CmiAlloc(messageSize);
-    std::memcpy(copymsg, msg, messageSize);
-    CmiGSendAndFree(destPE, messageSize, copymsg);
 }
 
 void CmiSyncSendAndFree(int destPE, int messageSize, void *msg)
 {
-    // printf("Sending message to PE %d\n", destPE);
     CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
-    header->destPE = destPE;
-    header->messageSize = messageSize;
-    header->bcastSource = 0;
-    CmiGSendAndFree(destPE, messageSize, msg);
-}
 
-void CmiGSendAndFree(int destPE, int messageSize, void *msg)
-{
     int destNode = CmiNodeOf(destPE);
 
     if (destNode >= Cmi_numnodes || destNode < 0)
@@ -324,7 +319,11 @@ void CmiSyncBroadcast(int size, void *msg)
     header->messageSize = size;
 
 #ifdef SPANTREE
-    CmiBCastSyncSend(0, size, msg);
+    header->collectiveMetaInfo = pe; // used to skip the source
+    header->swapHandlerId = header->handlerId;
+    CmiPrintf("Setting swap handler to %d\n", header->swapHandlerId);
+    header->handlerId = Cmi_bcastHandler;
+    CmiSyncSend(0, size, msg);
 #else
 
     for (int i = pe + 1; i < Cmi_npes; i++)
@@ -344,14 +343,16 @@ void CmiSyncBroadcastAndFree(int size, void *msg)
 void CmiSyncBroadcastAll(int size, void *msg)
 {
     CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
-    header->bcastSource = CmiMyPe() + 1;
     header->messageSize = size;
-#ifdef SPANTREE
-    CmiBCastSyncSend(0, size, msg);
-    header->bcastSource = 0;
-    CmiBCastSyncSend(CmiMyPe(), size, msg);
-#else
 
+#ifdef SPANTREE
+    header->collectiveMetaInfo = -1; // don't skip the source
+    header->swapHandlerId = header->handlerId;
+    CmiPrintf("Setting swap handler to %d\n", header->swapHandlerId);
+
+    header->handlerId = Cmi_bcastHandler;
+    CmiSyncSend(0, size, msg);
+#else
     for (int i = 0; i < Cmi_npes; i++)
         CmiSyncSend(i, size, msg);
 #endif
@@ -363,7 +364,31 @@ void CmiSyncBroadcastAllAndFree(int size, void *msg)
     CmiFree(msg);
 }
 
-//EXIT TOOLS 
+/* Handler for broadcast via the spanning tree. */
+void CmiBcastHandler(void *msg)
+{
+    CmiPrintf("Handling bcast on PE %d\n", CmiMyPe());
+    int mype = CmiMyPe();
+    int numChildren = CmiNumSpanTreeChildren(mype);
+    int children[numChildren];
+    CmiSpanTreeChildren(mype, children);
+
+    CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
+
+    // send broadcast to all children
+    for (int i = 0; i < numChildren; i++)
+    {
+        CmiSyncSend(children[i], header->messageSize, msg);
+    }
+
+    // call handler locally (unless I am source of broadcast, and bcast is exclusive)
+    if (header->collectiveMetaInfo != mype)
+    {
+        CmiPrintf("Calling handler %d on PE %d\n", header->swapHandlerId, CmiMyPe());
+        CmiCallHandler(header->swapHandlerId, msg);
+    }
+}
+
 
 void CmiExitHandler(int status) {
     CmiMessageHeader* exitMsg = new CmiMessageHeader(); //might need to allocate 
@@ -455,25 +480,6 @@ void CmiHandleMessage(void *msg)
 
     // call handler (takes in pointer to whole message)
 
-#ifdef SPANTREE
-    if (header->bcastSource != 0)
-    {
-        int mype = CmiMyPe();
-        int numChildren = CmiNumSpanTreeChildren(mype);
-        int children[numChildren];
-        CmiSpanTreeChildren(mype, children);
-
-        // send broadcast to all children
-        for (int i = 0; i < numChildren; i++)
-        {
-            CmiBCastSyncSend(children[i], size, msg);
-        }
-        if (header->bcastSource - 1 == mype)
-        {
-            return;
-        }
-    }
-#endif
     CmiCallHandler(handler, msg);
 }
 // TODO: implement CmiPrintf
