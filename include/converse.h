@@ -102,6 +102,7 @@ void CmiSyncBroadcastAndFree(int size, void *msg);
 void CmiSyncBroadcastAll(int size, void *msg);
 void CmiSyncBroadcastAllAndFree(int size, void *msg);
 void CmiSyncNodeSendAndFree(unsigned int destNode, unsigned int size, void *msg);
+void CmiWithinNodeBroadcast(int size, void *msg);
 
 // Barrier functions
 void CmiNodeBarrier();
@@ -135,6 +136,13 @@ void __CmiEnforceMsgHelper(const char* expr, const char* fileName,
 
 double getCurrentTime(void);
 double CmiWallTimer(void);
+
+//rand functions that charm uses
+void   CrnSrand(unsigned int);
+int    CrnRand(void);
+double CrnDrand(void);
+int CrnRandRange(int, int);
+double CrnDrandRange(double, double);
 
 //convconds
 #define CcdSCHEDLOOP            0
