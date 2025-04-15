@@ -173,9 +173,6 @@ int    CrnRand(void);
 double CrnDrand(void);
 int CrnRandRange(int, int);
 double CrnDrandRange(double, double);
-//group
-#define CMK_MULTICAST_GROUP_TYPE                struct { unsigned pe, id; }
-typedef CMK_MULTICAST_GROUP_TYPE CmiGroup;
 
 //convconds
 #define CcdSCHEDLOOP            0
