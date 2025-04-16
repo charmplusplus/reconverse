@@ -45,11 +45,16 @@ using CmiUint8 = std::uint64_t;
 
 typedef struct Header
 {
-    int handlerId;
-    int messageId;
+  CmiInt2 handlerId;
+  CmiUint4 destPE; // global ID of destination PE
+
     int messageSize;
-    int destPE;
-    int bcastSource; // 0 if not a broadcast message, else the source PE + 1
+
+  // used for bcast (bcast source pe/node), multicast (group id)
+  CmiUint4 collectiveMetaInfo;
+
+  // used for special ops (bcast, reduction, multicast) when the handler field is repurposed
+  CmiInt2 swapHandlerId;
 } CmiMessageHeader;
 
 #define CmiMsgHeaderSizeBytes sizeof(CmiMessageHeader)
@@ -96,8 +101,13 @@ void CmiSyncBroadcast(int size, void *msg);
 void CmiSyncBroadcastAndFree(int size, void *msg);
 void CmiSyncBroadcastAll(int size, void *msg);
 void CmiSyncBroadcastAllAndFree(int size, void *msg);
+void CmiSyncNodeSend(unsigned int destNode, unsigned int size, void *msg);
 void CmiSyncNodeSendAndFree(unsigned int destNode, unsigned int size, void *msg);
 void CmiWithinNodeBroadcast(int size, void *msg);
+void CmiSyncNodeBroadcast(unsigned int size, void *msg);
+void CmiSyncNodeBroadcastAndFree(unsigned int size, void *msg);
+void CmiSyncNodeBroadcastAll(unsigned int size, void *msg);
+void CmiSyncNodeBroadcastAllAndFree(unsigned int size, void *msg);
 
 // Barrier functions
 void CmiNodeBarrier();
