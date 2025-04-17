@@ -1030,3 +1030,17 @@ void CmiDeprecateArgInt(char **argv, const char *arg, const char *desc, const ch
     if (found)
         CmiPrintf("%s\n", warning);
 }
+
+void CmiSyncListSendFn(int npes, const int* pes, int len, char* msg)
+{
+    for (int i = 0; i < npes; i++)
+    {
+        CmiSyncSend(pes[i], len, msg);
+    }
+}
+
+void CmiFreeListSendFn(int npes, const int* pes, int len, char* msg)
+{
+    CmiSyncListSendFn(npes, pes, len, msg);
+    CmiFree(msg);
+}
