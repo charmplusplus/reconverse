@@ -47,12 +47,12 @@ AmHandler registerAmHandler(CompHandler handler)
   return gCommBackend->registerAmHandler(handler);
 }
 
-void sendAm(int rank, void* msg, size_t size, CompHandler localComp, AmHandler remoteComp)
+void sendAm(int rank, void* msg, size_t size, mr_t mr, CompHandler localComp, AmHandler remoteComp)
 {
   if (gCommBackend == nullptr) {
     return;
   }
-  gCommBackend->sendAm(rank, msg, size, localComp, remoteComp);
+  gCommBackend->sendAm(rank, msg, size, mr, localComp, remoteComp);
 }
 
 bool progress(void)
@@ -69,6 +69,22 @@ void barrier(void)
     return;
   }
   gCommBackend->barrier();
+}
+
+mr_t registerMemory(void* addr, size_t size)
+{
+  if (gCommBackend == nullptr) {
+    return nullptr;
+  }
+  return gCommBackend->registerMemory(addr, size);
+}
+
+void deregisterMemory(mr_t mr)
+{
+  if (gCommBackend == nullptr) {
+    return;
+  }
+  gCommBackend->deregisterMemory(mr);
 }
 
 } // namespace comm_backend

@@ -17,10 +17,12 @@ class CommBackendBase
   virtual int getMyNodeId() = 0;
   virtual int getNumNodes() = 0;
   virtual AmHandler registerAmHandler(CompHandler handler) = 0;
-  virtual void sendAm(int rank, void *msg, size_t size, CompHandler localComp, AmHandler remoteComp) = 0;
+  virtual void sendAm(int rank, void *msg, size_t size, mr_t mr, CompHandler localComp, AmHandler remoteComp) = 0;
   // return true if there is more work to do
   virtual bool progress(void) = 0;
   virtual void barrier(void) = 0;
+  virtual mr_t registerMemory(void *addr, size_t size) = 0;
+  virtual void deregisterMemory(mr_t mr) = 0;
   virtual ~CommBackendBase() {};
 };
 

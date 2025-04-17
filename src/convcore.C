@@ -308,7 +308,7 @@ void CmiSyncSendAndFree(int destPE, int messageSize, void *msg)
     }
     else
     {
-        comm_backend::sendAm(destNode, msg, messageSize, CommLocalHandler, AmHandlerPE); // Commlocalhandler will free msg
+        comm_backend::sendAm(destNode, msg, messageSize, comm_backend::MR_NULL, CommLocalHandler, AmHandlerPE); // Commlocalhandler will free msg
     }
 }
 
@@ -539,7 +539,7 @@ void CmiSyncNodeSendAndFree(unsigned int destNode, unsigned int size, void *msg)
     }
     else
     {
-        comm_backend::sendAm(destNode, msg, size, CommLocalHandler, AmHandlerNode);
+        comm_backend::sendAm(destNode, msg, size, comm_backend::MR_NULL, CommLocalHandler, AmHandlerNode);
     }
 }
 

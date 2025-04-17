@@ -90,8 +90,8 @@ AmHandler CommBackendLCI1::registerAmHandler(CompHandler handler)
   return g_handlers.size() - 1;
 }
 
-void CommBackendLCI1::sendAm(int rank, void* msg, size_t size, CompHandler localComp, AmHandler remoteComp)
-{
+void CommBackendLCI1::sendAm(int rank, void *msg, size_t size, mr_t mr,
+                             CompHandler localComp, AmHandler remoteComp) {
   // we use LCI tag to pass the remoteComp
   LCI_error_t ret;
   do {
@@ -108,7 +108,8 @@ void CommBackendLCI1::sendAm(int rank, void* msg, size_t size, CompHandler local
       LCI_lbuffer_t buffer;
       buffer.address = msg;
       buffer.length = size;
-      buffer.segment = LCI_SEGMENT_ALL;
+      buffer.segment =
+          mr == MR_NULL ? LCI_SEGMENT_ALL : static_cast<LCI_segment_t>(mr);
       ret = LCI_putla(m_ep, buffer, m_local_comp, rank, remoteComp, LCI_DEFAULT_COMP_REMOTE, reinterpret_cast<void*>(localComp));
     }
     if (ret == LCI_ERR_RETRY) {
@@ -126,6 +127,19 @@ bool CommBackendLCI1::progress(void)
 void CommBackendLCI1::barrier(void)
 {
   LCI_SAFECALL(LCI_barrier());
+}
+
+mr_t CommBackendLCI1::registerMemory(void *addr, size_t size)
+{
+  LCI_segment_t mr;
+  LCI_SAFECALL(LCI_memory_register(LCI_UR_DEVICE, addr, size, &mr));
+  return mr;
+}
+
+void CommBackendLCI1::deregisterMemory(mr_t mr)
+{
+  LCI_segment_t segment = static_cast<LCI_segment_t>(mr);
+  LCI_SAFECALL(LCI_memory_deregister(&segment));
 }
 
 } // namespace comm_backend
