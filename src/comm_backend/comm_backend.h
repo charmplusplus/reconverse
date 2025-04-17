@@ -11,6 +11,8 @@ struct Status {
 };
 using CompHandler = void (*)(Status status);
 using AmHandler = int;
+using mr_t = void*;
+const mr_t MR_NULL = nullptr;
 
 /**
  * @brief Initialize the communication backend. Not thread-safe.
@@ -35,7 +37,7 @@ AmHandler registerAmHandler(CompHandler handler);
 /**
  * @brief Send an active message. Thread-safe.
  */
-void sendAm(int rank, void *msg, size_t size, CompHandler localComp, AmHandler remoteComp);
+void sendAm(int rank, void *msg, size_t size, mr_t mr, CompHandler localComp, AmHandler remoteComp);
 /**
  * @brief Make progress on the communication backend. Thread-safe.
  */
@@ -44,6 +46,14 @@ bool progress(void);
  * @brief Block until all nodes have reached this point. Thread-safe.
  */
 void barrier(void);
+/**
+ * @brief Register a memory region
+ */
+mr_t registerMemory(void *addr, size_t size);
+/**
+ * @brief Deregister a memory region
+ */
+void deregisterMemory(mr_t mr);
 
 } // namespace comm_backend
 
