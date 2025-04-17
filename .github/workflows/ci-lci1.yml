@@ -34,8 +34,8 @@ jobs:
                 -Bbuild \
                 -GNinja \
                 -DCMAKE_BUILD_TYPE=Debug \
-                -DRECONVERSE_AUTOFETCH_LCI2=ON \
-                -DLCI_NETWORK_BACKENDS=ofi \
+                -DRECONVERSE_AUTOFETCH_LCI1=ON \
+                -DLCI_SERVER=ofi \
                 -DLCT_PMI_BACKEND_ENABLE_MPI=ON \
                 .
 

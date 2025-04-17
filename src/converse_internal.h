@@ -6,6 +6,7 @@
 #include "converse.h"
 #include "converse_config.h"
 #include "comm_backend/comm_backend.h"
+#include "comm_backend/comm_backend_internal.h"
 #include "queue.h"
 
 void CmiStartThreads(char **argv);

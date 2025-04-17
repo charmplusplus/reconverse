@@ -1,5 +1,4 @@
-#include "comm_backend_internal.h"
-#include <cstring>
+#include "converse_internal.h"
 
 #define LCI_SAFECALL(stmt)                                                    \
   do {                                                                        \
