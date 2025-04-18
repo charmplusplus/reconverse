@@ -40,6 +40,16 @@ using CmiUint8 = std::uint64_t;
 ;
 
 #define CpvAccess(v) CMK_TAG(Cpv_, v)[CmiMyRank()]
+#define CpvExtern(t,v)  extern t CMK_TAG(Cpv_,v)[2]
+
+//alignment
+#define CMIALIGN(x,n)       (size_t)((~((size_t)n-1))&((x)+(n-1)))
+#define ALIGN8(x)          CMIALIGN(x,8)
+#define ALIGN16(x)         CMIALIGN(x,16)
+#define ALIGN_BYTES           16U //should this be 18U or 8U?
+#define ALIGN_DEFAULT(x) CMIALIGN(x, ALIGN_BYTES)
+#define CMIPADDING(x, n) (CMIALIGN((x), (n)) - (size_t)(x))
+
 
 // End of NOTE
 
@@ -59,14 +69,14 @@ typedef int (*CldEstimator)(void);
 
 typedef struct Header
 {
-    int handlerId;
-    int xhandlerId;
-    int messageId;
-    int info;
-    int messageSize;
-    int destPE;
-    bool nokeep;
-    int bcastSource; // 0 if not a broadcast message, else the source PE + 1
+  CmiInt2 handlerId;
+  CmiUint4 destPE; // global ID of destination PE
+  int messageSize;
+  // used for bcast (bcast source pe/node), multicast (group id)
+  CmiUint4 collectiveMetaInfo;
+  // used for special ops (bcast, reduction, multicast) when the handler field is repurposed
+  CmiInt2 swapHandlerId;
+  bool nokeep;
 } CmiMessageHeader;
 
 #define CMK_MULTICAST_GROUP_TYPE                struct { unsigned pe, id; }
@@ -118,23 +128,31 @@ void CmiSyncSendAndFree(int destPE, int messageSize, void *msg);
 void CmiSyncListSend(int npes, const int *pes, int len, void *msg);
 void CmiSyncListSendAndFree(int npes, const int *pes, int len, void *msg);
 
-#define CmiSyncSendFn(p,s,m)  (CmiSyncSend((p),(s),(void*)(m)))
-#define CmiFreeSendFn(p,s,m)  (CmiSyncSendAndFree((p),(s),(void*)(m)))
-#define CmiSyncListSendFn(n,l,s,m)  (CmiSyncListSend((n),(l),(s),(void*)(m)))
-#define CmiFreeListSendFn(n,l,s,m)  (CmiSyncListSendAndFree((n),(l),(s),(void*)(m)))
+void CmiSyncSendFn(int destPE, int messageSize, char *msg);
+void CmiFreeSendFn(int destPE, int messageSize, char *msg);
+void CmiSyncListSendFn(int npes, const int *pes, int len, char *msg);
+void CmiFreeListSendFn(int npes, const int *pes, int len, char *msg);
 
 // broadcasts
 void CmiSyncBroadcast(int size, void *msg);
 void CmiSyncBroadcastAndFree(int size, void *msg);
 void CmiSyncBroadcastAll(int size, void *msg);
 void CmiSyncBroadcastAllAndFree(int size, void *msg);
+void CmiSyncNodeSend(unsigned int destNode, unsigned int size, void *msg);
 void CmiSyncNodeSendAndFree(unsigned int destNode, unsigned int size, void *msg);
 
-#define CmiSyncBroadcastFn(s,m)  (CmiSyncBroadcast((s),(void*)(m)))
-#define CmiFreeBroadcastFn(s,m)  (CmiSyncBroadcastAndFree((s),(void*)(m)))
-#define CmiSyncBroadcastAllFn(s,m)  (CmiSyncBroadcastAll((s),(void*)(m)))
-#define CmiFreeBroadcastAllFn(s,m)  (CmiSyncBroadcastAllAndFree((s),(void*)(m)))
-#define CmiFreeNodeSendFn(n,s,m)  (CmiSyncNodeSendAndFree((n),(s),(void*)(m)))
+void CmiSyncBroadcastFn(int size, char *msg);
+void CmiFreeBroadcastFn(int size, char *msg);
+void CmiSyncBroadcastAllFn(int size, char *msg);
+void CmiFreeBroadcastAllFn(int size, char *msg);
+void CmiFreeNodeSendFn(int node, int size, char *msg);
+
+
+void CmiWithinNodeBroadcast(int size, void *msg);
+void CmiSyncNodeBroadcast(unsigned int size, void *msg);
+void CmiSyncNodeBroadcastAndFree(unsigned int size, void *msg);
+void CmiSyncNodeBroadcastAll(unsigned int size, void *msg);
+void CmiSyncNodeBroadcastAllAndFree(unsigned int size, void *msg);
 
 // Barrier functions
 void CmiNodeBarrier();
@@ -150,6 +168,8 @@ void CmiAbort(const char *format, ...);
 int CmiPrintf(const char *format, ...);
 int CmiGetArgc(char **argv);
 void CmiAbort(const char *format, ...);
+int CmiScanf(const char *format, ...);
+int CmiError(const char *format, ...);
 
 void CmiInitCPUTopology(char **argv);
 void CmiInitCPUAffinity(char **argv);
@@ -303,6 +323,34 @@ void CldEnqueueWithinNode(void *msg, int infofn);
 
 #define CmiImmIsRunning()        (0)
 #define CMI_MSG_NOKEEP(msg)  ((CmiMessageHeader*) msg)->nokeep
+
+//trace
+#define OBJ_ID_SZ 4
+typedef struct _CmiObjId {
+int id[OBJ_ID_SZ];
+  /* 
+   * **CWL** Note: setting initial values to -1 does not seem to be done for 
+   *               LDObjid. Potential consistency problems could arise. This
+   *               will probably have to be dealt with later.
+   */
+#ifdef __cplusplus
+  _CmiObjId() { 
+    for (int i=0; i<OBJ_ID_SZ; i++) {
+      id[i] = -1;
+    }
+  }
+  bool isNull() {
+    for (int i=0; i<OBJ_ID_SZ; i++) {
+      if (id[i] != -1) return false;
+    }
+    return true;
+  }
+  bool operator==(const struct _CmiObjId& objid) const {
+    for (int i=0; i<OBJ_ID_SZ; i++) if (id[i] != objid.id[i]) return false;
+    return true;
+  }
+#endif
+} CmiObjId;
 
 //spantree
 //later: fix the naming of these macros to be clearer

@@ -13,17 +13,14 @@
 #include <thread>
 #include <cinttypes>
 
-#define CMI_EXIT_HANDLER -1 
-
-
 // GLOBALS
 int Cmi_argc;
 static char **Cmi_argv;
-int Cmi_npes; //total number of PE's across the entire system
-int Cmi_nranks;      // TODO: this isnt used in old converse, but we need to know how many PEs are on our node?
-int Cmi_mynode; 
-int Cmi_mynodesize; //represents the number of PE's/threads on a single physical node. In SMP mode, each PE is run by a seperate thread, so Cmi_nodesize in that case represents the number of threads (PEs) on that machine
-int Cmi_numnodes; //represents the number of physical nodes/systems machine 
+int Cmi_npes;   // total number of PE's across the entire system
+int Cmi_nranks; // TODO: this isnt used in old converse, but we need to know how many PEs are on our node?
+int Cmi_mynode;
+int Cmi_mynodesize; // represents the number of PE's/threads on a single physical node. In SMP mode, each PE is run by a seperate thread, so Cmi_nodesize in that case represents the number of threads (PEs) on that machine
+int Cmi_numnodes;   // represents the number of physical nodes/systems machine
 int Cmi_nodestart;
 std::vector<CmiHandlerInfo> **CmiHandlerTable; // array of handler vectors
 ConverseNodeQueue<void *> *CmiNodeQueue;
@@ -40,6 +37,13 @@ thread_local CmiState *Cmi_state;
 thread_local bool idle_condition;
 thread_local double idle_time;
 
+// Special operation handlers (TODO: should these be special values instead like the exit handler)
+int Cmi_bcastHandler;
+int Cmi_nodeBcastHandler;
+int Cmi_exitHandler;
+int Cmi_reduceHandler;
+int Cmi_multicastHandler;
+
 // TODO: padding for all these thread_locals and cmistates?
 
 comm_backend::AmHandler AmHandlerPE;
@@ -50,24 +54,21 @@ void CommLocalHandler(comm_backend::Status status)
     CmiFree(status.msg);
 }
 
-void CommRemoteHandlerPE(comm_backend::Status status) 
+void CommRemoteHandlerPE(comm_backend::Status status)
 {
     CmiMessageHeader *header = (CmiMessageHeader *)status.msg;
     int destPE = header->destPE;
     CmiPushPE(destPE, status.size, status.msg);
 }
 
-void CommRemoteHandlerNode(comm_backend::Status status) {
+void CommRemoteHandlerNode(comm_backend::Status status)
+{
     CmiNodeQueue->push(status.msg);
 }
 
 void CmiCallHandler(int handler, void *msg)
 {
-    if (handler == CMI_EXIT_HANDLER) {
-        CsdExitScheduler();
-    } else {
-        CmiGetHandlerTable()->at(handler).hdlr(msg);
-    }
+    CmiGetHandlerTable()->at(handler).hdlr(msg);
 }
 
 void converseRunPe(int rank)
@@ -80,6 +81,13 @@ void converseRunPe(int rank)
 #ifdef SET_CPU_AFFINITY
     CmiSetCPUAffinity(rank);
 #endif
+
+    // register special operation handlers
+    Cmi_bcastHandler = CmiRegisterHandler(CmiBcastHandler);
+    Cmi_nodeBcastHandler = CmiRegisterHandler(CmiNodeBcastHandler);
+    Cmi_exitHandler = CmiRegisterHandler(CmiExitHandlerLocal);
+    // Cmi_reduceHandler = CmiRegisterHandler(CmiReduceHandler);
+    // Cmi_multicastHandler = CmiRegisterHandler(CmiMulticastHandler);
 
     // barrier to ensure all global structs are initialized
     CmiNodeBarrier();
@@ -116,7 +124,7 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched, int initret)
 {
 
     Cmi_startTime = getCurrentTime();
-    
+
     Cmi_npes = atoi(argv[2]);
     // int plusPSet = CmiGetArgInt(argv,"+pe",&Cmi_npes);
 
@@ -130,8 +138,8 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched, int initret)
     Cmi_mynode = comm_backend::getMyNodeId();
     Cmi_numnodes = comm_backend::getNumNodes();
     if (Cmi_mynode == 0)
-      printf("Charm++> Running in SMP mode on %d nodes and %d PEs\n",
-             Cmi_numnodes, Cmi_npes);
+        printf("Charm++> Running in SMP mode on %d nodes and %d PEs\n",
+               Cmi_numnodes, Cmi_npes);
     // Need to discuss this with the team
     if (Cmi_npes < Cmi_numnodes)
     {
@@ -157,7 +165,7 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched, int initret)
 
     CmiStartThreads();
     free(Cmi_argv);
-    
+
     comm_backend::exit();
 }
 
@@ -188,7 +196,7 @@ void CmiInitState(int rank)
     Cmi_queues[Cmi_myrank] = queue;
     CmiHandlerTable[Cmi_myrank] = handlerTable;
 
-    //random
+    // random
     CrnInit();
 
     CcdModuleInit();
@@ -262,13 +270,13 @@ CmiHandler CmiHandlerToFunction(int handlerId)
 int CmiGetInfo(void *msg)
 {
     CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
-    return header->info;
+    return header->collectiveMetaInfo;
 }
 
 void CmiSetInfo(void *msg, int infofn)
 {
     CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
-    header->info = infofn;
+    header->collectiveMetaInfo = infofn;
 }
 
 void CmiPushPE(int destPE, int messageSize, void *msg)
@@ -279,18 +287,20 @@ void CmiPushPE(int destPE, int messageSize, void *msg)
 
 void *CmiAlloc(int size)
 {
-    if (size <= 0) {
+    if (size <= 0)
+    {
         CmiPrintf("CmiAlloc: size <= 0\n");
-        return nullptr; 
+        return nullptr;
     }
     return malloc(size);
 }
 
 void CmiFree(void *msg)
 {
-    if (msg == nullptr) {
+    if (msg == nullptr)
+    {
         CmiPrintf("CmiFree: msg is nullptr\n");
-        return; 
+        return;
     }
     free(msg);
 }
@@ -298,7 +308,7 @@ void CmiFree(void *msg)
 void CmiSyncSend(int destPE, int messageSize, void *msg)
 {
     char *copymsg = (char *)CmiAlloc(messageSize);
-    std::memcpy(copymsg, msg, messageSize); //optionally avoid memcpy and block instead
+    std::memcpy(copymsg, msg, messageSize); // optionally avoid memcpy and block instead
     CmiSyncSendAndFree(destPE, messageSize, copymsg);
 }
 
@@ -318,25 +328,10 @@ void CmiSyncListSendAndFree(int npes, const int *pes, int len, void *msg)
     }
 }
 
-void CmiBCastSyncSend(int destPE, int messageSize, void *msg)
-{
-    char *copymsg = (char *)CmiAlloc(messageSize);
-    std::memcpy(copymsg, msg, messageSize);
-    CmiGSendAndFree(destPE, messageSize, copymsg);
-}
-
 void CmiSyncSendAndFree(int destPE, int messageSize, void *msg)
 {
-    // printf("Sending message to PE %d\n", destPE);
     CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
-    header->destPE = destPE;
-    header->messageSize = messageSize;
-    header->bcastSource = 0;
-    CmiGSendAndFree(destPE, messageSize, msg);
-}
 
-void CmiGSendAndFree(int destPE, int messageSize, void *msg)
-{
     int destNode = CmiNodeOf(destPE);
 
     if (destNode >= Cmi_numnodes || destNode < 0)
@@ -350,7 +345,7 @@ void CmiGSendAndFree(int destPE, int messageSize, void *msg)
     }
     else
     {
-        comm_backend::sendAm(destNode, msg, messageSize, CommLocalHandler, AmHandlerPE); //Commlocalhandler will free msg
+        comm_backend::sendAm(destNode, msg, messageSize, CommLocalHandler, AmHandlerPE); // Commlocalhandler will free msg
     }
 }
 
@@ -360,11 +355,14 @@ void CmiSyncBroadcast(int size, void *msg)
     int pe = CmiMyPe();
 
     CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
-    header->bcastSource = pe + 1;
     header->messageSize = size;
 
 #ifdef SPANTREE
-    CmiBCastSyncSend(0, size, msg);
+    header->collectiveMetaInfo = pe; // used to skip the source
+    header->swapHandlerId = header->handlerId;
+    CmiPrintf("Setting swap handler to %d\n", header->swapHandlerId);
+    header->handlerId = Cmi_bcastHandler;
+    CmiSyncSend(0, size, msg);
 #else
 
     for (int i = pe + 1; i < Cmi_npes; i++)
@@ -384,14 +382,16 @@ void CmiSyncBroadcastAndFree(int size, void *msg)
 void CmiSyncBroadcastAll(int size, void *msg)
 {
     CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
-    header->bcastSource = CmiMyPe() + 1;
     header->messageSize = size;
-#ifdef SPANTREE
-    CmiBCastSyncSend(0, size, msg);
-    header->bcastSource = 0;
-    CmiBCastSyncSend(CmiMyPe(), size, msg);
-#else
 
+#ifdef SPANTREE
+    header->collectiveMetaInfo = -1; // don't skip the source
+    header->swapHandlerId = header->handlerId;
+    CmiPrintf("Setting swap handler to %d\n", header->swapHandlerId);
+
+    header->handlerId = Cmi_bcastHandler;
+    CmiSyncSend(0, size, msg);
+#else
     for (int i = 0; i < Cmi_npes; i++)
         CmiSyncSend(i, size, msg);
 #endif
@@ -402,14 +402,124 @@ void CmiSyncBroadcastAllAndFree(int size, void *msg)
     CmiSyncBroadcastAll(size, msg);
     CmiFree(msg);
 }
+void CmiWithinNodeBroadcast(int size, void *msg)
+{
+    for (int i = 0; i < Cmi_mynodesize; i++)
+    {
+        int destPe = CmiMyNode() * Cmi_mynodesize + i;
+        CmiSyncSend(destPe, size, msg);
+    }
+}
 
-void CmiExitHandler(int status) {
-    CmiMessageHeader* exitMsg = new CmiMessageHeader(); //might need to allocate 
-    exitMsg->handlerId = CMI_EXIT_HANDLER; 
+void CmiSyncNodeBroadcast(unsigned int size, void *msg)
+{
+    int node = CmiMyNode();
+
+    CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
+    header->messageSize = size;
+
+#ifdef SPANTREE
+    header->collectiveMetaInfo = node; // used to skip the source
+    header->swapHandlerId = header->handlerId;
+    header->handlerId = Cmi_nodeBcastHandler;
+    CmiSyncNodeSend(0, size, msg);
+#else
+
+    for(int i=node+1; i<Cmi_numnodes; i++)
+        CmiSyncNodeSend(i, size, msg);
+
+    for(int i=0; i<node; i++)  
+        CmiSyncNodeSend(i, size, msg);
+#endif
+}
+
+void CmiSyncNodeBroadcastAndFree(unsigned int size, void *msg)
+{
+    CmiSyncNodeBroadcast(size, msg);
+    CmiFree(msg);
+}
+
+void CmiSyncNodeBroadcastAll(unsigned int size, void *msg)
+{
+    CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
+    header->messageSize = size;
+
+#ifdef SPANTREE
+    header->collectiveMetaInfo = -1; // don't skip the source
+    header->swapHandlerId = header->handlerId;
+    header->handlerId = Cmi_nodeBcastHandler;
+    CmiSyncNodeSend(0, size, msg);
+#else
+
+    for(int i=0; i<Cmi_numnodes; i++)
+        CmiSyncNodeSend(i, size, msg);
+#endif
+}
+
+void CmiSyncNodeBroadcastAllAndFree(unsigned int size, void *msg)
+{
+    CmiSyncNodeBroadcastAll(size, msg);
+    CmiFree(msg);
+}
+
+/* Handler for broadcast via the spanning tree. */
+void CmiBcastHandler(void *msg)
+{
+    CmiPrintf("Handling bcast on PE %d\n", CmiMyPe());
+    int mype = CmiMyPe();
+    int numChildren = CmiNumSpanTreeChildren(mype);
+    int children[numChildren];
+    CmiSpanTreeChildren(mype, children);
+
+    CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
+
+    // send broadcast to all children
+    for (int i = 0; i < numChildren; i++)
+    {
+        CmiSyncSend(children[i], header->messageSize, msg);
+    }
+
+    // call handler locally (unless I am source of broadcast, and bcast is exclusive)
+    if (header->collectiveMetaInfo != mype)
+    {
+        CmiPrintf("Calling handler %d on PE %d\n", header->swapHandlerId, CmiMyPe());
+        CmiCallHandler(header->swapHandlerId, msg);
+    }
+}
+
+/* Handler for node broadcast via the spanning tree. */
+void CmiNodeBcastHandler(void *msg)
+{
+    int mynode = CmiMyNode();
+    int numChildren = CmiNumNodeSpanTreeChildren(mynode);
+    int children[numChildren];
+    CmiNodeSpanTreeChildren(mynode, children);
+
+    CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
+
+    // send broadcast to node children
+    for(int i=0; i<numChildren; i++)
+    {
+        CmiSyncNodeSend(children[i], header->messageSize, msg);
+    }
+
+    if (header->collectiveMetaInfo != mynode)
+    {
+        CmiCallHandler(header->swapHandlerId, msg);
+    }
+
+}
+
+// EXIT TOOLS
+
+void CmiExitHandler(int status)
+{
+    CmiMessageHeader *exitMsg = new CmiMessageHeader(); // might need to allocate
+    exitMsg->handlerId = Cmi_exitHandler;
     CmiSyncBroadcastAllAndFree(sizeof(*exitMsg), exitMsg);
 }
 
-void CmiExit(int status)
+void CmiExit(int status) //note: status isn't being used meaningfully
 {
     CmiExitHandler(status);
 }
@@ -442,6 +552,11 @@ void CsdExitScheduler()
     CmiGetState()->stopFlag = 1;
 }
 
+void CmiExitHandlerLocal(void *msg)
+{
+    CsdExitScheduler();
+}
+
 ConverseNodeQueue<void *> *CmiGetNodeQueue()
 {
     return CmiNodeQueue;
@@ -465,6 +580,50 @@ void CmiSyncNodeSendAndFree(unsigned int destNode, unsigned int size, void *msg)
     }
 }
 
+void CmiSyncNodeSend(unsigned int destNode, unsigned int size, void *msg)
+{
+    char *copymsg = (char *)CmiAlloc(size);
+    std::memcpy(copymsg, msg, size); // optionally avoid memcpy and block instead
+    CmiSyncNodeSendAndFree(destNode, size, copymsg);
+}
+
+//fn versions of the above
+void CmiSyncSendFn(int destPE, int messageSize, char *msg)
+{
+  CmiSyncSend(destPE, messageSize, (void*) msg);
+}
+void CmiFreeSendFn(int destPE, int messageSize, char *msg)
+{
+  CmiSyncSendAndFree(destPE, messageSize, (void*) msg);
+}
+void CmiSyncListSendFn(int npes, const int *pes, int len, char *msg)
+{
+  CmiSyncListSend(npes, pes, len, (void*) msg);
+}
+void CmiFreeListSendFn(int npes, const int *pes, int len, char *msg)
+{
+  CmiSyncListSendAndFree(npes, pes, len, (void*) msg);
+}
+void CmiSyncBroadcastFn(int size, char *msg)
+{
+  CmiSyncBroadcast(size, (void*) msg);
+}
+void CmiSyncBroadcastAllFn(int size, char *msg)
+{
+  CmiSyncBroadcastAll(size, (void*) msg);
+}
+void CmiFreeBroadcastFn(int size, char *msg)
+{
+  CmiSyncBroadcastAndFree(size, (void*) msg);
+}
+void CmiFreeNodeSendFn(int destNode, int size, char *msg)
+{
+  CmiSyncNodeSendAndFree(destNode, size, (void*) msg);
+}
+void CmiFreeBroadcastAllFn(int size, char *msg)
+{
+  CmiSyncBroadcastAllAndFree(size, (void*) msg);
+}
 
 void CmiSetHandler(void *msg, int handlerId)
 {
@@ -475,7 +634,7 @@ void CmiSetHandler(void *msg, int handlerId)
 void CmiSetXHandler(void *msg, int xhandlerId)
 {
     CmiMessageHeader *header = (CmiMessageHeader *)msg;
-    header->xhandlerId = xhandlerId;
+    header->swapHandlerId = xhandlerId;
 }
 
 int CmiGetHandler(void *msg)
@@ -488,7 +647,7 @@ int CmiGetHandler(void *msg)
 int CmiGetXHandler(void *msg)
 {
     CmiMessageHeader *header = (CmiMessageHeader *)msg;
-    int xhandlerId = header->xhandlerId;
+    int xhandlerId = header->swapHandlerId;
     return xhandlerId;
 }
 
@@ -509,25 +668,6 @@ void CmiHandleMessage(void *msg)
 
     // call handler (takes in pointer to whole message)
 
-#ifdef SPANTREE
-    if (header->bcastSource != 0)
-    {
-        int mype = CmiMyPe();
-        int numChildren = CmiNumSpanTreeChildren(mype);
-        int children[numChildren];
-        CmiSpanTreeChildren(mype, children);
-
-        // send broadcast to all children
-        for (int i = 0; i < numChildren; i++)
-        {
-            CmiBCastSyncSend(children[i], size, msg);
-        }
-        if (header->bcastSource - 1 == mype)
-        {
-            return;
-        }
-    }
-#endif
     CmiCallHandler(handler, msg);
 }
 // TODO: implement CmiPrintf
@@ -557,24 +697,55 @@ double CmiWallTimer()
 }
 
 void CmiAbortHelper(const char *source, const char *message, const char *suggestion,
-                    int tellDebugger, int framesToSkip) {
+                    int tellDebugger, int framesToSkip)
+{
     CmiPrintf("------- Processor %d Exiting: %s ------\n"
-             "Reason: %s\n", CmiMyPe(), source, message);
+              "Reason: %s\n",
+              CmiMyPe(), source, message);
 }
 
-void CmiAbort(const char *format, ...) {
-  char newmsg[256];
+void CmiAbort(const char *format, ...)
+{
+    char newmsg[256];
+    va_list args;
+    va_start(args, format);
+    vsnprintf(newmsg, sizeof(newmsg), format, args);
+    va_end(args);
+    CmiAbortHelper("Called CmiAbort", newmsg, NULL, 1, 0);
+    CmiExitHandler(1);
+}
+
+int CmiScanf(const char *format, ...)
+{
+  int ret;
+  {
   va_list args;
-  va_start(args, format);
-  vsnprintf(newmsg, sizeof(newmsg), format, args);
+  va_start(args,format);
+  {
+    ret = vscanf(format, args);
+  }
   va_end(args);
-  CmiAbortHelper("Called CmiAbort", newmsg, NULL, 1, 0);
-  CmiExitHandler(1);
+  }
+  return ret;
 }
 
+int CmiError(const char *format, ...)
+{
+  int ret;
+  {
+  va_list args;
+  va_start(args,format);
+  {
+    ret = vfprintf(stderr, format, args);
+    fflush(stderr);  /* stderr is always flushed */
+  }
+  va_end(args);
+  }
+  return ret;
+}
 
-void __CmiEnforceMsgHelper(const char* expr, const char* fileName,
-			   int lineNum, const char* msg, ...) 
+void __CmiEnforceMsgHelper(const char *expr, const char *fileName,
+                           int lineNum, const char *msg, ...)
 {
     CmiAbort("[%d] Assertion \"%s\" failed in file %s line %d.\n", CmiMyPe(), expr,
              fileName, lineNum);
