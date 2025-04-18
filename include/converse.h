@@ -60,6 +60,7 @@ typedef int (*CldEstimator)(void);
 typedef struct Header
 {
     int handlerId;
+    int xhandlerId;
     int messageId;
     int info;
     int messageSize;
@@ -105,7 +106,9 @@ int CmiNodeFirst(int node);
 
 // handler things
 void CmiSetHandler(void *msg, int handlerId);
+void CmiSetXHandler(void *msg, int xhandlerId);
 int CmiGetHandler(void *msg);
+int CmiGetXHandler(void *msg);
 CmiHandler CmiGetHandlerFunction(int n);
 void CmiHandleMessage(void *msg);
 
@@ -126,9 +129,6 @@ void CmiSyncBroadcastAndFree(int size, void *msg);
 void CmiSyncBroadcastAll(int size, void *msg);
 void CmiSyncBroadcastAllAndFree(int size, void *msg);
 void CmiSyncNodeSendAndFree(unsigned int destNode, unsigned int size, void *msg);
-void CmiWithinNodeBroadcast(int size, void *msg);
-void CmiSyncNodeBroadcastAndFree(int size, void *msg);
-void CmiSyncNodeBroadcastAllAndFree(int size, void *msg);;
 
 #define CmiSyncBroadcastFn(s,m)  (CmiSyncBroadcast((s),(void*)(m)))
 #define CmiFreeBroadcastFn(s,m)  (CmiSyncBroadcastAndFree((s),(void*)(m)))
