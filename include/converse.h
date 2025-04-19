@@ -20,6 +20,7 @@ using CmiUint8 = std::uint64_t;
 // Do not use in reconverse impl
 
 #define CMK_TAG(x, y) x##y##_
+#define CMK_CONCAT(x,y) x##y
 
 #define CpvDeclare(t, v) t *CMK_TAG(Cpv_, v)
 #define CpvStaticDeclare(t, v) static t *CMK_TAG(Cpv_, v)
@@ -85,6 +86,7 @@ typedef struct Header
   // used for special ops (bcast, reduction, multicast) when the handler field is repurposed
   CmiInt2 swapHandlerId;
   bool nokeep;
+  CmiUInt1 zcMsgType; // 0: normal, 1: zero-copy
 } CmiMessageHeader;
 
 #define CMK_MULTICAST_GROUP_TYPE                struct { unsigned pe, id; }
@@ -331,6 +333,122 @@ void CldEnqueueWithinNode(void *msg, int infofn);
 
 #define CmiImmIsRunning()        (0)
 #define CMI_MSG_NOKEEP(msg)  ((CmiMessageHeader*) msg)->nokeep
+
+enum cmiZCMsgType {
+  CMK_REG_NO_ZC_MSG = 0,
+  CMK_ZC_P2P_SEND_MSG = 1,
+  CMK_ZC_P2P_RECV_MSG = 2,
+  CMK_ZC_SEND_DONE_MSG = 3, // USED for both ZC_BCAST_SEND_DONE_MSG & ZC_P2P_SEND_DONE_MSG
+  CMK_ZC_BCAST_SEND_MSG = 4,
+  CMK_ZC_BCAST_RECV_MSG = 5,
+  CMK_ZC_BCAST_RECV_DONE_MSG = 6,
+  CMK_ZC_BCAST_RECV_ALL_DONE_MSG = 7,
+  CMK_ZC_DEVICE_MSG = 8
+};
+
+#define CMI_ZC_MSGTYPE(msg)                  ((CmiMsgHeaderBasic *)msg)->zcMsgType
+#define CMI_IS_ZC_P2P(msg)                   (CMI_ZC_MSGTYPE(msg) == CMK_ZC_P2P_SEND_MSG || CMI_ZC_MSGTYPE(msg) == CMK_ZC_P2P_RECV_MSG)
+#define CMI_IS_ZC_BCAST(msg)                 (CMI_ZC_MSGTYPE(msg) == CMK_ZC_BCAST_SEND_MSG || CMI_ZC_MSGTYPE(msg) == CMK_ZC_BCAST_RECV_MSG)
+#define CMI_IS_ZC_RECV(msg)                  (CMI_ZC_MSGTYPE(msg) == CMK_ZC_P2P_RECV_MSG || CMI_ZC_MSGTYPE(msg) == CMK_ZC_BCAST_RECV_MSG)
+#define CMI_IS_ZC(msg)                       (CMI_IS_ZC_P2P(msg) || CMI_IS_ZC_BCAST(msg))
+#define CMI_IS_ZC_DEVICE(msg)                (CMI_ZC_MSGTYPE(msg) == CMK_ZC_DEVICE_MSG)
+
+//queues
+#define CQS_QUEUEING_FIFO 2
+#define CQS_QUEUEING_LIFO 3
+#define CQS_QUEUEING_IFIFO 4
+#define CQS_QUEUEING_ILIFO 5
+#define CQS_QUEUEING_BFIFO 6
+#define CQS_QUEUEING_BLIFO 7
+#define CQS_QUEUEING_LFIFO 8
+#define CQS_QUEUEING_LLIFO 9
+
+//libc internals
+#if defined __cplusplus && defined __THROW
+# define CMK_THROW __THROW
+#else
+# define CMK_THROW
+#endif
+
+#ifndef __has_builtin
+# define __has_builtin(x) 0  // Compatibility with non-clang compilers.
+#endif
+#ifndef __has_attribute
+# define __has_attribute(x) 0  // Compatibility with non-clang compilers.
+#endif
+
+#if (defined __GNUC__ || __has_builtin(__builtin_unreachable)) && !defined _CRAYC
+// Technically GCC 4.5 is the minimum for this feature, but we require C++11.
+# define CMI_UNREACHABLE_SECTION(...) __builtin_unreachable()
+#elif _MSC_VER
+# define CMI_UNREACHABLE_SECTION(...) __assume(0)
+#else
+# define CMI_UNREACHABLE_SECTION(...) __VA_ARGS__
+#endif
+
+#define CMI_NORETURN_FUNCTION_END CMI_UNREACHABLE_SECTION(while(1));
+
+# if defined __cplusplus
+#  define CMK_NORETURN [[noreturn]]
+# else
+#  if defined _Noreturn
+#   define CMK_NORETURN _Noreturn
+#  elif defined _MSC_VER && 1200 <= _MSC_VER
+#   define CMK_NORETURN __declspec (noreturn)
+#  else
+#   define CMK_NORETURN __attribute__ ((__noreturn__))
+#  endif
+# endif
+
+// must be placed before return type and at both declaration and definition
+#if defined __GNUC__ && __GNUC__ >= 4
+# define CMI_WARN_UNUSED_RESULT __attribute__ ((warn_unused_result))
+#elif defined _MSC_VER && _MSC_VER >= 1700
+# define CMI_WARN_UNUSED_RESULT _Check_return_
+#else
+# define CMI_WARN_UNUSED_RESULT
+#endif
+
+#if defined __cplusplus && __cplusplus >= 201402L
+#  define CMK_DEPRECATED_MSG(x) [[deprecated(x)]]
+#  define CMK_DEPRECATED [[deprecated]]
+#elif defined __GNUC__ || defined __clang__
+#  define CMK_DEPRECATED_MSG(x) __attribute__((deprecated(x)))
+#  define CMK_DEPRECATED __attribute__((deprecated))
+#elif defined _MSC_VER
+#  define CMK_DEPRECATED_MSG(x) __declspec(deprecated(x))
+#  define CMK_DEPRECATED __declspec(deprecated)
+#else
+#  define CMK_DEPRECATED_MSG(x)
+#  define CMK_DEPRECATED
+#endif
+
+#if __has_builtin(__builtin_expect) || \
+  (defined __GNUC__ && __GNUC__ >= 3) || \
+  (defined __INTEL_COMPILER && __INTEL_COMPILER >= 800) || \
+  (defined __ibmxl__ && __ibmxl_version__ >= 10) || \
+  (defined __xlC__ && __xlC__ >= (10 << 8)) || \
+  (defined _CRAYC && _RELEASE_MAJOR >= 8) || \
+  defined __clang__
+# define CMI_LIKELY(x)   __builtin_expect(!!(x),1)
+# define CMI_UNLIKELY(x) __builtin_expect(!!(x),0)
+#else
+# define CMI_LIKELY(x)   (x)
+# define CMI_UNLIKELY(x) (x)
+#endif
+
+#if __has_attribute(noinline) || \
+  defined __GNUC__ || \
+  defined __INTEL_COMPILER || \
+  defined __ibmxl__ || defined __xlC__
+# define CMI_NOINLINE __attribute__((noinline))
+#elif defined _MSC_VER
+# define CMI_NOINLINE __declspec(noinline)
+#elif defined __PGI
+# define CMI_NOINLINE _Pragma("noinline")
+#else
+# define CMI_NOINLINE
+#endif
 
 //trace
 #define OBJ_ID_SZ 4
