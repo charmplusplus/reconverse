@@ -40,7 +40,15 @@ using CmiUint8 = std::uint64_t;
 ;
 
 #define CpvAccess(v) CMK_TAG(Cpv_, v)[CmiMyRank()]
+#define CpvAccessOther(v, r) CMK_TAG(Cpv_,v)[r]
 #define CpvExtern(t,v)  extern t CMK_TAG(Cpv_,v)[2]
+
+#define CsvDeclare(t,v) t v
+#define CsvStaticDeclare(t,v) static t v
+#define CsvExtern(t,v) extern t v
+#define CsvInitialize(t,v) do{}while(0)
+#define CsvInitialized(v) 1
+#define CsvAccess(v) v
 
 //alignment
 #define CMIALIGN(x,n)       (size_t)((~((size_t)n-1))&((x)+(n-1)))
