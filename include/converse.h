@@ -86,7 +86,7 @@ typedef struct Header
   // used for special ops (bcast, reduction, multicast) when the handler field is repurposed
   CmiInt2 swapHandlerId;
   bool nokeep;
-  CmiUInt1 zcMsgType; // 0: normal, 1: zero-copy
+  CmiUint1 zcMsgType; // 0: normal, 1: zero-copy
 } CmiMessageHeader;
 
 #define CMK_MULTICAST_GROUP_TYPE                struct { unsigned pe, id; }
@@ -180,6 +180,10 @@ int CmiGetArgc(char **argv);
 void CmiAbort(const char *format, ...);
 int CmiScanf(const char *format, ...);
 int CmiError(const char *format, ...);
+#define CmiMemcpy(dest, src, size) memcpy((dest), (src), (size))
+
+#define setMemoryTypeChare(p) /* empty memory debugging method */
+#define setMemoryTypeMessage(p)
 
 void CmiInitCPUTopology(char **argv);
 void CmiInitCPUAffinity(char **argv);
