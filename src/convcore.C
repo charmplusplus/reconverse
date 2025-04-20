@@ -487,6 +487,59 @@ void CmiExit(int status) //note: status isn't being used meaningfully
     CmiExitHandler(status);
 }
 
+// REDUCTION TOOLS 
+
+void CmiReductionsInit(void)
+{
+    CpvInitialize(CmiReductionID, _reduction_global_ID);
+    CpvInitialize(CmiReductionID, _reduction_request_ID);
+    CpvInitialize(CmiReductionID, _reduction_dynamic_ID);
+
+    // rank 0 will set the initial values 
+    if (CmiMyRank() == 0) {
+        CpvAccess(_reduction_global_ID)  = CmiReductionID_globalOffset;
+        CpvAccess(_reduction_request_ID) = CmiReductionID_requestOffset;
+        CpvAccess(_reduction_dynamic_ID) = CmiReductionID_dynamicOffset;
+    }
+    CmiNodeBarrier();
+}
+
+
+static inline CmiReductionID getNextID(CmiReductionID &ctr, CmiReductionID offset) {
+    CmiReductionID old = ctr;
+    CmiReductionID next = old + CmiReductionID_multiplier; 
+    if (next < old) {
+        next = offset; 
+    }
+
+    ctr = next; 
+    return old;
+}
+
+//we need to use atomic operations in SMP mode 
+#if CMK_SMP
+static inline CmiReductionID getNextID(std::atomic<CmiReductionID> &ctr, CmiReductionID offset) {
+    CmiReductionID old = ctr.fetch_add(CmiReductionID_multiplier);
+    CmiReductionID next = old + CmiReductionID_multiplier;
+    if (next < old) {
+        ctr.store(offset, std::memory_order_relaxed);
+    }
+    return old;
+}
+#endif
+
+CmiReductionID CmiGetNextGlobalReductionID() {
+    return getNextID(CpvAccess(_reduction_global_ID), CmiReductionID_globalOffset);
+}
+
+CmiReductionID CmiGetNextRequestReductionID() {
+    return getNextID(CpvAccess(_reduction_request_ID), CmiReductionID_requestOffset);
+}
+
+CmiReductionID CmiGetNextDynamicReductionID() {
+    return getNextID(CpvAccess(_reduction_dynamic_ID), CmiReductionID_dynamicOffset);
+}
+
 // HANDLER TOOLS
 int CmiRegisterHandler(CmiHandler h)
 {
