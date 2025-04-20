@@ -22,6 +22,7 @@ void CmiCallHandler(int handlerId, void *msg);
 void CmiBcastHandler(void *msg);
 void CmiNodeBcastHandler(void *msg);
 void CmiExitHandlerLocal(void *msg);
+void CmiReduceHandler(void *msg);
 
 typedef struct HandlerInfo
 {
@@ -40,21 +41,6 @@ typedef struct State
     int stopFlag;
 
 } CmiState;
-
-typedef struct  
-{
-    int ReductionID; // ID associated with the reduction. Different reductions will correspond to different IDs
-    int numChildren; // number of child PEs/chares in the spanning tree for the reduction
-    int messagesReceived; // used to keep track of how many contributions have been received from child chares
-    bool localContributed; // flag to indicate if the local PE/chare has contributed to the reduction
-    void* localbuffer; // local buffer to store the data
-    void* remotebuffer; // remote buffer to store the data
-    int parent; // parent PE in the spanning tree
-    struct {
-      CmiHandler desthandler; // the handler that will process the final result of the reduction 
-      CmiReduceMergeFn mergefn; // function used to combine partial results from different PEs into a single result 
-    } ops; 
-} CmiReduction; 
 
 // state relevant functionality
 CmiState *CmiGetState(void);
@@ -94,26 +80,51 @@ extern int  CmiSetCPUAffinity(int);
 
 //REDUCTION RELATED FUNCTIONS/DEFINITIONS
 
+#define CMI_REDUCTION_ID_MULTIPLIER 4
+
+typedef struct  
+{
+    int ReductionID; // ID associated with the reduction. Different reductions will correspond to different IDs
+    int numChildren; // number of child PEs/chares in the spanning tree for the reduction
+    int messagesReceived; // used to keep track of how many contributions have been received from child chares
+    bool localContributed; // flag to indicate if the local PE/chare has contributed to the reduction
+    void* localbuffer; // local buffer to store the data
+    int localbufferSize; // size of the local buffer
+    void** remotebuffer; // remote buffer to store the data
+    int parent; // parent PE in the spanning tree
+    struct {
+      CmiHandler desthandler; // the handler that will process the final result of the reduction 
+      CmiReduceMergeFn mergefn; // function used to combine partial results from different PEs into a single result 
+    } ops; 
+} CmiReduction; 
+
 using CmiReductionID = std::uint32_t; //is uint32_t good enough?
 
 // defines starting constants for managing reduction IDs. 
 // we choose these offsets to avoid conflicts with other IDs in the system
-enum : CmiReductionID {
-  CmiReductionID_globalOffset = 0, 
-  CmiReductionID_requestOffset = 1, 
-  CmiReductionID_dynamicOffset = 2, 
-  CmiReductionID_multiplier = 4
-};
+typedef enum {
+  globalReduction = 0, 
+  requestReduction = 1, 
+  dynamicReduction = 2, 
+} CmiReductionCategory;
 
-//declares the variables _reduction_global_ID, _reduction_request_ID, and _reduction_dynamic_ID; 
-CpvStaticDeclare(CmiReductionID, _reduction_global_ID);
-CpvStaticDeclare(CmiReductionID, _reduction_request_ID);
-CpvStaticDeclare(CmiReductionID, _reduction_dynamic_ID);
 
+CpvStaticDeclare(CmiReductionID*, _reduction_IDs);
+CpvStaticDeclare(CmiReduction**, _reduction_info); //holds pointers to arrays of CmiReduction structs(AKA the reduction table for that PE)
 
 void CmiReductionsInit(void);
-CmiReductionID CmiGetNextglobalReductionID(void);
-CmiReductionID CmiGetNextRequestReductionID(void);
-CmiReductionID CmiGetNextDynamicReductionID(void);
+
+// helper function to get the next reduction ID
+CmiReductionID CmiGetNextReductionID(CmiReductionCategory category);
+
+// helper function to get the index into the reduction table for a specific reduction ID
+unsigned CmiGetReductionIndex(CmiReductionID id, CmiReductionCategory category);
+
+static CmiReduction* CmiGetCreateReduction(CmiReductionID id, CmiReductionCategory category);
+static void CmiClearReduction(CmiReductionID id, CmiReductionCategory category);
+void CmiReduce(void *msg, int size, CmiReduceMergeFn mergeFn);
+void CmiGlobalReduce(void* msg, int size, CmiReduceMergeFn mergeFn, CmiReduction* red);
+void CmiSendReduce(CmiReduction *red);
+
 
 #endif

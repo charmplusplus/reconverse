@@ -13,6 +13,10 @@
 #include <thread>
 #include <cinttypes>
 
+static constexpr unsigned int CmiLogMaxReductions = 4u;
+static constexpr int CmiMaxReductions = 1u << CmiLogMaxReductions;
+static constexpr int ReductionSegmentSize = CmiMaxReductions / 3;
+
 // GLOBALS
 int Cmi_argc;
 static char **Cmi_argv;
@@ -82,8 +86,10 @@ void converseRunPe(int rank)
     Cmi_bcastHandler = CmiRegisterHandler(CmiBcastHandler);
     Cmi_nodeBcastHandler = CmiRegisterHandler(CmiNodeBcastHandler);
     Cmi_exitHandler = CmiRegisterHandler(CmiExitHandlerLocal);
-    // Cmi_reduceHandler = CmiRegisterHandler(CmiReduceHandler);
+    Cmi_reduceHandler = CmiRegisterHandler(CmiReduceHandler);
     // Cmi_multicastHandler = CmiRegisterHandler(CmiMulticastHandler);
+
+    CmiReductionsInit();
 
     // barrier to ensure all global structs are initialized
     CmiNodeBarrier();
@@ -487,29 +493,36 @@ void CmiExit(int status) //note: status isn't being used meaningfully
     CmiExitHandler(status);
 }
 
-// REDUCTION TOOLS 
+// REDUCTION TOOLS/FUNCTIONS 
 
 void CmiReductionsInit(void)
 {
-    CpvInitialize(CmiReductionID, _reduction_global_ID);
-    CpvInitialize(CmiReductionID, _reduction_request_ID);
-    CpvInitialize(CmiReductionID, _reduction_dynamic_ID);
+    CpvInitialize(CmiReductionID*, _reduction_IDs);
+    CpvInitialize(CmiReduction**, _reduction_info);
+
+    //allocating memory for reduction info table 
+    auto redinfo = (CmiReduction **)malloc(CmiMaxReductions * sizeof(CmiReduction *));
+    for (int i = 0; i < CmiMaxReductions; ++i)
+        redinfo[i] = nullptr;
+    CpvAccess(_reduction_info) = redinfo;
+
+    //allocating memory for reduction IDS 
+    CpvAccess(_reduction_IDs) = (CmiReductionID*)malloc(3 * sizeof(CmiReductionID));
 
     // rank 0 will set the initial values 
     if (CmiMyRank() == 0) {
-        CpvAccess(_reduction_global_ID)  = CmiReductionID_globalOffset;
-        CpvAccess(_reduction_request_ID) = CmiReductionID_requestOffset;
-        CpvAccess(_reduction_dynamic_ID) = CmiReductionID_dynamicOffset;
+        CpvAccess(_reduction_IDs)[globalReduction]  = globalReduction;
+        CpvAccess(_reduction_IDs)[requestReduction] = requestReduction;
+        CpvAccess(_reduction_IDs)[dynamicReduction] = dynamicReduction;
     }
-    CmiNodeBarrier();
 }
 
 
-static inline CmiReductionID getNextID(CmiReductionID &ctr, CmiReductionID offset) {
+static inline CmiReductionID getNextID(CmiReductionID &ctr, CmiReductionCategory category) {
     CmiReductionID old = ctr;
-    CmiReductionID next = old + CmiReductionID_multiplier; 
+    CmiReductionID next = old + CMI_REDUCTION_ID_MULTIPLIER; 
     if (next < old) {
-        next = offset; 
+        next = static_cast<CmiReductionID>(category); 
     }
 
     ctr = next; 
@@ -518,26 +531,148 @@ static inline CmiReductionID getNextID(CmiReductionID &ctr, CmiReductionID offse
 
 //we need to use atomic operations in SMP mode 
 #if CMK_SMP
-static inline CmiReductionID getNextID(std::atomic<CmiReductionID> &ctr, CmiReductionID offset) {
-    CmiReductionID old = ctr.fetch_add(CmiReductionID_multiplier);
-    CmiReductionID next = old + CmiReductionID_multiplier;
+static inline CmiReductionID getNextID(std::atomic<CmiReductionID> &ctr, CmiReductionCategory category) {
+    CmiReductionID old = ctr.fetch_add(CMI_REDUCTION_ID_MULTIPLIER);
+    CmiReductionID next = old + CMI_REDUCTION_ID_MULTIPLIER;
     if (next < old) {
-        ctr.store(offset, std::memory_order_relaxed);
+        ctr.store(static_cast<CmiReductionID>(category), std::memory_order_relaxed);
     }
     return old;
 }
 #endif
 
-CmiReductionID CmiGetNextGlobalReductionID() {
-    return getNextID(CpvAccess(_reduction_global_ID), CmiReductionID_globalOffset);
+CmiReductionID CmiGetNextReductionID(CmiReductionCategory category) 
+{
+    return getNextID(CpvAccess(_reduction_IDs)[category], category);
 }
 
-CmiReductionID CmiGetNextRequestReductionID() {
-    return getNextID(CpvAccess(_reduction_request_ID), CmiReductionID_requestOffset);
+//parition the reduction table into 3 parts for each reduction category 
+unsigned CmiGetReductionIndex(CmiReductionID id, CmiReductionCategory category) 
+{
+    unsigned index = (id - static_cast<int>(category)) / CMI_REDUCTION_ID_MULTIPLIER; 
+    unsigned base = 0;
+    switch (category) {
+        case globalReduction:
+            break; 
+        case requestReduction:
+            base = ReductionSegmentSize;
+            break; 
+        case dynamicReduction:
+            base = 2 * ReductionSegmentSize; 
+            break; 
+        default:
+            break; 
+    }
+    return base + index; 
 }
 
-CmiReductionID CmiGetNextDynamicReductionID() {
-    return getNextID(CpvAccess(_reduction_dynamic_ID), CmiReductionID_dynamicOffset);
+//do we need to pass in the function ops in this?
+static CmiReduction* CmiGetCreateReduction(CmiReductionID id, CmiReductionCategory category) 
+{
+    //should handle the 2 cases:
+    // 1. a reduction message arrives from a child for ex), but the parent hasn't gotten teh chance to create a reduction struct yet 
+    // 2. a reduction structure already exists adn teh parent has initiaited its own contribution
+    auto& reduction_ref = CpvAccess(_reduction_info)[CmiGetReductionIndex(id, category)];
+    CmiReduction* red = reduction_ref; 
+    //CmiAssert(reduction == NULL);
+    if (reduction_ref == NULL) {
+        CmiReduction* newred = (CmiReduction*)malloc(sizeof(CmiReduction));
+        newred->ReductionID = id; 
+        
+        int mype = CmiMyPe();
+        newred->numChildren = CmiNumSpanTreeChildren(mype);
+        newred->parent = CmiSpanTreeParent(mype);
+
+        newred->messagesReceived = 0; 
+        newred->localContributed = false;
+        newred->localbuffer = NULL;
+        newred->localbufferSize = 0;
+        newred->remotebuffer = (void**)malloc(newred->numChildren * sizeof(void*));
+
+        newred->ops.desthandler = NULL; 
+        newred->ops.mergefn = NULL; 
+
+        red = newred; 
+        reduction_ref = newred; 
+    }
+    
+    return red; 
+}
+
+static void CmiClearReduction(CmiReductionID id, CmiReductionCategory category)
+{
+    auto& reduction_ref = CpvAccess(_reduction_info)[CmiGetReductionIndex(id, category)];
+    auto red = reduction_ref; 
+    reduction_ref = nullptr; 
+    free(red);
+}
+
+//gets only called by the PE that initaites the reduction? 
+void CmiReduce(void *msg, int size, CmiReduceMergeFn mergeFn) {
+    const CmiReductionID id = CmiGetNextReductionID(globalReduction); //hardcoded to globalreudction for now
+    CmiReduction *red = CmiGetCreateReduction(id, globalReduction);
+    CmiGlobalReduce(msg, size, mergeFn, red);
+}
+
+//gets only called by the PE that initaites the reduction? 
+//im confused, what starts the reduction? im assuming it has to be the leaves right?
+void CmiGlobalReduce(void* msg, int size, CmiReduceMergeFn mergeFn, CmiReduction* red) 
+{
+    CmiAssert(red->localContributed == 0);
+    red->localContributed = 1;
+    red->localbuffer = msg;
+    red->localbufferSize = size;
+
+    red->ops.desthandler = (CmiHandler)CmiGetHandlerFunction(msg);
+    red->ops.mergefn = mergeFn;
+    CmiSendReduce(red);
+}
+
+void CmiSendReduce(CmiReduction *red) {
+
+    //if we haven't received all the messages yet, we can't send the reduction up to the parent
+    if (!red->localContributed || red->numChildren != red->messagesReceived) {
+        return;
+    }
+
+    //anything below this assumes that we are either a leaf node or a nonleaf node but have received all our messages
+    void* mergedData = red->localbuffer;
+    int msg_size = red->localbufferSize;
+
+    // if we are an nonleaf node, we need to merge the data from our children
+    if (red->numChildren > 0) {
+        int offset=0;
+        mergedData = (red->ops.mergefn)(&msg_size, red->localbuffer, red->remotebuffer, red->numChildren);
+        for (int i = 0; i < red->numChildren; i++) {
+            CmiFree(red->remotebuffer[i] - offset);
+        }
+    }
+    void* msg = mergedData;
+    //if we have a parent 
+    if (red->parent != -1) {
+        //dont think we need this part anymore because we register this in the beginning
+        //CmiSetHandler(msg, CpvAccess(CmiReductionMessageHandler));
+
+
+        //do we need metadata to store the reduction ID itself? 
+        //because we need to know that a) its a reduction message and b) what reduction ID it is
+        //i forgot how to do this without a swap handler 
+        //CmiSetRedID(msg, red->ReductionID);
+        CmiSyncSendAndFree(red->parent, msg_size, msg);
+    } else {
+        (red->ops.desthandler)(msg);
+    }
+    CmiClearReduction(red->ReductionID, globalReduction);
+}
+
+
+void CmiReduceHandler(void *msg) {
+    CmiReduction* reduction = CmiGetCreateReduction(/*how to get id*/0, globalReduction);
+
+    //how are we ensuring the messages arrive in order again?
+    reduction->remotebuffer[reduction->messagesReceived] = (char*)msg; 
+    reduction->messagesReceived++;
+    CmiSendReduce(reduction);
 }
 
 // HANDLER TOOLS
