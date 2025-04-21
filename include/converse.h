@@ -6,6 +6,7 @@
 #include <cinttypes>
 #include <cstdlib>
 #include <cstdio>
+#include <pthread.h>
 
 using CmiInt1 = std::int8_t;
 using CmiInt2 = std::int16_t;
@@ -277,6 +278,14 @@ int CmiGetArgc(char **argv);
 char **CmiCopyArgs(char **argv);
 int CmiArgGivingUsage(void);
 void CmiDeprecateArgInt(char **argv,const char *arg,const char *desc,const char *warning);
+
+typedef pthread_mutex_t* CmiNodeLock;
+
+CmiNodeLock CmiCreateLock();
+void CmiDestroyLock(CmiNodeLock lock);
+void CmiLock(CmiNodeLock lock);
+void CmiUnlock(CmiNodeLock lock);
+int CmiTryLock(CmiNodeLock lock);
 
 //error checking
 

@@ -1149,3 +1149,31 @@ void CmiDeprecateArgInt(char **argv, const char *arg, const char *desc, const ch
     if (found)
         CmiPrintf("%s\n", warning);
 }
+
+CmiNodeLock CmiCreateLock()
+{
+    CmiNodeLock lock = (CmiNodeLock)malloc(sizeof(pthread_mutex_t));
+    pthread_mutex_init(lock, NULL);
+    return lock;
+}
+
+void CmiDestroyLock(CmiNodeLock lock)
+{
+    pthread_mutex_destroy(lock);
+    free(lock);
+}
+
+void CmiLock(CmiNodeLock lock)
+{
+    pthread_mutex_lock(lock);
+}
+
+void CmiUnlock(CmiNodeLock lock)
+{
+    pthread_mutex_unlock(lock);
+}
+
+int CmiTryLock(CmiNodeLock lock)
+{
+    return pthread_mutex_trylock(lock);
+}
