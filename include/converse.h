@@ -115,10 +115,10 @@ void CmiSyncNodeBroadcastAllAndFree(unsigned int size, void *msg);
 
 //multicast and group
 CmiGroup CmiEstablishGroup(int npes, int *pes);
-void CmiSyncMulticast(CmiGroup grp, unsigned int size, void *msg);
-void CmiSyncMulticastAndFree(CmiGroup grp, unsigned int size, void *msg);
-void CmiSyncListSend(int npes, int *pes, unsigned int size, void *msg);
-void CmiSyncListSendAndFree(int npes, int *pes, unsigned int size, void *msg);
+void CmiSyncMulticast(CmiGroup grp, int size, void *msg);
+void CmiSyncMulticastAndFree(CmiGroup grp, int size, void *msg);
+void CmiSyncListSend(int npes, int *pes, int size, void *msg);
+void CmiSyncListSendAndFree(int npes, int *pes, int size, void *msg);
 
 // Barrier functions
 void CmiNodeBarrier();

@@ -86,8 +86,11 @@ void converseRunPe(int rank)
     Cmi_bcastHandler = CmiRegisterHandler(CmiBcastHandler);
     Cmi_nodeBcastHandler = CmiRegisterHandler(CmiNodeBcastHandler);
     Cmi_exitHandler = CmiRegisterHandler(CmiExitHandlerLocal);
+    CmiGroupHandlerIndex = CmiRegisterHandler(CmiGroupHandler);
     // Cmi_reduceHandler = CmiRegisterHandler(CmiReduceHandler);
     // Cmi_multicastHandler = CmiRegisterHandler(CmiMulticastHandler);
+
+    CmiGroupTable = (GroupDef*) calloc(GROUPTAB_SIZE, sizeof(GroupDef));
 
     // barrier to ensure all global structs are initialized
     CmiNodeBarrier();
@@ -189,8 +192,6 @@ void CmiInitState(int rank)
 
     //group inits
     CmiGroupCounter = 0;
-    CmiGroupHandlerIndex = CmiRegisterHandler(CmiGroupHandler);
-    CmiGroupTable = (GroupDef*) calloc(GROUPTAB_SIZE, sizeof(GroupDef));
 
     // initialize idle state
     CmiSetIdle(false);
@@ -334,7 +335,6 @@ void CmiSyncBroadcast(int size, void *msg)
 #ifdef SPANTREE
     header->collectiveMetaInfo = pe; // used to skip the source
     header->swapHandlerId = header->handlerId;
-    CmiPrintf("Setting swap handler to %d\n", header->swapHandlerId);
     header->handlerId = Cmi_bcastHandler;
     CmiSyncSend(0, size, msg);
 #else
@@ -361,7 +361,6 @@ void CmiSyncBroadcastAll(int size, void *msg)
 #ifdef SPANTREE
     header->collectiveMetaInfo = -1; // don't skip the source
     header->swapHandlerId = header->handlerId;
-    CmiPrintf("Setting swap handler to %d\n", header->swapHandlerId);
 
     header->handlerId = Cmi_bcastHandler;
     CmiSyncSend(0, size, msg);
@@ -376,6 +375,7 @@ void CmiSyncBroadcastAllAndFree(int size, void *msg)
     CmiSyncBroadcastAll(size, msg);
     CmiFree(msg);
 }
+
 void CmiWithinNodeBroadcast(int size, void *msg)
 {
     for (int i = 0; i < Cmi_mynodesize; i++)
@@ -439,11 +439,11 @@ void CmiSyncNodeBroadcastAllAndFree(unsigned int size, void *msg)
 /* Handler for broadcast via the spanning tree. */
 void CmiBcastHandler(void *msg)
 {
-    CmiPrintf("Handling bcast on PE %d\n", CmiMyPe());
     int mype = CmiMyPe();
     int numChildren = CmiNumSpanTreeChildren(mype);
     int children[numChildren];
     CmiSpanTreeChildren(mype, children);
+
 
     CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
 
@@ -456,7 +456,6 @@ void CmiBcastHandler(void *msg)
     // call handler locally (unless I am source of broadcast, and bcast is exclusive)
     if (header->collectiveMetaInfo != mype)
     {
-        CmiPrintf("Calling handler %d on PE %d\n", header->swapHandlerId, CmiMyPe());
         CmiCallHandler(header->swapHandlerId, msg);
     }
 }
@@ -568,8 +567,10 @@ void CmiGroupHandler(void *msg)
     unsigned int hashval, bucket;
     hashval = (def->group.id ^ def->group.pe);
     bucket = hashval % GROUPTAB_SIZE;
-    def->core.next = table[bucket];
-    table[bucket] = def;
+    def->next = table[bucket];
+    GroupDef newdef = (GroupDef)CmiAlloc(sizeof(struct GroupDef_s) + (def->npes * sizeof(int)));
+    memcpy(newdef, def, sizeof(struct GroupDef_s) + (def->npes * sizeof(int)));
+    table[bucket] = newdef;
 }
 
 CmiGroup CmiEstablishGroup(int npes, int *pes)
@@ -584,7 +585,8 @@ CmiGroup CmiEstablishGroup(int npes, int *pes)
     for (i=0; i<npes; i++)
         def->pes[i] = pes[i];
     CmiSetHandler(def, CmiGroupHandlerIndex);
-    CmiSyncBroadcastAllAndFree(len, def);
+    CmiGroupHandler(def);
+    CmiSyncBroadcastAndFree(len, def);
     return grp;
 }
 
@@ -594,7 +596,7 @@ void CmiLookupGroup(CmiGroup grp, int *npes, int **pes)
     GroupDef *table = CmiGroupTable;
     hashval = (grp.id ^ grp.pe);
     bucket = hashval % GROUPTAB_SIZE;
-    for (def=table[bucket]; def; def=def->core.next) {
+    for (def=table[bucket]; def; def=def->next) {
         if ((def->group.id == grp.id)&&(def->group.pe == grp.pe)) {
         *npes = def->npes;
         *pes = def->pes;
@@ -604,26 +606,7 @@ void CmiLookupGroup(CmiGroup grp, int *npes, int **pes)
     *npes = 0; *pes = 0;
 }
 
-void CmiSyncMulticast(CmiGroup grp, unsigned int size, void *msg)
-{
-    int i, *pes;
-    int npes;
-    CmiLookupGroup(grp, &npes, &pes);
-    if (npes == 0) {
-        CmiAbort("CmiSyncMulticast: group not found\n");
-    }
-    for (i=0; i<npes; i++) {
-        CmiSyncSend(pes[i], size, msg);
-    }
-}
-
-void CmiSyncMulticastAndFree(CmiGroup grp, unsigned int size, void *msg)
-{
-    CmiSyncMulticast(grp, size, msg);
-    CmiFree(msg);
-}
-
-void CmiSyncListSend(int npes, const int* pes, int len, char* msg)
+void CmiSyncListSend(int npes, int* pes, int len, void* msg)
 {
     for (int i = 0; i < npes; i++)
     {
@@ -631,9 +614,26 @@ void CmiSyncListSend(int npes, const int* pes, int len, char* msg)
     }
 }
 
-void CmiSyncListSendAndFree(int npes, const int* pes, int len, char* msg)
+void CmiSyncListSendAndFree(int npes, int* pes, int len, void* msg)
 {
     CmiSyncListSend(npes, pes, len, msg);
+    CmiFree(msg);
+}
+
+void CmiSyncMulticast(CmiGroup grp, int size, void *msg)
+{
+    int i, *pes;
+    int npes;
+    CmiLookupGroup(grp, &npes, &pes);
+    if (npes == 0) {
+        CmiAbort("CmiSyncMulticast: group not found\n");
+    }
+    CmiSyncListSend(npes, pes, size, msg);
+}
+
+void CmiSyncMulticastAndFree(CmiGroup grp, int size, void *msg)
+{
+    CmiSyncMulticast(grp, size, msg);
     CmiFree(msg);
 }
 

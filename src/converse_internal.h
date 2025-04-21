@@ -10,10 +10,8 @@
 
 typedef struct GroupDef_s
 {
-  union {
-    char core[CmiMsgHeaderSizeBytes];
-    struct GroupDef_s *next;
-  } core;
+  CmiMessageHeader core;
+  struct GroupDef_s *next;
   CmiGroup group;
   int npes;
   int pes[1];

@@ -3,6 +3,7 @@
 #include <pthread.h>
 
 CpvDeclare(int, exitHandlerId);
+CpvDeclare(CmiGroup, group);
 
 struct Message
 {
@@ -17,7 +18,7 @@ void stop_handler(void *vmsg)
 void ping_handler(void *vmsg)
 {
   printf("Group send received on pe %i\n", CmiMyPe());
-  stop_handler(NULL);
+  CmiExit(0);
 }
 
 CmiStartFn mymain(int argc, char **argv)
@@ -32,20 +33,28 @@ CmiStartFn mymain(int argc, char **argv)
     CmiAbort("Not enough PEs");
   }
 
+  CpvInitialize(CmiGroup, group);
+
   if (CmiMyPe() == 0)
   {
     //make a group
     const int group_size = 3;
     int pes[group_size] = {0, 1, 2};
-    CmiGroup group = CmiEstablishGroup(group_size, pes);
-    
-    // create a message
-    Message *msg = new Message;
-    msg->header.messageSize = sizeof(Message);
-    msg->header.handlerId = handlerId;
-    CmiSyncMulticastAndFree(group, sizeof(Message), msg);
+    CpvAccess(group) = CmiEstablishGroup(group_size, pes);
   }
 
+  CmiNodeBarrier(); // wait for all PEs to finish
+
+  if (CmiMyPe() == 0)
+  {
+     // create a message
+     Message *msg = new Message;
+     msg->header.messageSize = sizeof(Message);
+     msg->header.handlerId = handlerId;
+     CmiSyncMulticastAndFree(CpvAccess(group), sizeof(Message), msg);
+  }
+
+     //CmiExit(0);
   return 0;
 }
 
