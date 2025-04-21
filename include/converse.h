@@ -58,6 +58,9 @@ typedef struct Header
   CmiInt2 swapHandlerId;
 } CmiMessageHeader;
 
+#define CMK_MULTICAST_GROUP_TYPE                struct { unsigned pe, id; }
+typedef CMK_MULTICAST_GROUP_TYPE CmiGroup;
+
 #define CmiMsgHeaderSizeBytes sizeof(CmiMessageHeader)
 
 typedef void (*CmiStartFn)(int argc, char **argv);
@@ -110,10 +113,16 @@ void CmiSyncNodeBroadcastAndFree(unsigned int size, void *msg);
 void CmiSyncNodeBroadcastAll(unsigned int size, void *msg);
 void CmiSyncNodeBroadcastAllAndFree(unsigned int size, void *msg);
 
+//multicast and group
+CmiGroup CmiEstablishGroup(int npes, int *pes);
+void CmiSyncMulticast(CmiGroup grp, int size, void *msg);
+void CmiSyncMulticastAndFree(CmiGroup grp, int size, void *msg);
+void CmiSyncListSend(int npes, int *pes, int size, void *msg);
+void CmiSyncListSendAndFree(int npes, int *pes, int size, void *msg);
+
 // Barrier functions
 void CmiNodeBarrier();
 void CmiNodeAllBarrier();
-
 void CsdExitScheduler();
 
 // Exit functions 

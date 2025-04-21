@@ -11,6 +11,18 @@
 #include "comm_backend/comm_backend_internal.h"
 #include "queue.h"
 
+typedef struct GroupDef_s
+{
+  CmiMessageHeader core;
+  struct GroupDef_s *next;
+  CmiGroup group;
+  int npes;
+  int pes[1];
+}
+*GroupDef;
+
+#define GROUPTAB_SIZE 101
+
 void CmiStartThreads(char **argv);
 void converseRunPe(int rank);
 
@@ -24,6 +36,7 @@ void CmiCallHandler(int handlerId, void *msg);
 void CmiBcastHandler(void *msg);
 void CmiNodeBcastHandler(void *msg);
 void CmiExitHandlerLocal(void *msg);
+void CmiGroupHandler(void *msg);
 
 typedef struct HandlerInfo
 {
