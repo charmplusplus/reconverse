@@ -321,9 +321,6 @@ int CmiTryLock(CmiNodeLock lock);
   } \
 } while(0)
 
-//node lock
-typedef int CmiNodeLock;
-
 //Cld
 
 #define CLD_ANYWHERE (-1)
