@@ -81,7 +81,8 @@ extern int  CmiSetCPUAffinity(int);
 
 #define CMI_REDUCTION_ID_MULTIPLIER 4
 
-using CmiReductionID = decltype(CmiMessageHeader::collectiveMetaInfo); // needs to match header
+using CmiReductionID = decltype(CmiMessageHeader::collectiveMetaInfo);     // needs to match header
+using CmiBroadcastSource = decltype(CmiMessageHeader::collectiveMetaInfo); // needs to match header
 typedef struct  
 {
   CmiReductionID ReductionID; // ID associated with the reduction. Different reductions will correspond to different IDs
@@ -117,5 +118,9 @@ void CmiSendReduce(CmiReduction *red);
 // helpers to get and set red ID in a message
 CmiReductionID CmiGetRedID(void *msg);
 void CmiSetRedID(void *msg, CmiReductionID redID);
+
+// helpers for broadcast
+void CmiSetBcastSource(void *msg, CmiBroadcastSource source);
+CmiBroadcastSource CmiGetBcastSource(void *msg);
 
 #endif

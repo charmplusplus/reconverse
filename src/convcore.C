@@ -327,7 +327,7 @@ void CmiSyncBroadcast(int size, void *msg)
     header->messageSize = size;
 
 #ifdef SPANTREE
-    header->collectiveMetaInfo = pe; // used to skip the source
+    CmiSetBcastSource(pe); // used to skip the source
     header->swapHandlerId = header->handlerId;
     CmiPrintf("Setting swap handler to %d\n", header->swapHandlerId);
     header->handlerId = Cmi_bcastHandler;
@@ -354,7 +354,7 @@ void CmiSyncBroadcastAll(int size, void *msg)
     header->messageSize = size;
 
 #ifdef SPANTREE
-    header->collectiveMetaInfo = -1; // don't skip the source
+    CmiSetBcastSource(-1); // don't skip the source
     header->swapHandlerId = header->handlerId;
     CmiPrintf("Setting swap handler to %d\n", header->swapHandlerId);
 
@@ -388,7 +388,7 @@ void CmiSyncNodeBroadcast(unsigned int size, void *msg)
     header->messageSize = size;
 
 #ifdef SPANTREE
-    header->collectiveMetaInfo = node; // used to skip the source
+    CmiSetBcastSource(node); // used to skip the source
     header->swapHandlerId = header->handlerId;
     header->handlerId = Cmi_nodeBcastHandler;
     CmiSyncNodeSend(0, size, msg);
@@ -414,7 +414,7 @@ void CmiSyncNodeBroadcastAll(unsigned int size, void *msg)
     header->messageSize = size;
 
 #ifdef SPANTREE
-    header->collectiveMetaInfo = -1; // don't skip the source
+    CmiSetBcastSource(-1); // don't skip the source
     header->swapHandlerId = header->handlerId;
     header->handlerId = Cmi_nodeBcastHandler;
     CmiSyncNodeSend(0, size, msg);
@@ -449,7 +449,7 @@ void CmiBcastHandler(void *msg)
     }
 
     // call handler locally (unless I am source of broadcast, and bcast is exclusive)
-    if (header->collectiveMetaInfo != mype)
+    if (CmiGetBcastSource(msg) != mype)
     {
         CmiPrintf("Calling handler %d on PE %d\n", header->swapHandlerId, CmiMyPe());
         CmiCallHandler(header->swapHandlerId, msg);
@@ -472,11 +472,22 @@ void CmiNodeBcastHandler(void *msg)
         CmiSyncNodeSend(children[i], header->messageSize, msg);
     }
 
-    if (header->collectiveMetaInfo != mynode)
+    if (CmiGetBcastSource(msg) != mynode)
     {
         CmiCallHandler(header->swapHandlerId, msg);
     }
+}
 
+void CmiSetBcastSource(void *msg, CmiBroadcastSource source)
+{
+    CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
+    header->collectiveMetaInfo = source;
+}
+
+CmiBroadcastSource CmiGetBcastSource(void *msg)
+{
+    CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
+    return header->collectiveMetaInfo;
 }
 
 // EXIT TOOLS
