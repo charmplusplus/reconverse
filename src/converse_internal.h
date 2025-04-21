@@ -3,9 +3,12 @@
 #ifndef CONVCORE_H
 #define CONVCORE_H
 
+#include <cstring>
+
 #include "converse.h"
 #include "converse_config.h"
 #include "comm_backend/comm_backend.h"
+#include "comm_backend/comm_backend_internal.h"
 #include "queue.h"
 
 typedef struct GroupDef_s
