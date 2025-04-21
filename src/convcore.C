@@ -8,7 +8,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <vector>
-#include <cstring>
 #include <cstdarg>
 #include <thread>
 #include <cinttypes>
@@ -295,6 +294,7 @@ void CmiSyncSendAndFree(int destPE, int messageSize, void *msg)
 {
     CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
 
+    header->destPE = destPE;
     int destNode = CmiNodeOf(destPE);
 
     if (destNode >= Cmi_numnodes || destNode < 0)
@@ -308,7 +308,7 @@ void CmiSyncSendAndFree(int destPE, int messageSize, void *msg)
     }
     else
     {
-        comm_backend::sendAm(destNode, msg, messageSize, CommLocalHandler, AmHandlerPE); // Commlocalhandler will free msg
+        comm_backend::sendAm(destNode, msg, messageSize, comm_backend::MR_NULL, CommLocalHandler, AmHandlerPE); // Commlocalhandler will free msg
     }
 }
 
@@ -539,7 +539,7 @@ void CmiSyncNodeSendAndFree(unsigned int destNode, unsigned int size, void *msg)
     }
     else
     {
-        comm_backend::sendAm(destNode, msg, size, CommLocalHandler, AmHandlerNode);
+        comm_backend::sendAm(destNode, msg, size, comm_backend::MR_NULL, CommLocalHandler, AmHandlerNode);
     }
 }
 
