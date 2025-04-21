@@ -16,7 +16,6 @@ void converseRunPe(int rank);
 
 typedef void (*CmiHandler)(void *msg);
 typedef void (*CmiHandlerEx)(void *msg, void *userPtr); // ignore for now
-typedef void * (*CmiReduceMergeFn)(int*, void*, void**, int);
 
 void CmiCallHandler(int handlerId, void *msg);
 void CmiBcastHandler(void *msg);
@@ -120,10 +119,9 @@ CmiReductionID CmiGetNextReductionID(CmiReductionCategory category);
 // helper function to get the index into the reduction table for a specific reduction ID
 unsigned CmiGetReductionIndex(CmiReductionID id, CmiReductionCategory category);
 
-static CmiReduction* CmiGetCreateReduction(CmiReductionID id, CmiReductionCategory category);
+static CmiReduction *CmiGetCreateReduction(CmiReductionID id, CmiReductionCategory category);
 static void CmiClearReduction(CmiReductionID id, CmiReductionCategory category);
-void CmiReduce(void *msg, int size, CmiReduceMergeFn mergeFn);
-void CmiGlobalReduce(void* msg, int size, CmiReduceMergeFn mergeFn, CmiReduction* red);
+void CmiGlobalReduce(void *msg, int size, CmiReduceMergeFn mergeFn, CmiReduction *red);
 void CmiSendReduce(CmiReduction *red);
 
 // helpers to get and set red ID in a message

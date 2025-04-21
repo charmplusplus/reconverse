@@ -115,6 +115,10 @@ void CmiNodeAllBarrier();
 
 void CsdExitScheduler();
 
+// Reduction functions
+typedef void *(*CmiReduceMergeFn)(int *, void *, void **, int);
+void CmiReduce(void *msg, int size, CmiReduceMergeFn mergeFn);
+
 // Exit functions 
 void CmiExit(int status);
 void CmiAbort(const char *format, ...);
