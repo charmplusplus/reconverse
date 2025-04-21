@@ -6,6 +6,7 @@
 #include <cinttypes>
 #include <cstdlib>
 #include <cstdio>
+#include <pthread.h>
 
 using CmiInt1 = std::int8_t;
 using CmiInt2 = std::int16_t;
