@@ -126,5 +126,8 @@ void CmiReduce(void *msg, int size, CmiReduceMergeFn mergeFn);
 void CmiGlobalReduce(void* msg, int size, CmiReduceMergeFn mergeFn, CmiReduction* red);
 void CmiSendReduce(CmiReduction *red);
 
+// helpers to get and set red ID in a message
+CmiUint4 CmiGetRedID(void *msg);
+void CmiSetRedID(void *msg, CmiUint4 redID);
 
 #endif
