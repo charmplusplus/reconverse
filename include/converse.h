@@ -89,7 +89,7 @@ int CmiNodeFirst(int node);
 // handler things
 void CmiSetHandler(void *msg, int handlerId);
 int CmiGetHandler(void *msg);
-CmiHandler CmiGetHandlerFunction(int n);
+CmiHandler CmiGetHandlerFunction(void *msg);
 void CmiHandleMessage(void *msg);
 
 // message sending
