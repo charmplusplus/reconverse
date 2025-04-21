@@ -676,14 +676,14 @@ void CmiReduceHandler(void *msg) {
 }
 
 // extract reduction ID from message
-CmiUint4 CmiGetRedID(void *msg)
+CmiReductionID CmiGetRedID(void *msg)
 {
     CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
     return header->collectiveMetaInfo;
 }
 
 // set reduction ID for a reduction message
-void CmiSetRedID(void *msg, CmiUint4 redID)
+void CmiSetRedID(void *msg, CmiReductionID redID)
 {
     CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
     header->collectiveMetaInfo = redID;

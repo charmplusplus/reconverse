@@ -81,23 +81,13 @@ extern int  CmiSetCPUAffinity(int);
 
 #define CMI_REDUCTION_ID_MULTIPLIER 4
 
+using CmiReductionID = decltype(CmiMessageHeader::collectiveMetaInfo); // needs to match header
 typedef struct  
 {
-    int ReductionID; // ID associated with the reduction. Different reductions will correspond to different IDs
-    int numChildren; // number of child PEs/chares in the spanning tree for the reduction
-    int messagesReceived; // used to keep track of how many contributions have been received from child chares
-    bool localContributed; // flag to indicate if the local PE/chare has contributed to the reduction
-    void* localbuffer; // local buffer to store the data
-    int localbufferSize; // size of the local buffer
-    void** remotebuffer; // remote buffer to store the data
-    int parent; // parent PE in the spanning tree
-    struct {
-      CmiHandler desthandler; // the handler that will process the final result of the reduction 
+  CmiReductionID ReductionID; // ID associated with the reduction. Different reductions will correspond to different IDs
       CmiReduceMergeFn mergefn; // function used to combine partial results from different PEs into a single result 
     } ops; 
 } CmiReduction; 
-
-using CmiReductionID = std::uint32_t; //is uint32_t good enough?
 
 // defines starting constants for managing reduction IDs. 
 // we choose these offsets to avoid conflicts with other IDs in the system
@@ -125,7 +115,7 @@ void CmiGlobalReduce(void *msg, int size, CmiReduceMergeFn mergeFn, CmiReduction
 void CmiSendReduce(CmiReduction *red);
 
 // helpers to get and set red ID in a message
-CmiUint4 CmiGetRedID(void *msg);
-void CmiSetRedID(void *msg, CmiUint4 redID);
+CmiReductionID CmiGetRedID(void *msg);
+void CmiSetRedID(void *msg, CmiReductionID redID);
 
 #endif
