@@ -295,6 +295,7 @@ void CmiSyncSendAndFree(int destPE, int messageSize, void *msg)
 {
     CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
 
+    header->destPE = destPE;
     int destNode = CmiNodeOf(destPE);
 
     if (destNode >= Cmi_numnodes || destNode < 0)
