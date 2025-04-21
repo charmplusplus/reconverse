@@ -34,6 +34,10 @@ thread_local int Cmi_myrank;
 thread_local CmiState *Cmi_state;
 thread_local bool idle_condition;
 thread_local double idle_time;
+thread_local int CmiGroupCounter;
+thread_local int CmiGroupHandlerIndex;
+thread_local GroupDef *CmiGroupTable;
+
 
 // Special operation handlers (TODO: should these be special values instead like the exit handler)
 int Cmi_bcastHandler;
@@ -182,6 +186,13 @@ void CmiInitState(int rank)
     Cmi_state->stopFlag = 0;
 
     Cmi_myrank = rank;
+
+    //group inits
+    CmiGroupCounter = 0;
+    CmiGroupHandlerIndex = CmiRegisterHandler(CmiGroupHandler);
+    CmiGroupTable = (GroupDef*) calloc(GROUPTAB_SIZE, sizeof(GroupDef));
+
+    // initialize idle state
     CmiSetIdle(false);
     CmiSetIdleTime(0.0);
 
@@ -548,6 +559,82 @@ void CmiSyncNodeSend(unsigned int destNode, unsigned int size, void *msg)
     char *copymsg = (char *)CmiAlloc(size);
     std::memcpy(copymsg, msg, size); // optionally avoid memcpy and block instead
     CmiSyncNodeSendAndFree(destNode, size, copymsg);
+}
+
+void CmiGroupHandler(void *msg)
+{
+    GroupDef def = (GroupDef)msg;
+    GroupDef *table = CmiGroupTable;
+    unsigned int hashval, bucket;
+    hashval = (def->group.id ^ def->group.pe);
+    bucket = hashval % GROUPTAB_SIZE;
+    def->core.next = table[bucket];
+    table[bucket] = def;
+}
+
+CmiGroup CmiEstablishGroup(int npes, int *pes)
+{
+    CmiGroup grp; GroupDef def; int len, i;
+    grp.id = CmiGroupCounter++;
+    grp.pe = CmiMyPe();
+    len = sizeof(struct GroupDef_s)+(npes*sizeof(int));
+    def = (GroupDef)CmiAlloc(len);
+    def->group = grp;
+    def->npes = npes;
+    for (i=0; i<npes; i++)
+        def->pes[i] = pes[i];
+    CmiSetHandler(def, CmiGroupHandlerIndex);
+    CmiSyncBroadcastAllAndFree(len, def);
+    return grp;
+}
+
+void CmiLookupGroup(CmiGroup grp, int *npes, int **pes)
+{
+    unsigned int hashval, bucket;  GroupDef def;
+    GroupDef *table = CmiGroupTable;
+    hashval = (grp.id ^ grp.pe);
+    bucket = hashval % GROUPTAB_SIZE;
+    for (def=table[bucket]; def; def=def->core.next) {
+        if ((def->group.id == grp.id)&&(def->group.pe == grp.pe)) {
+        *npes = def->npes;
+        *pes = def->pes;
+        return;
+        }
+    }
+    *npes = 0; *pes = 0;
+}
+
+void CmiSyncMulticast(CmiGroup grp, unsigned int size, void *msg)
+{
+    int i, *pes;
+    int npes;
+    CmiLookupGroup(grp, &npes, &pes);
+    if (npes == 0) {
+        CmiAbort("CmiSyncMulticast: group not found\n");
+    }
+    for (i=0; i<npes; i++) {
+        CmiSyncSend(pes[i], size, msg);
+    }
+}
+
+void CmiSyncMulticastAndFree(CmiGroup grp, unsigned int size, void *msg)
+{
+    CmiSyncMulticast(grp, size, msg);
+    CmiFree(msg);
+}
+
+void CmiSyncListSend(int npes, const int* pes, int len, char* msg)
+{
+    for (int i = 0; i < npes; i++)
+    {
+        CmiSyncSend(pes[i], len, msg);
+    }
+}
+
+void CmiSyncListSendAndFree(int npes, const int* pes, int len, char* msg)
+{
+    CmiSyncListSend(npes, pes, len, msg);
+    CmiFree(msg);
 }
 
 void CmiSetHandler(void *msg, int handlerId)
