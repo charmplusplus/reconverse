@@ -22,7 +22,7 @@ void ping_handler(void *vmsg)
 
 CmiStartFn mymain(int argc, char **argv)
 {
-  printf("My PE is %d\n", CmiMyRank());
+  printf("My PE is %d\n", CmiMyPe());
 
   int handlerId = CmiRegisterHandler(ping_handler);
 
