@@ -101,27 +101,27 @@ typedef struct
 
 // defines starting constants for managing reduction IDs. 
 // we choose these offsets to avoid conflicts with other IDs in the system
-typedef enum {
-  globalReduction = 0, 
-  requestReduction = 1, 
-  dynamicReduction = 2, 
-} CmiReductionCategory;
+// typedef enum {
+//   globalReduction = 0, 
+//   requestReduction = 1, 
+//   dynamicReduction = 2, 
+// } CmiReductionCategory;
+//CpvStaticDeclare(CmiReductionID*, _reduction_IDs);
 
+CpvStaticDeclare(CmiReductionID, _reduction_counter);
+CpvStaticDeclare(CmiReduction**, _reduction_info); //an array of pointers to reduction structs 
 
-CpvStaticDeclare(CmiReductionID*, _reduction_IDs);
-CpvStaticDeclare(CmiReduction**, _reduction_info); //holds pointers to arrays of CmiReduction structs(AKA the reduction table for that PE)
-
-void CmiReductionsInit(void);
+void CmiReductionsInit(void); 
 
 // helper function to get the next reduction ID
-CmiReductionID CmiGetNextReductionID(CmiReductionCategory category);
+CmiReductionID CmiGetNextReductionID();
 
 // helper function to get the index into the reduction table for a specific reduction ID
-unsigned CmiGetReductionIndex(CmiReductionID id, CmiReductionCategory category);
+unsigned CmiGetReductionIndex(CmiReductionID id);
 
-static CmiReduction *CmiGetCreateReduction(CmiReductionID id, CmiReductionCategory category);
-static void CmiClearReduction(CmiReductionID id, CmiReductionCategory category);
-void CmiGlobalReduce(void *msg, int size, CmiReduceMergeFn mergeFn, CmiReduction *red);
+static CmiReduction *CmiGetCreateReduction(CmiReductionID id);
+static void CmiClearReduction(CmiReductionID id);
+void CmiInternalReduce(void *msg, int size, CmiReduceMergeFn mergeFn, CmiReduction *red);
 void CmiSendReduce(CmiReduction *red);
 
 // helpers to get and set red ID in a message
