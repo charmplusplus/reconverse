@@ -8,7 +8,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <vector>
-#include <cstring>
 #include <cstdarg>
 #include <thread>
 #include <cinttypes>
@@ -36,6 +35,10 @@ thread_local int Cmi_myrank;
 thread_local CmiState *Cmi_state;
 thread_local bool idle_condition;
 thread_local double idle_time;
+thread_local int CmiGroupCounter;
+thread_local int CmiGroupHandlerIndex;
+thread_local GroupDef *CmiGroupTable;
+
 
 // Special operation handlers (TODO: should these be special values instead like the exit handler)
 int Cmi_bcastHandler;
@@ -86,8 +89,11 @@ void converseRunPe(int rank)
     Cmi_bcastHandler = CmiRegisterHandler(CmiBcastHandler);
     Cmi_nodeBcastHandler = CmiRegisterHandler(CmiNodeBcastHandler);
     Cmi_exitHandler = CmiRegisterHandler(CmiExitHandlerLocal);
+    CmiGroupHandlerIndex = CmiRegisterHandler(CmiGroupHandler);
     // Cmi_reduceHandler = CmiRegisterHandler(CmiReduceHandler);
     // Cmi_multicastHandler = CmiRegisterHandler(CmiMulticastHandler);
+
+    CmiGroupTable = (GroupDef*) calloc(GROUPTAB_SIZE, sizeof(GroupDef));
 
     // barrier to ensure all global structs are initialized
     CmiNodeBarrier();
@@ -186,6 +192,11 @@ void CmiInitState(int rank)
     Cmi_state->stopFlag = 0;
 
     Cmi_myrank = rank;
+
+    //group inits
+    CmiGroupCounter = 0;
+
+    // initialize idle state
     CmiSetIdle(false);
     CmiSetIdleTime(0.0);
 
@@ -312,26 +323,11 @@ void CmiSyncSend(int destPE, int messageSize, void *msg)
     CmiSyncSendAndFree(destPE, messageSize, copymsg);
 }
 
-void CmiSyncListSend(int npes, const int *pes, int len, void *msg)
-{
-    for (int i = 0; i < npes; i++)
-    {
-        CmiSyncSend(pes[i], len, msg);
-    }
-}
-
-void CmiSyncListSendAndFree(int npes, const int *pes, int len, void *msg)
-{
-    for (int i = 0; i < npes; i++)
-    {
-        CmiSyncSendAndFree(pes[i], len, msg);
-    }
-}
-
 void CmiSyncSendAndFree(int destPE, int messageSize, void *msg)
 {
     CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
 
+    header->destPE = destPE;
     int destNode = CmiNodeOf(destPE);
 
     if (destNode >= Cmi_numnodes || destNode < 0)
@@ -345,7 +341,7 @@ void CmiSyncSendAndFree(int destPE, int messageSize, void *msg)
     }
     else
     {
-        comm_backend::sendAm(destNode, msg, messageSize, CommLocalHandler, AmHandlerPE); // Commlocalhandler will free msg
+        comm_backend::sendAm(destNode, msg, messageSize, comm_backend::MR_NULL, CommLocalHandler, AmHandlerPE); // Commlocalhandler will free msg
     }
 }
 
@@ -360,7 +356,6 @@ void CmiSyncBroadcast(int size, void *msg)
 #ifdef SPANTREE
     header->collectiveMetaInfo = pe; // used to skip the source
     header->swapHandlerId = header->handlerId;
-    CmiPrintf("Setting swap handler to %d\n", header->swapHandlerId);
     header->handlerId = Cmi_bcastHandler;
     CmiSyncSend(0, size, msg);
 #else
@@ -387,7 +382,6 @@ void CmiSyncBroadcastAll(int size, void *msg)
 #ifdef SPANTREE
     header->collectiveMetaInfo = -1; // don't skip the source
     header->swapHandlerId = header->handlerId;
-    CmiPrintf("Setting swap handler to %d\n", header->swapHandlerId);
 
     header->handlerId = Cmi_bcastHandler;
     CmiSyncSend(0, size, msg);
@@ -402,6 +396,7 @@ void CmiSyncBroadcastAllAndFree(int size, void *msg)
     CmiSyncBroadcastAll(size, msg);
     CmiFree(msg);
 }
+
 void CmiWithinNodeBroadcast(int size, void *msg)
 {
     for (int i = 0; i < Cmi_mynodesize; i++)
@@ -465,11 +460,11 @@ void CmiSyncNodeBroadcastAllAndFree(unsigned int size, void *msg)
 /* Handler for broadcast via the spanning tree. */
 void CmiBcastHandler(void *msg)
 {
-    CmiPrintf("Handling bcast on PE %d\n", CmiMyPe());
     int mype = CmiMyPe();
     int numChildren = CmiNumSpanTreeChildren(mype);
     int children[numChildren];
     CmiSpanTreeChildren(mype, children);
+
 
     CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
 
@@ -482,7 +477,6 @@ void CmiBcastHandler(void *msg)
     // call handler locally (unless I am source of broadcast, and bcast is exclusive)
     if (header->collectiveMetaInfo != mype)
     {
-        CmiPrintf("Calling handler %d on PE %d\n", header->swapHandlerId, CmiMyPe());
         CmiCallHandler(header->swapHandlerId, msg);
     }
 }
@@ -576,7 +570,7 @@ void CmiSyncNodeSendAndFree(unsigned int destNode, unsigned int size, void *msg)
     }
     else
     {
-        comm_backend::sendAm(destNode, msg, size, CommLocalHandler, AmHandlerNode);
+        comm_backend::sendAm(destNode, msg, size, comm_backend::MR_NULL, CommLocalHandler, AmHandlerNode);
     }
 }
 
@@ -592,37 +586,134 @@ void CmiSyncSendFn(int destPE, int messageSize, char *msg)
 {
   CmiSyncSend(destPE, messageSize, (void*) msg);
 }
+
 void CmiFreeSendFn(int destPE, int messageSize, char *msg)
 {
   CmiSyncSendAndFree(destPE, messageSize, (void*) msg);
 }
-void CmiSyncListSendFn(int npes, const int *pes, int len, char *msg)
-{
-  CmiSyncListSend(npes, pes, len, (void*) msg);
-}
-void CmiFreeListSendFn(int npes, const int *pes, int len, char *msg)
-{
-  CmiSyncListSendAndFree(npes, pes, len, (void*) msg);
-}
+
 void CmiSyncBroadcastFn(int size, char *msg)
 {
   CmiSyncBroadcast(size, (void*) msg);
 }
+
 void CmiSyncBroadcastAllFn(int size, char *msg)
 {
   CmiSyncBroadcastAll(size, (void*) msg);
 }
+
 void CmiFreeBroadcastFn(int size, char *msg)
 {
   CmiSyncBroadcastAndFree(size, (void*) msg);
 }
+
 void CmiFreeNodeSendFn(int destNode, int size, char *msg)
 {
   CmiSyncNodeSendAndFree(destNode, size, (void*) msg);
 }
+
 void CmiFreeBroadcastAllFn(int size, char *msg)
 {
   CmiSyncBroadcastAllAndFree(size, (void*) msg);
+}
+
+void CmiGroupHandler(void *msg)
+{
+    GroupDef def = (GroupDef)msg;
+    GroupDef *table = CmiGroupTable;
+    unsigned int hashval, bucket;
+    hashval = (def->group.id ^ def->group.pe);
+    bucket = hashval % GROUPTAB_SIZE;
+    def->next = table[bucket];
+    GroupDef newdef = (GroupDef)CmiAlloc(sizeof(struct GroupDef_s) + (def->npes * sizeof(int)));
+    memcpy(newdef, def, sizeof(struct GroupDef_s) + (def->npes * sizeof(int)));
+    table[bucket] = newdef;
+}
+
+CmiGroup CmiEstablishGroup(int npes, int *pes)
+{
+    CmiGroup grp; GroupDef def; int len, i;
+    grp.id = CmiGroupCounter++;
+    grp.pe = CmiMyPe();
+    len = sizeof(struct GroupDef_s)+(npes*sizeof(int));
+    def = (GroupDef)CmiAlloc(len);
+    def->group = grp;
+    def->npes = npes;
+    for (i=0; i<npes; i++)
+        def->pes[i] = pes[i];
+    CmiSetHandler(def, CmiGroupHandlerIndex);
+    CmiGroupHandler(def);
+    CmiSyncBroadcastAndFree(len, def);
+    return grp;
+}
+
+void CmiLookupGroup(CmiGroup grp, int *npes, int **pes)
+{
+    unsigned int hashval, bucket;  GroupDef def;
+    GroupDef *table = CmiGroupTable;
+    hashval = (grp.id ^ grp.pe);
+    bucket = hashval % GROUPTAB_SIZE;
+    for (def=table[bucket]; def; def=def->next) {
+        if ((def->group.id == grp.id)&&(def->group.pe == grp.pe)) {
+        *npes = def->npes;
+        *pes = def->pes;
+        return;
+        }
+    }
+    *npes = 0; *pes = 0;
+}
+
+void CmiSyncListSend(int npes, const int *pes, int len, void *msg)
+{
+    for (int i = 0; i < npes; i++)
+    {
+        CmiSyncSend(pes[i], len, msg);
+    }
+}
+
+void CmiSyncListSendFn(int npes, const int *pes, int len, char *msg)
+{
+    CmiSyncListSend(npes, pes, len, (void*) msg);
+}
+
+void CmiSyncListSendAndFree(int npes, const int *pes, int len, void *msg)
+{
+    for (int i = 0; i < npes; i++)
+    {
+        CmiSyncSendAndFree(pes[i], len, msg);
+    }
+}
+
+void CmiFreeListSendFn(int npes, const int *pes, int len, char *msg)
+{
+    CmiSyncListSendAndFree(npes, pes, len, (void*) msg);
+}
+
+void CmiSyncMulticast(CmiGroup grp, int size, void *msg)
+{
+    int i, *pes;
+    int npes;
+    CmiLookupGroup(grp, &npes, &pes);
+    if (npes == 0) {
+        CmiAbort("CmiSyncMulticast: group not found\n");
+    }
+    CmiSyncListSend(npes, (const int*) pes, size, msg);
+}
+
+void CmiSyncMulticastAndFree(CmiGroup grp, int size, void *msg)
+{
+    CmiSyncMulticast(grp, size, msg);
+    CmiFree(msg);
+}
+
+void CmiSyncMulticastFn(CmiGroup grp, int size, char *msg)
+{
+    CmiSyncMulticast(grp, size, (void*) msg);
+}
+
+void CmiFreeMulticastFn(CmiGroup grp, int size, char *msg)
+{
+    CmiSyncMulticastAndFree(grp, size, (void*) msg);
 }
 
 void CmiSetHandler(void *msg, int handlerId)

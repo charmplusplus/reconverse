@@ -29,9 +29,7 @@ CmiStartFn mymain(int argc, char **argv)
     Message *msg = (Message *)CmiAlloc(sizeof(Message));
     msg->header.handlerId = handlerId;
     msg->header.messageSize = sizeof(Message);
-    msg->header.destPE = 1;
 
-    // TODO: why is this info passed within message an also separately
     int sendToPE = 1;
 
     // Send from my pe-i on node-0 to q+i on node-1
@@ -45,9 +43,7 @@ CmiStartFn mymain(int argc, char **argv)
     Message *msg = new Message;
     msg->header.handlerId = handlerId;
     msg->header.messageSize = sizeof(Message);
-    msg->header.destPE = 1;
 
-    // TODO: why is this info passed within message an also separately
     int sendToPE = 0;
 
     // Send from my pe-i on node-0 to q+i on node-1

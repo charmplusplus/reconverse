@@ -165,10 +165,16 @@ void CmiSyncNodeBroadcastAndFree(unsigned int size, void *msg);
 void CmiSyncNodeBroadcastAll(unsigned int size, void *msg);
 void CmiSyncNodeBroadcastAllAndFree(unsigned int size, void *msg);
 
+//multicast and group
+CmiGroup CmiEstablishGroup(int npes, int *pes);
+void CmiSyncMulticast(CmiGroup grp, int size, void *msg);
+void CmiSyncMulticastAndFree(CmiGroup grp, int size, void *msg);
+void CmiSyncMulticastFn(CmiGroup grp, int size, char *msg);
+void CmiFreeMulticastFn(CmiGroup grp, int size, char *msg);
+
 // Barrier functions
 void CmiNodeBarrier();
 void CmiNodeAllBarrier();
-
 void CsdExitScheduler();
 
 // Exit functions 
@@ -280,6 +286,7 @@ int CmiArgGivingUsage(void);
 void CmiDeprecateArgInt(char **argv,const char *arg,const char *desc,const char *warning);
 
 typedef pthread_mutex_t* CmiNodeLock;
+typedef CmiNodeLock CmiImmediateLockType;
 
 CmiNodeLock CmiCreateLock();
 void CmiDestroyLock(CmiNodeLock lock);
