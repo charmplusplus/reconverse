@@ -87,7 +87,7 @@ void converseRunPe(int rank)
     // register special operation handlers
     Cmi_bcastHandler = CmiRegisterHandler(CmiBcastHandler);
     Cmi_nodeBcastHandler = CmiRegisterHandler(CmiNodeBcastHandler);
-    Cmi_exitHandler = CmiRegisterHandler(CmiExitHandlerLocal);
+    Cmi_exitHandler = CmiRegisterHandler(CmiExitHandler);
     CmiGroupHandlerIndex = CmiRegisterHandler(CmiGroupHandler);
     Cmi_reduceHandler = CmiRegisterHandler(CmiReduceHandler);
     // Cmi_multicastHandler = CmiRegisterHandler(CmiMulticastHandler);
@@ -499,7 +499,7 @@ CmiBroadcastSource CmiGetBcastSource(void *msg)
 
 // EXIT TOOLS
 
-void CmiExitHandler(int status)
+void CmiExitHelper(int status)
 {
     CmiMessageHeader *exitMsg = new CmiMessageHeader(); // might need to allocate
     exitMsg->handlerId = Cmi_exitHandler;
@@ -508,7 +508,7 @@ void CmiExitHandler(int status)
 
 void CmiExit(int status) // note: status isn't being used meaningfully
 {
-    CmiExitHandler(status);
+    CmiExitHelper(status);
 }
 
 // REDUCTION TOOLS/FUNCTIONS
@@ -722,13 +722,20 @@ void CmiNodeAllBarrier()
     nodeBarrier.wait();
 }
 
+// status default is 0
 void CsdExitScheduler()
 {
     CmiGetState()->stopFlag = 1;
 }
 
-void CmiExitHandlerLocal(void *msg)
+void CmiExitHandler(void *msg)
 {
+    CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
+    int status = header->collectiveMetaInfo;
+
+    if (status == 1)
+        abort();
+
     CsdExitScheduler();
 }
 
@@ -918,7 +925,9 @@ void CmiAbort(const char *format, ...)
     vsnprintf(newmsg, sizeof(newmsg), format, args);
     va_end(args);
     CmiAbortHelper("Called CmiAbort", newmsg, NULL, 1, 0);
-    CmiExitHandler(1);
+
+    CmiExitHelper(1);
+    abort();
 }
 
 void __CmiEnforceMsgHelper(const char *expr, const char *fileName,
