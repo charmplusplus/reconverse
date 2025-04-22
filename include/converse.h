@@ -6,6 +6,7 @@
 #include <cinttypes>
 #include <cstdlib>
 #include <cstdio>
+#include <pthread.h>
 
 using CmiInt1 = std::int8_t;
 using CmiInt2 = std::int16_t;
@@ -56,6 +57,9 @@ typedef struct Header
   // used for special ops (bcast, reduction, multicast) when the handler field is repurposed
   CmiInt2 swapHandlerId;
 } CmiMessageHeader;
+
+#define CMK_MULTICAST_GROUP_TYPE                struct { unsigned pe, id; }
+typedef CMK_MULTICAST_GROUP_TYPE CmiGroup;
 
 #define CmiMsgHeaderSizeBytes sizeof(CmiMessageHeader)
 
@@ -109,10 +113,16 @@ void CmiSyncNodeBroadcastAndFree(unsigned int size, void *msg);
 void CmiSyncNodeBroadcastAll(unsigned int size, void *msg);
 void CmiSyncNodeBroadcastAllAndFree(unsigned int size, void *msg);
 
+//multicast and group
+CmiGroup CmiEstablishGroup(int npes, int *pes);
+void CmiSyncMulticast(CmiGroup grp, int size, void *msg);
+void CmiSyncMulticastAndFree(CmiGroup grp, int size, void *msg);
+void CmiSyncListSend(int npes, int *pes, int size, void *msg);
+void CmiSyncListSendAndFree(int npes, int *pes, int size, void *msg);
+
 // Barrier functions
 void CmiNodeBarrier();
 void CmiNodeAllBarrier();
-
 void CsdExitScheduler();
 
 // Reduction functions
@@ -220,6 +230,14 @@ int CmiGetArgc(char **argv);
 char **CmiCopyArgs(char **argv);
 int CmiArgGivingUsage(void);
 void CmiDeprecateArgInt(char **argv,const char *arg,const char *desc,const char *warning);
+
+typedef pthread_mutex_t* CmiNodeLock;
+
+CmiNodeLock CmiCreateLock();
+void CmiDestroyLock(CmiNodeLock lock);
+void CmiLock(CmiNodeLock lock);
+void CmiUnlock(CmiNodeLock lock);
+int CmiTryLock(CmiNodeLock lock);
 
 //error checking
 
