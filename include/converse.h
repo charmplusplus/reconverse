@@ -49,9 +49,9 @@ typedef struct Header
   CmiInt2 handlerId;
   CmiUint4 destPE; // global ID of destination PE
 
-    int messageSize;
+  int messageSize;
 
-  // used for bcast (bcast source pe/node), multicast (group id)
+  // used for bcast (bcast source pe/node), multicast (group id), reductions (reduction id)
   CmiUint4 collectiveMetaInfo;
 
   // used for special ops (bcast, reduction, multicast) when the handler field is repurposed
@@ -93,7 +93,7 @@ int CmiNodeFirst(int node);
 // handler things
 void CmiSetHandler(void *msg, int handlerId);
 int CmiGetHandler(void *msg);
-CmiHandler CmiGetHandlerFunction(int n);
+CmiHandler CmiGetHandlerFunction(void *msg);
 void CmiHandleMessage(void *msg);
 
 // message sending
@@ -124,6 +124,10 @@ void CmiSyncListSendAndFree(int npes, int *pes, int size, void *msg);
 void CmiNodeBarrier();
 void CmiNodeAllBarrier();
 void CsdExitScheduler();
+
+// Reduction functions
+typedef void *(*CmiReduceMergeFn)(int *, void *, void **, int);
+void CmiReduce(void *msg, int size, CmiReduceMergeFn mergeFn);
 
 // Exit functions 
 void CmiExit(int status);
