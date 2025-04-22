@@ -117,10 +117,9 @@ void ping_init()
   int totalpes = CmiNumPes(); //p=num_pes
   int npes_as_sender = totalpes/2; //q=p/2
   if (CmiNumPes()%2 !=0) {
-    printf("note: this test requires at multiple of 2 pes, skipping test.\n");
-    printf("exiting.\n");
-    CsdExitScheduler();
-    CmiExit(1);
+    //printf("note: this test requires at multiple of 2 pes, skipping test.\n");
+    //printf("exiting.\n");
+    CmiAbort("note: this test requires at multiple of 2 pes, exiting\n");
 //    Cpm_ping_stop(CpmSend(CpmALL));
   } else {
     if(CmiMyPe() < npes_as_sender)
