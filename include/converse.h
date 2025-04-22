@@ -82,13 +82,19 @@ typedef struct Header
   CmiInt2 handlerId;
   CmiUint4 destPE; // global ID of destination PE
   int messageSize;
-  // used for bcast (bcast source pe/node), multicast (group id)
+  // used for bcast (bcast source pe/node), multicast (group id), reductions (reduction id)
   CmiUint4 collectiveMetaInfo;
   // used for special ops (bcast, reduction, multicast) when the handler field is repurposed
   CmiInt2 swapHandlerId;
   bool nokeep;
   CmiUint1 zcMsgType; // 0: normal, 1: zero-copy
 } CmiMessageHeader;
+
+typedef struct {
+  int parent;
+  int child_count;
+  int *children;
+} CmiSpanningTreeInfo;
 
 #define CMK_MULTICAST_GROUP_TYPE                struct { unsigned pe, id; }
 typedef CMK_MULTICAST_GROUP_TYPE CmiGroup;
@@ -130,7 +136,7 @@ void CmiSetHandler(void *msg, int handlerId);
 void CmiSetXHandler(void *msg, int xhandlerId);
 int CmiGetHandler(void *msg);
 int CmiGetXHandler(void *msg);
-CmiHandler CmiGetHandlerFunction(int n);
+CmiHandler CmiGetHandlerFunction(void *msg);
 void CmiHandleMessage(void *msg);
 
 // message sending
@@ -176,6 +182,10 @@ void CmiFreeMulticastFn(CmiGroup grp, int size, char *msg);
 void CmiNodeBarrier();
 void CmiNodeAllBarrier();
 void CsdExitScheduler();
+
+// Reduction functions
+typedef void *(*CmiReduceMergeFn)(int *, void *, void **, int);
+void CmiReduce(void *msg, int size, CmiReduceMergeFn mergeFn);
 
 // Exit functions 
 void CmiExit(int status);
