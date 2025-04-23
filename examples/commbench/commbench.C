@@ -11,7 +11,6 @@
  **************************************************************************/
 
  #include <stdio.h>
- #include "converse.h"
  #include "commbench.h"
  
  /******************************************************************************
@@ -76,7 +75,9 @@
  CpvStaticDeclare(int, next_test_index);
  CpvStaticDeclare(int, shutdown_handler);
  CpvDeclare(int, ack_handler);
+ #ifdef SET_CPU_AFFINITY
  CpvDeclare(char, oversubscribed);
+ #endif
  
  void commbench_shutdown(void* msg) {
    CmiFree(msg);
@@ -100,7 +101,7 @@
  void commbench_next() {
    int idx, bank;
    EmptyMsg msg;
-   CmiInitMsgHeader(msg.core, sizeof(EmptyMsg));
+   //CmiInitMsgHeader(msg.core, sizeof(EmptyMsg));
  
    bank = CpvAccess(test_bank_size);
  nextidx:
@@ -132,7 +133,9 @@
    int numtests, i;
    CpvInitialize(int, shutdown_handler);
    CpvInitialize(int, ack_handler);
+   #ifdef SET_CPU_AFFINITY
    CpvInitialize(char, oversubscribed);
+   #endif
    CpvAccess(shutdown_handler) =
      CmiRegisterHandler((CmiHandler)commbench_shutdown);
    CpvAccess(ack_handler) = CmiRegisterHandler((CmiHandler)commbench_ack);
@@ -149,12 +152,12 @@
  
    // Initialize CPU topology
    CmiInitCPUTopology(argv);
-   #endif
  
    // Wait for all PEs of the node to complete topology init
    CmiNodeAllBarrier();
  
    CpvAccess(oversubscribed) = CmiNumPhysicalNodes() == 1 && CmiNumPes() > CmiNumCores();
+   #endif
  
    // Update the argc after runtime parameters are extracted out
    argc = CmiGetArgc(argv);

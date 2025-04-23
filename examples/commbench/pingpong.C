@@ -1,5 +1,4 @@
 #include <stdlib.h>
-#include "converse.h"
 #include "commbench.h"
 
 #define pva CpvAccess
@@ -83,7 +82,7 @@ static void recvTime(TimeMessage* msg) {
   int i, j;
   double time;
 
-  CmiInitMsgHeader(m.core, sizeof(EmptyMsg));
+  //CmiInitMsgHeader(m.core, sizeof(EmptyMsg));
   pva(numRecv)++;
   for (i = 0; i < CmiNumPes(); i++) {
     if (i == msg->srcNode) continue;
@@ -122,7 +121,7 @@ static void recvTime(TimeMessage* msg) {
 
 static void startNextNode(EmptyMsg* msg) {
   EmptyMsg m;
-  CmiInitMsgHeader(m.core, sizeof(EmptyMsg));
+  //CmiInitMsgHeader(m.core, sizeof(EmptyMsg));
   CmiFree(msg);
   if ((CmiMyPe() + 1) != CmiNumPes()) {
     CmiSetHandler(&m, pva(nbrHandler));
@@ -135,7 +134,7 @@ static void startNextNbr(EmptyMsg* msg) {
   TimeMessage* tm;
   int i, size;
 
-  CmiInitMsgHeader(m.core, sizeof(EmptyMsg));
+  //CmiInitMsgHeader(m.core, sizeof(EmptyMsg));
   CmiFree(msg);
   pva(nextNbr)++;
   if (pva(nextNbr) == CmiMyPe()) {
@@ -165,7 +164,7 @@ static void startNextSize(EmptyMsg* msg) {
   EmptyMsg m;
   Message* mm;
 
-  CmiInitMsgHeader(m.core, sizeof(EmptyMsg));
+  //CmiInitMsgHeader(m.core, sizeof(EmptyMsg));
   pva(nextSize)++;
   if (pva(nextSize) == pva(numSizes)) {
     pva(nextSize) = -1;
@@ -187,7 +186,7 @@ static void startNextSize(EmptyMsg* msg) {
 static void startNextIter(Message* msg) {
   EmptyMsg m;
 
-  CmiInitMsgHeader(m.core, sizeof(EmptyMsg));
+  //CmiInitMsgHeader(m.core, sizeof(EmptyMsg));
   pva(nextIter)++;
   if (pva(nextIter) > sizes[pva(nextSize)].numiter) {
     pva(endtime) = CmiWallTimer();
@@ -213,13 +212,14 @@ static void bounceMessage(Message* msg) {
 void pingpong_init(void) {
   EmptyMsg m;
 
-  CmiInitMsgHeader(m.core, sizeof(EmptyMsg));
+  //CmiInitMsgHeader(m.core, sizeof(EmptyMsg));
   if (CmiNumPes() == 1) {
     CmiPrintf("[pingpong] This benchmark requires > 1 nodes.\n");
     CmiSetHandler(&m, pva(ack_handler));
     CmiSyncSend(0, sizeof(EmptyMsg), &m);
     return;
   }
+  #ifdef SET_CPU_AFFINITY
   if (CpvAccess(oversubscribed)) {
     if (CmiMyPe() == 0)
       CmiPrintf("[pingpong] Skipping due to oversubscription.\n");
@@ -227,6 +227,7 @@ void pingpong_init(void) {
     CmiSyncSend(0, sizeof(EmptyMsg), &m);
     return;
   }
+  #endif
   CmiSetHandler(&m, pva(nbrHandler));
   CmiSyncSend(0, sizeof(EmptyMsg), &m);
 }

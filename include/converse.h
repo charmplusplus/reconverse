@@ -42,7 +42,7 @@ using CmiUint8 = std::uint64_t;
 
 #define CpvAccess(v) CMK_TAG(Cpv_, v)[CmiMyRank()]
 #define CpvAccessOther(v, r) CMK_TAG(Cpv_,v)[r]
-#define CpvExtern(t,v)  extern t CMK_TAG(Cpv_,v)[2]
+#define CpvExtern(t,v)  extern t* CMK_TAG(Cpv_,v)
 
 #define CsvDeclare(t,v) t v
 #define CsvStaticDeclare(t,v) static t v
