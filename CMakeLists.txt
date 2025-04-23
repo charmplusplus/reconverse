@@ -48,6 +48,50 @@ set(RECONVERSE_TEST_LAUNCHER
 
 option(ENABLE_CPU_AFFINITY "Enable cpu affinity with hwloc" OFF)
 
+function(charm_determine_arch output input)
+  if(input STREQUAL "x86_64" OR input STREQUAL "AMD64")
+    set(retval "x86_64")
+  elseif(input STREQUAL "i386" OR input STREQUAL "i686")
+    set(retval "i386")
+  elseif(input STREQUAL "powerpc" OR input MATCHES "^ppc")
+    set(retval "ppc64le")
+  elseif(input MATCHES "armv6" OR input MATCHES "armv7")
+    set(retval "arm7")
+  elseif(input MATCHES "aarch64" OR input MATCHES "arm64")
+    set(retval "arm8")
+  else()
+    set(retval ${input})
+  endif()
+
+  set(${output} ${retval} PARENT_SCOPE)
+endfunction()
+
+if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+  set(CHARM_OS "darwin")
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Windows" OR CMAKE_SYSTEM_NAME STREQUAL "CYGWIN")
+  set(CHARM_OS "win")
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  set(CHARM_OS "linux")
+endif()
+
+if(NOT ARCH)
+  charm_determine_arch(ARCH ${CMAKE_SYSTEM_PROCESSOR})
+endif()
+set(CHARM_CPU ${ARCH})
+
+charm_determine_arch(CHARM_HOST_CPU ${CMAKE_HOST_SYSTEM_PROCESSOR})
+
+if(NOT CHARM_CPU STREQUAL CHARM_HOST_CPU)
+  if (CHARM_CPU STREQUAL "i386" AND CHARM_HOST_CPU STREQUAL "x86_64")
+    message(STATUS "Attempting to cross-compile from ${CHARM_HOST_CPU} to ${CHARM_CPU}.")
+    set(CMAKE_C_FLAGS -m32)
+    set(CMAKE_CXX_FLAGS -m32)
+    set(CMAKE_Fortran_FLAGS -m32)
+  else()
+    message(WARNING "Cross-compiling from ${CHARM_HOST_CPU} to ${CHARM_CPU} is not supported currently.")
+  endif()
+endif()
+
 # ##############################################################################
 # Add Library
 # ##############################################################################
@@ -63,7 +107,7 @@ if(ENABLE_CPU_AFFINITY)
   endif()
 endif()
 
-add_library(reconverse)
+add_library(reconverse $<TARGET_OBJECTS:boost-context>)
 set_target_properties(reconverse PROPERTIES CXX_STANDARD 11)
 add_subdirectory(include)
 add_subdirectory(src)
@@ -72,6 +116,7 @@ target_link_libraries(reconverse PUBLIC Threads::Threads ${HWLOC})
 # ##############################################################################
 # Add Subdirectories
 # ##############################################################################
+add_subdirectory(boost-context)
 
 if(RECONVERSE_BUILD_EXAMPLES)
   add_subdirectory(examples)

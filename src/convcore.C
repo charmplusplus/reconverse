@@ -98,6 +98,9 @@ void converseRunPe(int rank)
     // barrier to ensure all global structs are initialized
     CmiNodeBarrier();
 
+    CthInit(NULL);
+    CthSchedInit();
+
     // call initial function and start scheduler
     Cmi_startfn(Cmi_argc, Cmi_argv);
     CsdScheduler();
