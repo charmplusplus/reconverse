@@ -92,7 +92,7 @@ void converseRunPe(int rank)
     // register special operation handlers
     Cmi_bcastHandler = CmiRegisterHandler(CmiBcastHandler);
     Cmi_nodeBcastHandler = CmiRegisterHandler(CmiNodeBcastHandler);
-    Cmi_exitHandler = CmiRegisterHandler(CmiExitHandlerLocal);
+    Cmi_exitHandler = CmiRegisterHandler(CmiExitHandler);
     CmiGroupHandlerIndex = CmiRegisterHandler(CmiGroupHandler);
     Cmi_reduceHandler = CmiRegisterHandler(CmiReduceHandler);
     // Cmi_multicastHandler = CmiRegisterHandler(CmiMulticastHandler);
@@ -102,6 +102,9 @@ void converseRunPe(int rank)
 
     // barrier to ensure all global structs are initialized
     CmiNodeBarrier();
+
+    CthInit(NULL);
+    CthSchedInit();
 
     // call initial function and start scheduler
     Cmi_startfn(Cmi_argc, Cmi_argv);
@@ -126,6 +129,12 @@ void CmiStartThreads()
     {
         thread.join();
     }
+    delete [] Cmi_queues;
+    delete CmiNodeQueue;
+    delete [] CmiHandlerTable;
+    Cmi_queues = nullptr;
+    CmiNodeQueue = nullptr;
+    CmiHandlerTable = nullptr;
 }
 
 // argument form: ./prog +pe <N>
@@ -298,6 +307,9 @@ void CmiSetInfo(void *msg, int infofn)
 void CmiPushPE(int destPE, int messageSize, void *msg)
 {
     int rank = CmiRankOf(destPE);
+    CmiAssertMsg(rank >= 0 && rank < Cmi_mynodesize, 
+        "CmiPushPE(myPe: %d, destPe: %d, nodeSize: %d): rank out of range", 
+        CmiMyPe(), destPE, Cmi_mynodesize);
     Cmi_queues[rank]->push(msg);
 }
 
@@ -521,7 +533,7 @@ CmiBroadcastSource CmiGetBcastSource(void *msg)
 
 // EXIT TOOLS
 
-void CmiExitHandler(int status)
+void CmiExitHelper(int status)
 {
     CmiMessageHeader *exitMsg = new CmiMessageHeader(); // might need to allocate
     exitMsg->handlerId = Cmi_exitHandler;
@@ -530,7 +542,7 @@ void CmiExitHandler(int status)
 
 void CmiExit(int status) // note: status isn't being used meaningfully
 {
-    CmiExitHandler(status);
+    CmiExitHelper(status);
 }
 
 // REDUCTION TOOLS/FUNCTIONS
@@ -744,13 +756,20 @@ void CmiNodeAllBarrier()
     nodeBarrier.wait();
 }
 
+// status default is 0
 void CsdExitScheduler()
 {
     CmiGetState()->stopFlag = 1;
 }
 
-void CmiExitHandlerLocal(void *msg)
+void CmiExitHandler(void *msg)
 {
+    CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
+    int status = header->collectiveMetaInfo;
+
+    if (status == 1)
+        abort();
+
     CsdExitScheduler();
 }
 
@@ -1013,7 +1032,9 @@ void CmiAbort(const char *format, ...)
     vsnprintf(newmsg, sizeof(newmsg), format, args);
     va_end(args);
     CmiAbortHelper("Called CmiAbort", newmsg, NULL, 1, 0);
-    CmiExitHandler(1);
+
+    CmiExitHelper(1);
+    abort();
 }
 
 int CmiScanf(const char *format, ...)

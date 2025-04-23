@@ -32,7 +32,7 @@ void converseRunPe(int rank);
 void CmiCallHandler(int handlerId, void *msg);
 void CmiBcastHandler(void *msg);
 void CmiNodeBcastHandler(void *msg);
-void CmiExitHandlerLocal(void *msg);
+void CmiExitHandler(void *msg);
 void CmiGroupHandler(void *msg);
 void CmiReduceHandler(void *msg);
 
@@ -64,9 +64,6 @@ void CmiPushPE(int destPE, int messageSize, void *msg);
 
 // node queue
 ConverseNodeQueue<void *> *CmiGetNodeQueue();
-
-// exit handler function
-void CmiExitHandler(int status);
 
 // idle
 bool CmiGetIdle();

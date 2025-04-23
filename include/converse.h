@@ -277,6 +277,81 @@ void CcdCancelCallOnConditionKeep(int condnum, int idx);
 void CcdRaiseCondition(int condnum);
 void CcdCallBacks(void);
 
+// Cth implementation
+
+#define CQS_QUEUEING_FIFO 2
+#define CQS_QUEUEING_LIFO 3
+#define CQS_QUEUEING_IFIFO 4
+#define CQS_QUEUEING_ILIFO 5
+#define CQS_QUEUEING_BFIFO 6
+#define CQS_QUEUEING_BLIFO 7
+#define CQS_QUEUEING_LFIFO 8
+#define CQS_QUEUEING_LLIFO 9
+
+
+#define OBJ_ID_SZ 4
+typedef struct _CmiObjId {
+int id[OBJ_ID_SZ];
+  /* 
+   * **CWL** Note: setting initial values to -1 does not seem to be done for 
+   *               LDObjid. Potential consistency problems could arise. This
+   *               will probably have to be dealt with later.
+   */
+#ifdef __cplusplus
+  _CmiObjId() { 
+    for (int i=0; i<OBJ_ID_SZ; i++) {
+      id[i] = -1;
+    }
+  }
+  bool isNull() {
+    for (int i=0; i<OBJ_ID_SZ; i++) {
+      if (id[i] != -1) return false;
+    }
+    return true;
+  }
+  bool operator==(const struct _CmiObjId& objid) const {
+    for (int i=0; i<OBJ_ID_SZ; i++) if (id[i] != objid.id[i]) return false;
+    return true;
+  }
+#endif
+} CmiObjId;
+
+
+typedef struct CthThreadStruct *CthThread;
+typedef struct {
+  /*Start with a message header so threads can be enqueued 
+    as messages (e.g., by CthEnqueueNormalThread in convcore.C)
+  */
+  char cmicore[CmiMsgHeaderSizeBytes];
+  CthThread thread;
+  int serialNo;
+} CthThreadToken;
+
+typedef void        (*CthVoidFn)(void *);
+typedef void        (*CthAwkFn)(CthThreadToken *,int,
+				int prioBits,unsigned int *prioptr);
+typedef CthThread   (*CthThFn)(void);
+
+
+CthThreadToken *CthGetToken(CthThread);
+
+void CthInit(char **argv);
+void CthSchedInit();
+
+CthThread CthSelf(void);
+
+CthThread CthCreate(CthVoidFn fn, void *arg, int size);
+
+static void CthThreadFree(CthThread t);
+
+void CthResume(CthThread t);
+
+void CthSuspend(void);
+
+void CthAwaken(CthThread th);
+
+void CthYield(void);
+
 /* Command-Line-Argument handling */
 void CmiArgGroup(const char *parentName,const char *groupName);
 int CmiGetArgInt(char **argv,const char *arg,int *optDest);
@@ -476,34 +551,6 @@ enum cmiZCMsgType {
 #else
 # define CMI_NOINLINE
 #endif
-
-//trace
-#define OBJ_ID_SZ 4
-typedef struct _CmiObjId {
-int id[OBJ_ID_SZ];
-  /* 
-   * **CWL** Note: setting initial values to -1 does not seem to be done for 
-   *               LDObjid. Potential consistency problems could arise. This
-   *               will probably have to be dealt with later.
-   */
-#ifdef __cplusplus
-  _CmiObjId() { 
-    for (int i=0; i<OBJ_ID_SZ; i++) {
-      id[i] = -1;
-    }
-  }
-  bool isNull() {
-    for (int i=0; i<OBJ_ID_SZ; i++) {
-      if (id[i] != -1) return false;
-    }
-    return true;
-  }
-  bool operator==(const struct _CmiObjId& objid) const {
-    for (int i=0; i<OBJ_ID_SZ; i++) if (id[i] != objid.id[i]) return false;
-    return true;
-  }
-#endif
-} CmiObjId;
 
 //spantree
 //later: fix the naming of these macros to be clearer
