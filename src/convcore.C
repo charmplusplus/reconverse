@@ -121,6 +121,12 @@ void CmiStartThreads()
     {
         thread.join();
     }
+    delete [] Cmi_queues;
+    delete CmiNodeQueue;
+    delete [] CmiHandlerTable;
+    Cmi_queues = nullptr;
+    CmiNodeQueue = nullptr;
+    CmiHandlerTable = nullptr;
 }
 
 // argument form: ./prog +pe <N>
@@ -276,6 +282,9 @@ std::vector<CmiHandlerInfo> *CmiGetHandlerTable()
 void CmiPushPE(int destPE, int messageSize, void *msg)
 {
     int rank = CmiRankOf(destPE);
+    CmiAssertMsg(rank >= 0 && rank < Cmi_mynodesize, 
+        "CmiPushPE(myPe: %d, destPe: %d, nodeSize: %d): rank out of range", 
+        CmiMyPe(), destPE, Cmi_mynodesize);
     Cmi_queues[rank]->push(msg);
 }
 
