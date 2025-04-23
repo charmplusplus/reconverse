@@ -1,4 +1,5 @@
 add_subdirectory(broadcast)
+add_subdirectory(commbench)
 add_subdirectory(group)
 add_subdirectory(within-node-bcast)
 add_subdirectory(conds)
