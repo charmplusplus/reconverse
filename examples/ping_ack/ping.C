@@ -24,6 +24,7 @@ void print_results() {
 void ping_stop_handler(void *msg)
 {
   CmiFree(msg);
+  printf("Stopping PE %d\n", CmiMyPe());
   CsdExitScheduler();
 }
 
@@ -53,13 +54,6 @@ void send_msg() {
   */
 }
 
-void call_exit(){
-  for(int i=0;i<CmiNumPes();i++) {
-    void *msg = CmiAlloc(CmiMsgHeaderSizeBytes);
-    CmiSetHandler(msg, CpvAccess(stop_index));
-    CmiSyncSendAndFree(i, CmiMsgHeaderSizeBytes, msg);
-  }
-}
 
 void ping_handler(void *msg)
 {
@@ -81,7 +75,7 @@ void ping_handler(void *msg)
     double calced_avg = sum / num_ints;
     if (calced_avg != exp_avg) {
       printf("Calculated average of %f does not match expected value of %f, exiting\n", calced_avg, exp_avg);
-      call_exit();
+      CmiExit(1);
 //      Cpm_ping_stop(CpmSend(CpmALL)); 
     } 
     // else
@@ -113,7 +107,7 @@ void pe0_ack_handler(void *vmsg)
 
     // print results
     print_results();
-    call_exit();
+    CmiExit(0);
 //    Cpm_ping_stop(CpmSend(CpmALL));
   }
 }
@@ -123,10 +117,9 @@ void ping_init()
   int totalpes = CmiNumPes(); //p=num_pes
   int npes_as_sender = totalpes/2; //q=p/2
   if (CmiNumPes()%2 !=0) {
-    printf("note: this test requires at multiple of 2 pes, skipping test.\n");
-    printf("exiting.\n");
-    CsdExitScheduler();
-    call_exit();
+    //printf("note: this test requires at multiple of 2 pes, skipping test.\n");
+    //printf("exiting.\n");
+    CmiAbort("note: this test requires at multiple of 2 pes, exiting\n");
 //    Cpm_ping_stop(CpmSend(CpmALL));
   } else {
     if(CmiMyPe() < npes_as_sender)

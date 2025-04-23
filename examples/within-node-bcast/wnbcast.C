@@ -26,14 +26,14 @@ CmiStartFn mymain(int argc, char **argv)
 
   int handlerId = CmiRegisterHandler(ping_handler);
 
-  if (CmiMyPe() == 0)
+  if (CmiMyRank() == 0)
   {
     // create a message
     Message *msg = new Message;
     msg->header.handlerId = handlerId;
     msg->header.messageSize = sizeof(Message);
 
-    CmiSyncBroadcastAllAndFree(msg->header.messageSize, msg);
+    CmiWithinNodeBroadcast(msg->header.messageSize, msg);
   }
 
   // printf("Answer to the Ultimate Question of Life, the Universe, and Everything: %d\n", CpvAccess(test));

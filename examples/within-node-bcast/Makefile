@@ -1,9 +1,9 @@
 # Compiler and flags
 CXX := g++
-CXXFLAGS := -g -std=c++11 -pthread -I ../..
+CXXFLAGS := -std=c++11 -pthread -I ../..
 
 # Source files
-SRCS := conds.C ../../convcore.C ../../scheduler.C ../../queue.C ../../conv-conds.C
+SRCS := wnbcast.C ../../convcore.C ../../scheduler.C ../../queue.C ../../conv-conds.C
 HDRS := ../../converse_internal.h ../../scheduler.h ../../queue.h ../../barrier.h
 
 # Output executable

@@ -4,6 +4,7 @@
 #include <cstring>
 #include "uFcontext.h"
 #include "converse.h"
+#include "converse_internal.h"
 #include "scheduler.h"
 
 #ifndef CMK_STACKSIZE_DEFAULT

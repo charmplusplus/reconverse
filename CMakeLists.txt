@@ -7,10 +7,13 @@ project(
     "Simplified re-implementation of Converse: a communication and scheduling layer, and user-level threads, used by Charm++"
   HOMEPAGE_URL "https://github.com/charmplusplus/reconverse")
 
+enable_testing()
+
+cmake_policy(SET CMP0076 NEW)
 cmake_policy(SET CMP0079 NEW)
 
 enable_language(CXX)
-list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake_modules")
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake_modules")
 
 include(AddReconverse)
 
@@ -23,8 +26,27 @@ option(BUILD_SHARED_LIBS "Build using shared libraries" ON)
 option(RECONVERSE_BUILD_EXAMPLES "Build examples" ON)
 option(RECONVERSE_BUILD_TESTS "Build tests" ON)
 
-option(RECONVERSE_TRY_ENABLE_COMM_LCI1 "whether to enable the LCIv1 backend" ON)
-# option(LCW_TRY_ENABLE_COMM_LCI2 "whether to enable the LCIv2 backend" ON)
+option(RECONVERSE_TRY_ENABLE_COMM_LCI2 "whether to enable the LCIv2 backend" ON)
+option(RECONVERSE_AUTOFETCH_LCI2
+        "whether to autofetch LCIv2 if LCI2 cannot be found" OFF)
+set(RECONVERSE_AUTOFETCH_LCI2_TAG
+    "85dc99f3b32cfc8b3b4b0e0590ee445282964b57"
+    CACHE STRING "The tag to fetch for LCIv2") # master branch as of 2025-04-17
+
+option(RECONVERSE_TRY_ENABLE_COMM_LCI1 "whether to enable the LCIv1 backend" OFF)
+option(RECONVERSE_AUTOFETCH_LCI1
+       "whether to autofetch LCIv1 if LCI1 cannot be found" OFF)
+set(RECONVERSE_AUTOFETCH_LCI1_TAG
+    "ad1c43e5ff28bb2cfc8a300615f4d502b7bce31f"
+    CACHE STRING "The tag to fetch for LCIv1") # master branch as of 2025-04-17
+
+option(SPANTREE "whether to enable spanning tree collectives" ON)
+
+set(RECONVERSE_TEST_LAUNCHER
+    "mpirun"
+    CACHE STRING "The executable to run multiple processes in CTest")
+
+option(ENABLE_CPU_AFFINITY "Enable cpu affinity with hwloc" OFF)
 
 function(charm_determine_arch output input)
   if(input STREQUAL "x86_64" OR input STREQUAL "AMD64")
@@ -68,45 +90,20 @@ endif()
 
 find_package(Threads REQUIRED)
 
-add_library(reconverse $<TARGET_OBJECTS:boost-context>)
-set_target_properties(reconverse PROPERTIES CXX_STANDARD 11)
-target_include_directories(reconverse PUBLIC .)
-target_sources(reconverse PRIVATE conv-conds.C convcore.C queue.C scheduler.C comm_backend/comm_backend_internal.C threads.C)
-target_link_libraries(reconverse PUBLIC Threads::Threads)
-add_subdirectory(comm_backend)
-
-# ##############################################################################
-# Communication Backends
-# ##############################################################################
-
-# LCI1
-if(RECONVERSE_TRY_ENABLE_COMM_LCI1)
-  find_package(
-    LCI
-    CONFIG
-    HINTS
-    ${LCI_ROOT}
-    $ENV{LCI_ROOT}
-    PATH_SUFFIXES
-    lib/cmake
-    lib64/cmake)
-  if(LCI_FOUND
-    AND NOT LCI_WITH_LCT_ONLY
-    AND LCI_VERSION VERSION_LESS 2.0.0)
-    set(RECONVERSE_ENABLE_COMM_LCI1 ON)
-    target_link_libraries(reconverse PRIVATE LCI::LCI)
-    target_sources(reconverse PRIVATE comm_backend/lci1/comm_backend_lci1.C)
+if(ENABLE_CPU_AFFINITY)
+  find_library(HWLOC NAMES libhwloc.so libhwloc.dylib PATHS /opt/local/lib /usr/lib /usr/local/lib /usr/local/Cellar/hwloc/2.12.0/lib)
+  if(HWLOC)
+    message(STATUS "Found hwloc: ${HWLOC}")
   else()
-    message(WARNING "LCI is not found. The LCI backend is not enabled.")
+    message(FATAL_ERROR "Could not find libhwloc")
   endif()
 endif()
 
-# ##############################################################################
-# Configure
-# ##############################################################################
-configure_file(converse_config.h.in ${CMAKE_BINARY_DIR}/converse_config.h)
-target_include_directories(reconverse PUBLIC $<BUILD_INTERFACE:${CMAKE_BINARY_DIR}>
-                                              $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+add_library(reconverse $<TARGET_OBJECTS:boost-context>)
+set_target_properties(reconverse PROPERTIES CXX_STANDARD 11)
+add_subdirectory(include)
+add_subdirectory(src)
+target_link_libraries(reconverse PUBLIC Threads::Threads ${HWLOC})
 
 # ##############################################################################
 # Add Subdirectories
@@ -119,4 +116,11 @@ endif()
 
 if(RECONVERSE_BUILD_TESTS)
   add_subdirectory(test)
+endif()
+
+if(ENABLE_CPU_AFFINITY)
+  add_definitions(-DSET_CPU_AFFINITY)
+  message(STATUS "CPU affinity enabled")
+else()
+  message(STATUS "CPU affinity disabled")
 endif()

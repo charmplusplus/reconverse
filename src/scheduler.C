@@ -1,38 +1,37 @@
 #include "scheduler.h"
-#include "convcore.h"
+#include "converse_internal.h"
 #include "queue.h"
 #include "converse.h"
 #include <thread>
 
+/**
+ * The main scheduler loop for the Charm++ runtime.
+ */
 void CsdScheduler()
 {
     // get pthread level queue
-
     ConverseQueue<void *> *queue = CmiGetQueue(CmiMyRank());
+
+    // get node level queue 
     ConverseNodeQueue<void *> *nodeQueue = CmiGetNodeQueue();
 
     while (CmiStopFlag() == 0)
     {
-        
+
         CcdRaiseCondition(CcdSCHEDLOOP);
 
         // poll node queue
         if (!nodeQueue->empty())
         {
             QueueResult result = nodeQueue->pop();
-            if(result)
+            if (result)
             {
                 void *msg = result.msg;
                 // process event
-                CmiMessageHeader *header = (CmiMessageHeader *)msg;
-                void *data = (void *)((char *)msg + CmiMsgHeaderSizeBytes);
-                int handler = header->handlerId;
+                CmiHandleMessage(msg);
 
-                // call handler
-                CmiCallHandler(handler, data);
-
-                //release idle if necessary
-                if(CmiGetIdle())
+                // release idle if necessary
+                if (CmiGetIdle())
                 {
                     CmiSetIdle(false);
                     CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
@@ -47,26 +46,21 @@ void CsdScheduler()
             void *msg = queue->pop();
 
             // process event
-            CmiMessageHeader *header = (CmiMessageHeader *)msg;
-            void *data = (void *)((char *)msg + CmiMsgHeaderSizeBytes);
-            int handler = header->handlerId;
+            CmiHandleMessage(msg);
 
-            // call handler
-            CmiCallHandler(handler, msg);
-
-            //release idle if necessary
-            if(CmiGetIdle())
+            // release idle if necessary
+            if (CmiGetIdle())
             {
                 CmiSetIdle(false);
                 CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
             }
         }
 
-        //the processor is idle
+        // the processor is idle
         else
         {
             // if not already idle, set idle and raise condition
-            if(!CmiGetIdle())
+            if (!CmiGetIdle())
             {
                 CmiSetIdle(true);
                 CmiSetIdleTime(CmiWallTimer());
@@ -76,7 +70,7 @@ void CsdScheduler()
             else
             {
                 CcdRaiseCondition(CcdPROCESSOR_STILL_IDLE);
-                if(CmiWallTimer() - CmiGetIdleTime() > 10.0)
+                if (CmiWallTimer() - CmiGetIdleTime() > 10.0)
                 {
                     CcdRaiseCondition(CcdPROCESSOR_LONG_IDLE);
                 }

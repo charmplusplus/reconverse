@@ -1,0 +1,13 @@
+target_include_directories(reconverse PRIVATE .)
+target_sources(reconverse PRIVATE conv-conds.C convcore.C queue.C random.C 
+                scheduler.C cpuaffinity.C
+                comm_backend/comm_backend_internal.C threads.C)
+target_include_directories(
+  reconverse PRIVATE $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}>
+                     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+
+add_subdirectory(comm_backend)
+
+# configure needs to be called after add_subdirectory(comm_backend)
+configure_file(converse_config.h.in
+               ${CMAKE_CURRENT_BINARY_DIR}/converse_config.h)
