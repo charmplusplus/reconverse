@@ -1,0 +1,7 @@
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../../include)
+add_library(pingpong_commbench OBJECT pingpong.C)
+add_library(commbench OBJECT commbench.C)
+add_executable(reconverse_commbench $<TARGET_OBJECTS:pingpong_commbench> $<TARGET_OBJECTS:commbench>)
+target_link_libraries(reconverse_commbench PRIVATE reconverse)
+set_target_properties(reconverse_commbench PROPERTIES CXX_STANDARD 11)
+set_target_properties(reconverse_commbench PROPERTIES LINKER_LANGUAGE CXX)
