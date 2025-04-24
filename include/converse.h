@@ -17,6 +17,33 @@ using CmiUint2 = std::uint16_t;
 using CmiUint4 = std::uint32_t;
 using CmiUint8 = std::uint64_t;
 
+#include <stdint.h>
+typedef int8_t  CMK_TYPEDEF_INT1;
+typedef int16_t CMK_TYPEDEF_INT2;
+typedef int32_t CMK_TYPEDEF_INT4;
+typedef int64_t CMK_TYPEDEF_INT8;
+typedef uint8_t  CMK_TYPEDEF_UINT1;
+typedef uint16_t CMK_TYPEDEF_UINT2;
+typedef uint32_t CMK_TYPEDEF_UINT4;
+typedef uint64_t CMK_TYPEDEF_UINT8;
+typedef intptr_t CmiIntPtr;
+
+typedef CMK_TYPEDEF_INT1      CmiInt1;
+typedef CMK_TYPEDEF_INT2      CmiInt2;
+typedef CMK_TYPEDEF_INT4      CmiInt4;
+typedef CMK_TYPEDEF_INT8      CmiInt8;
+typedef CMK_TYPEDEF_UINT1     CmiUInt1;
+typedef CMK_TYPEDEF_UINT2     CmiUInt2;
+typedef CMK_TYPEDEF_UINT4     CmiUInt4;
+typedef CMK_TYPEDEF_UINT8     CmiUInt8;
+#if CMK___int128_t_DEFINED
+typedef __int128_t            CmiInt16;
+typedef __uint128_t           CmiUInt16;
+#elif CMK___int128_DEFINED
+typedef __int128              CmiInt16;
+typedef __uint128     CmiUInt16;
+#endif
+
 // NOTE: these are solely for backwards compatibility
 // Do not use in reconverse impl
 
