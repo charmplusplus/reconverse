@@ -11,6 +11,7 @@
 #include <cstdarg>
 #include <thread>
 #include <cinttypes>
+#include <ctime>
 
 static constexpr unsigned int CmiLogMaxReductions = 4u;
 static constexpr int CmiMaxReductions = 1u << CmiLogMaxReductions;
@@ -28,6 +29,7 @@ int Cmi_nodestart;
 std::vector<CmiHandlerInfo> **CmiHandlerTable; // array of handler vectors
 ConverseNodeQueue<void *> *CmiNodeQueue;
 double Cmi_startTime;
+std::clock_t Cmi_cpuStartTime;
 
 // PE LOCALS that need global access sometimes
 static ConverseQueue<void *> **Cmi_queues; // array of queue pointers
@@ -139,6 +141,7 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched, int initret)
 {
 
     Cmi_startTime = getCurrentTime();
+    Cmi_cpuStartTime = std::clock();
 
     Cmi_npes = atoi(argv[2]);
     // int plusPSet = CmiGetArgInt(argv,"+pe",&Cmi_npes);
@@ -919,6 +922,16 @@ double getCurrentTime()
 double CmiWallTimer()
 {
     return getCurrentTime() - Cmi_startTime;
+}
+
+double CmiCpuTimer()
+{
+    return (std::clock() - Cmi_cpuStartTime) / (double)CLOCKS_PER_SEC;
+}
+
+double CmiTimer()
+{
+    return CmiCpuTimer();
 }
 
 void CmiAbortHelper(const char *source, const char *message, const char *suggestion,

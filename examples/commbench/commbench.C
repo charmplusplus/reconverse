@@ -19,9 +19,9 @@
   *
   *****************************************************************************/
  
- //extern void memoryAccess_init(void);
+ extern void memoryAccess_init(void);
  //extern void overhead_init(void);
- //extern void timer_init(void);
+ extern void timer_init(void);
  //extern void proc_init(void);
  //extern void smputil_init(void);
  extern void pingpong_init(void);
@@ -31,9 +31,9 @@
  //extern void reduction_init(void);
  //extern void ctxt_init(void);
  
- //extern void memoryAccess_moduleinit(void);
+ extern void memoryAccess_moduleinit(void);
  //extern void overhead_moduleinit(void);
- //extern void timer_moduleinit(void);
+ extern void timer_moduleinit(void);
  //extern void proc_moduleinit(void);
  //extern void smputil_moduleinit(void);
  extern void pingpong_moduleinit(void);
@@ -48,9 +48,9 @@
    void (*initiator)(void);
    void (*initializer)(void);
  } tests[] = {
-   //{"memoryAccess", memoryAccess_init, memoryAccess_moduleinit},
+   {"memoryAccess", memoryAccess_init, memoryAccess_moduleinit},
    //{"overhead", overhead_init, overhead_moduleinit},
-   //{"timer", timer_init, timer_moduleinit},
+   {"timer", timer_init, timer_moduleinit},
    //{"proc", proc_init, proc_moduleinit},
    //{"smputil", smputil_init, smputil_moduleinit},
    {"pingpong", pingpong_init, pingpong_moduleinit},

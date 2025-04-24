@@ -164,6 +164,8 @@ void __CmiEnforceMsgHelper(const char* expr, const char* fileName,
 
 double getCurrentTime(void);
 double CmiWallTimer(void);
+double CmiCpuTimer(void);
+double CmiTimer(void);
 
 //rand functions that charm uses
 void   CrnSrand(unsigned int);
