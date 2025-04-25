@@ -3,7 +3,7 @@ CXX := g++
 CXXFLAGS := -std=c++11 -pthread -I ../.. -g
 
 # Source files
-SRCS := ping.c ../../convcore.C ../../scheduler.C ../../queue.C ../../conv-conds.C
+SRCS := ping.cpp ../../convcore.cpp ../../scheduler.cpp ../../queue.cpp ../../conv-conds.cpp
 HDRS := ../../converse_internal.h ../../scheduler.h ../../queue.h ../../barrier.h
 
 # Output executable

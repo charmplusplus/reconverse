@@ -1,1 +1,1 @@
-add_reconverse_executable(pgm pgm.C)
+add_reconverse_executable(pgm pgm.cpp)

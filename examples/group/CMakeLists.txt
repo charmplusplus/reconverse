@@ -1,2 +1,2 @@
-add_reconverse_executable(group group.C)
+add_reconverse_executable(group group.cpp)
 add_test(NAME group COMMAND group +pe 4)
