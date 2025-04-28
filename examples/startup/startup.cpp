@@ -78,7 +78,6 @@ CmiStartFn mymain(int argc, char **argv)
   CpvInitialize(int, nodeHandlerId);
   CpvAccess(nodeHandlerId) = CmiRegisterHandler(nodeQueueTest);
 
-  // printf("Answer to the Ultimate Question of Life, the Universe, and Everything: %d\n", CpvAccess(test));
   return 0;
 }
 
