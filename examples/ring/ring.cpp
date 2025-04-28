@@ -58,6 +58,7 @@ CmiStartFn mymain(int argc, char **argv)
     CmiSyncSendAndFree(sendToPE, msg->header.messageSize, msg);
   }
 
+  // printf("Answer to the Ultimate Question of Life, the Universe, and Everything: %d\n", CpvAccess(test));
   return 0;
 }
 
