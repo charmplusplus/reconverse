@@ -56,8 +56,6 @@ CmiStartFn mymain(int argc, char **argv)
   msg->myReductionData = CmiMyPe();
 
   CmiReduce(msg, sizeof(Message), mergeByAddition);
-
-  // printf("Answer to the Ultimate Question of Life, the Universe, and Everything: %d\n", CpvAccess(test));
   return 0;
 }
 
