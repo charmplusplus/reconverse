@@ -101,6 +101,7 @@ CmiStartFn mymain(int argc, char **argv)
 
 
 
+  // printf("Answer to the Ultimate Question of Life, the Universe, and Everything: %d\n", CpvAccess(test));
   return 0;
 }
 
