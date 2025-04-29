@@ -603,7 +603,8 @@ unsigned CmiGetReductionIndex(CmiReductionID id)
     {
         CmiAbort("CmiGetReductionIndex: id >= CmiMaxReductions");
     }
-    return id;
+
+    return id; 
 }
 
 static CmiReduction *CmiGetCreateReduction(CmiReductionID id)

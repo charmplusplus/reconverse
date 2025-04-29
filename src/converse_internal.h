@@ -109,15 +109,6 @@ typedef struct
   } ops;
 } CmiReduction;
 
-// defines starting constants for managing reduction IDs.
-// we choose these offsets to avoid conflicts with other IDs in the system
-// typedef enum {
-//   globalReduction = 0,
-//   requestReduction = 1,
-//   dynamicReduction = 2,
-// } CmiReductionCategory;
-// CpvStaticDeclare(CmiReductionID*, _reduction_IDs);
-
 CpvStaticDeclare(CmiReductionID, _reduction_counter);
 CpvStaticDeclare(CmiReduction **, _reduction_info); // an array of pointers to reduction structs
 
