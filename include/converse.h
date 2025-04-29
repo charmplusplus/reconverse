@@ -112,6 +112,8 @@ typedef struct Header
   CmiUint1 zcMsgType; // 0: normal, 1: zero-copy
 } CmiMessageHeader;
 
+typedef CmiMessageHeader CmiMsgHeaderBasic;
+
 typedef struct {
   int parent;
   int child_count;
@@ -122,6 +124,7 @@ typedef struct {
 typedef CMK_MULTICAST_GROUP_TYPE CmiGroup;
 
 #define CmiMsgHeaderSizeBytes sizeof(CmiMessageHeader)
+#define CmiReservedHeaderSize CmiMsgHeaderSizeBytes
 
 typedef void (*CmiStartFn)(int argc, char **argv);
 void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched = 0, int initret = 0);
@@ -278,6 +281,7 @@ void __CmiEnforceMsgHelper(const char* expr, const char* fileName,
 
 double getCurrentTime(void);
 double CmiWallTimer(void);
+#define CmiCpuTimer() CmiWallTimer()
 
 //rand functions that charm uses
 void   CrnSrand(unsigned int);
