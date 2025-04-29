@@ -83,6 +83,7 @@ typedef __uint128_t           CmiUInt16;
 #define CMIPADDING(x, n) (CMIALIGN((x), (n)) - (size_t)(x))
 
 
+
 // End of NOTE
 
 typedef void (*CmiHandler)(void *msg);
@@ -187,11 +188,13 @@ int CmiMyNodeSize();
 int CmiMyRank();
 int CmiNumPes();
 int CmiNumNodes();
+#define CmiNumPhysicalNodes() CmiNumNodes()
 int CmiNodeOf(int pe);
 int CmiRankOf(int pe);
 int CmiStopFlag();
 #define CmiNodeSize(n) (CmiMyNodeSize())
 int CmiNodeFirst(int node);
+#define CmiGetFirstPeOnPhysicalNode(i) CmiNodeFirst(i)
 
 // handler things
 void CmiSetHandler(void *msg, int handlerId);
@@ -331,8 +334,11 @@ double CrnDrandRange(double, double);
 #define CcdUSERMAX          127
 
 //convcond functions
+typedef CmiHandler CcdVoidFn;
+typedef CmiHandler CcdCondFn;
 void CcdModuleInit();
 void CcdCallFnAfter(CmiHandler fnp, void *arg, double msecs);
+#define CcdCallFnAfterOnPE(fn, arg, msecs, pe) CcdCallFnAfter(fn, arg, msecs)
 int CcdCallOnCondition(int condnum, CmiHandler fnp, void *arg);
 int CcdCallOnConditionKeep(int condnum, CmiHandler fnp, void *arg);
 void CcdCancelCallOnCondition(int condnum, int idx);
@@ -414,6 +420,8 @@ void CthSuspend(void);
 void CthAwaken(CthThread th);
 
 void CthYield(void);
+
+void CthTraceResume(CthThread t);
 
 /* Command-Line-Argument handling */
 void CmiArgGroup(const char *parentName,const char *groupName);
