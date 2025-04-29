@@ -28,6 +28,9 @@ int Cmi_nodestart;
 std::vector<CmiHandlerInfo> **CmiHandlerTable; // array of handler vectors
 ConverseNodeQueue<void *> *CmiNodeQueue;
 double Cmi_startTime;
+CmiSpanningTreeInfo* _topoTree = NULL;
+
+void CldModuleInit(char **);
 
 // PE LOCALS that need global access sometimes
 static ConverseQueue<void *> **Cmi_queues; // array of queue pointers
@@ -80,6 +83,8 @@ void converseRunPe(int rank)
     // init state
     CmiInitState(rank);
 
+    //init things like cld module, ccs, etc
+    CldModuleInit(Cmi_argv);
 #ifdef SET_CPU_AFFINITY
     CmiSetCPUAffinity(rank);
 #endif
@@ -280,6 +285,23 @@ int CmiNodeFirst(int node)
 std::vector<CmiHandlerInfo> *CmiGetHandlerTable()
 {
     return CmiHandlerTable[CmiMyRank()];
+}
+
+CmiHandler CmiHandlerToFunction(int handlerId)
+{
+    return CmiGetHandlerTable()->at(handlerId).hdlr;
+}
+
+int CmiGetInfo(void *msg)
+{
+    CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
+    return header->collectiveMetaInfo;
+}
+
+void CmiSetInfo(void *msg, int infofn)
+{
+    CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
+    header->collectiveMetaInfo = infofn;
 }
 
 void CmiPushPE(int destPE, int messageSize, void *msg)
@@ -782,6 +804,42 @@ void CmiSyncNodeSend(unsigned int destNode, unsigned int size, void *msg)
     CmiSyncNodeSendAndFree(destNode, size, copymsg);
 }
 
+//fn versions of the above
+void CmiSyncSendFn(int destPE, int messageSize, char *msg)
+{
+  CmiSyncSend(destPE, messageSize, (void*) msg);
+}
+
+void CmiFreeSendFn(int destPE, int messageSize, char *msg)
+{
+  CmiSyncSendAndFree(destPE, messageSize, (void*) msg);
+}
+
+void CmiSyncBroadcastFn(int size, char *msg)
+{
+  CmiSyncBroadcast(size, (void*) msg);
+}
+
+void CmiSyncBroadcastAllFn(int size, char *msg)
+{
+  CmiSyncBroadcastAll(size, (void*) msg);
+}
+
+void CmiFreeBroadcastFn(int size, char *msg)
+{
+  CmiSyncBroadcastAndFree(size, (void*) msg);
+}
+
+void CmiFreeNodeSendFn(int destNode, int size, char *msg)
+{
+  CmiSyncNodeSendAndFree(destNode, size, (void*) msg);
+}
+
+void CmiFreeBroadcastAllFn(int size, char *msg)
+{
+  CmiSyncBroadcastAllAndFree(size, (void*) msg);
+}
+
 void CmiGroupHandler(void *msg)
 {
     GroupDef def = (GroupDef)msg;
@@ -834,7 +892,7 @@ void CmiLookupGroup(CmiGroup grp, int *npes, int **pes)
     *pes = 0;
 }
 
-void CmiSyncListSend(int npes, int *pes, int len, void *msg)
+void CmiSyncListSend(int npes, const int *pes, int len, void *msg)
 {
     for (int i = 0; i < npes; i++)
     {
@@ -842,10 +900,22 @@ void CmiSyncListSend(int npes, int *pes, int len, void *msg)
     }
 }
 
-void CmiSyncListSendAndFree(int npes, int *pes, int len, void *msg)
+void CmiSyncListSendFn(int npes, const int *pes, int len, char *msg)
 {
-    CmiSyncListSend(npes, pes, len, msg);
-    CmiFree(msg);
+    CmiSyncListSend(npes, pes, len, (void*) msg);
+}
+
+void CmiSyncListSendAndFree(int npes, const int *pes, int len, void *msg)
+{
+    for (int i = 0; i < npes; i++)
+    {
+        CmiSyncSendAndFree(pes[i], len, msg);
+    }
+}
+
+void CmiFreeListSendFn(int npes, const int *pes, int len, char *msg)
+{
+    CmiSyncListSendAndFree(npes, pes, len, (void*) msg);
 }
 
 void CmiSyncMulticast(CmiGroup grp, int size, void *msg)
@@ -857,7 +927,7 @@ void CmiSyncMulticast(CmiGroup grp, int size, void *msg)
     {
         CmiAbort("CmiSyncMulticast: group not found\n");
     }
-    CmiSyncListSend(npes, pes, size, msg);
+    CmiSyncListSend(npes, (const int*) pes, size, msg);
 }
 
 void CmiSyncMulticastAndFree(CmiGroup grp, int size, void *msg)
@@ -866,10 +936,26 @@ void CmiSyncMulticastAndFree(CmiGroup grp, int size, void *msg)
     CmiFree(msg);
 }
 
+void CmiSyncMulticastFn(CmiGroup grp, int size, char *msg)
+{
+    CmiSyncMulticast(grp, size, (void*) msg);
+}
+
+void CmiFreeMulticastFn(CmiGroup grp, int size, char *msg)
+{
+    CmiSyncMulticastAndFree(grp, size, (void*) msg);
+}
+
 void CmiSetHandler(void *msg, int handlerId)
 {
     CmiMessageHeader *header = (CmiMessageHeader *)msg;
     header->handlerId = handlerId;
+}
+
+void CmiSetXHandler(void *msg, int xhandlerId)
+{
+    CmiMessageHeader *header = (CmiMessageHeader *)msg;
+    header->swapHandlerId = xhandlerId;
 }
 
 int CmiGetHandler(void *msg)
@@ -878,6 +964,15 @@ int CmiGetHandler(void *msg)
     int handlerId = header->handlerId;
     return handlerId;
 }
+
+int CmiGetXHandler(void *msg)
+{
+    CmiMessageHeader *header = (CmiMessageHeader *)msg;
+    int xhandlerId = header->swapHandlerId;
+    return xhandlerId;
+}
+
+
 
 CmiHandler CmiGetHandlerFunction(void *msg)
 {
@@ -941,6 +1036,35 @@ void CmiAbort(const char *format, ...)
 
     CmiExitHelper(1);
     abort();
+}
+
+int CmiScanf(const char *format, ...)
+{
+  int ret;
+  {
+  va_list args;
+  va_start(args,format);
+  {
+    ret = vscanf(format, args);
+  }
+  va_end(args);
+  }
+  return ret;
+}
+
+int CmiError(const char *format, ...)
+{
+  int ret;
+  {
+  va_list args;
+  va_start(args,format);
+  {
+    ret = vfprintf(stderr, format, args);
+    fflush(stderr);  /* stderr is always flushed */
+  }
+  va_end(args);
+  }
+  return ret;
 }
 
 void __CmiEnforceMsgHelper(const char *expr, const char *fileName,
