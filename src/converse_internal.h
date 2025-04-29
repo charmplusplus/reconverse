@@ -113,9 +113,7 @@ typedef struct
 } CmiReduction;
 
 CpvStaticDeclare(CmiReductionID, _reduction_counter);
-
-CpvStaticDeclare(std::vector<CmiReduction*>, _reduction_info);
-//CpvStaticDeclare(CmiReduction **, _reduction_info); // an array of pointers to reduction structs
+CpvStaticDeclare(CmiReduction **, _reduction_info); // an array of pointers to reduction structs
 
 void CmiReductionsInit(void);
 

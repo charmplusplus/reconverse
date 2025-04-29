@@ -528,13 +528,14 @@ void CmiExit(int status) // note: status isn't being used meaningfully
 // each pe/thread will call this function?
 void CmiReductionsInit(void)
 {
-    CpvInitialize(std::vector<CmiReduction*>, _reduction_info);
+    CpvInitialize(CmiReduction **, _reduction_info);
     CpvInitialize(CmiReductionID, _reduction_counter);
 
     // allocating memory for reduction info table
-    auto& redtable = CpvAccess(_reduction_info);
-    redtable.clear();
-    redtable.resize(100, NULL); //lets say we allow for 100 reductions in the beginning
+    auto redinfo = (CmiReduction **)malloc(CmiMaxReductions * sizeof(CmiReduction *));
+    for (int i = 0; i < CmiMaxReductions; ++i)
+        redinfo[i] = NULL;
+    CpvAccess(_reduction_info) = redinfo;
 
     // each pe will have its own reduction counter, and sets it to 0
     // how do we ensure that 2 threads who call reductions at the same time don't get the same ID again?
@@ -576,12 +577,12 @@ CmiReductionID CmiGetNextReductionID()
 // utilized in getCreateReduction and clearReduction to find the reduction struct associated with an ID
 unsigned CmiGetReductionIndex(CmiReductionID id)
 {
-    auto& table = CpvAccess(_reduction_info); 
-    if (id >= static_cast<CmiReductionID>(table.size())) {
-        table.resize(id + 1, nullptr);
+    if (id >= CmiMaxReductions)
+    {
+        CmiAbort("CmiGetReductionIndex: id >= CmiMaxReductions");
     }
 
-    return (unsigned)id;
+    return id; 
 }
 
 static CmiReduction *CmiGetCreateReduction(CmiReductionID id)
