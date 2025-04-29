@@ -36,13 +36,8 @@ typedef CMK_TYPEDEF_UINT1     CmiUInt1;
 typedef CMK_TYPEDEF_UINT2     CmiUInt2;
 typedef CMK_TYPEDEF_UINT4     CmiUInt4;
 typedef CMK_TYPEDEF_UINT8     CmiUInt8;
-#if CMK___int128_t_DEFINED
 typedef __int128_t            CmiInt16;
 typedef __uint128_t           CmiUInt16;
-#elif CMK___int128_DEFINED
-typedef __int128              CmiInt16;
-typedef __uint128     CmiUInt16;
-#endif
 
 // NOTE: these are solely for backwards compatibility
 // Do not use in reconverse impl
@@ -132,6 +127,43 @@ typedef void (*CmiStartFn)(int argc, char **argv);
 void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched = 0, int initret = 0);
 
 static CmiStartFn Cmi_startfn;
+
+struct alignas(ALIGN_BYTES) CmiChunkHeader {
+    int size;
+  private:
+    int ref;
+  public:
+    CmiChunkHeader() = default;
+    CmiChunkHeader(const CmiChunkHeader & x)
+      : size{x.size}, ref{x.getRef()} { }
+    int getRef() const { return ref; }
+    void setRef(int r) { ref = r; }
+    int incRef() { return ref++; }
+    int decRef() { return ref--; }
+  };
+  
+  /* Given a user chunk m, extract the enclosing chunk header fields: */
+  #define BLKSTART(m) ((CmiChunkHeader *) (((intptr_t)m) - sizeof(CmiChunkHeader)))
+  #define SIZEFIELD(m) ((BLKSTART(m))->size)
+  #define REFFIELD(m) ((BLKSTART(m))->getRef())
+  #define REFFIELDSET(m, r) ((BLKSTART(m))->setRef(r))
+  #define REFFIELDINC(m) ((BLKSTART(m))->incRef())
+  #define REFFIELDDEC(m) ((BLKSTART(m))->decRef())
+
+  #  define CmiTmpAlloc(size) malloc(size)
+#  define CmiTmpFree(ptr) free(ptr)
+
+enum ncpyRegModes {
+  CMK_BUFFER_REG      = 0,
+  CMK_BUFFER_UNREG    = 1,
+  CMK_BUFFER_PREREG   = 2,
+  CMK_BUFFER_NOREG    = 3
+};
+
+enum ncpyDeregModes {
+  CMK_BUFFER_DEREG    = 4,
+  CMK_BUFFER_NODEREG  = 5
+};
 
 // handler tools
 typedef void (*CmiHandler)(void *msg);
