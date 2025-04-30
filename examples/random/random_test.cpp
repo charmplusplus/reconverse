@@ -1,30 +1,25 @@
 #include "converse.h"
-#include <stdio.h>
 #include <pthread.h>
+#include <stdio.h>
 
-struct Message
-{
+struct Message {
   CmiMessageHeader header;
 };
 
-
-void ping_handler(void *vmsg)
-{
+void ping_handler(void *vmsg) {
   CrnSrand(100);
   CmiPrintf("Next random int: %d\n", CrnRand());
   CmiPrintf("Next random double: %f\n", CrnDrand());
   CmiExit(0);
 }
 
-CmiStartFn mymain(int argc, char **argv)
-{
+CmiStartFn mymain(int argc, char **argv) {
 
   printf("My PE is %d\n", CmiMyRank());
 
   int handlerId = CmiRegisterHandler(ping_handler);
 
-  if (CmiMyRank() == 0 && CmiMyNodeSize() > 1)
-  {
+  if (CmiMyRank() == 0 && CmiMyNodeSize() > 1) {
     // create a message
     Message *msg = (Message *)CmiAlloc(sizeof(Message));
     msg->header.handlerId = handlerId;
@@ -36,8 +31,7 @@ CmiStartFn mymain(int argc, char **argv)
     CmiSyncSendAndFree(sendToPE, msg->header.messageSize, msg);
   }
 
-  else if (CmiMyNodeSize() == 1)
-  {
+  else if (CmiMyNodeSize() == 1) {
     printf("Only one node, send self test\n");
     // create a message
     Message *msg = new Message;
@@ -53,8 +47,7 @@ CmiStartFn mymain(int argc, char **argv)
   return 0;
 }
 
-int main(int argc, char **argv)
-{
+int main(int argc, char **argv) {
   ConverseInit(argc, argv, (CmiStartFn)mymain);
   return 0;
 }

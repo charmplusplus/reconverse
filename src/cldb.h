@@ -1,6 +1,6 @@
-#include <stdio.h>
 #include "converse.h"
 #include <pthread.h>
+#include <stdio.h>
 #include <thread>
 
 #define MAXMSGBFRSIZE 100000
@@ -15,4 +15,4 @@ extern thread_local int CldMessageChunks;
 void CldRestoreHandler(char *);
 void CldSwitchHandler(char *, int);
 void CldModuleGeneralInit(char **);
-//void seedBalancerExit(void);
+// void seedBalancerExit(void);

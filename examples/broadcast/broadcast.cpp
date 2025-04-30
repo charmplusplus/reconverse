@@ -1,33 +1,26 @@
 #include "converse.h"
-#include <stdio.h>
 #include <pthread.h>
+#include <stdio.h>
 
 CpvDeclare(int, exitHandlerId);
 
-struct Message
-{
+struct Message {
   CmiMessageHeader header;
 };
 
-void stop_handler(void *vmsg)
-{
-  CsdExitScheduler();
-}
+void stop_handler(void *vmsg) { CsdExitScheduler(); }
 
-void ping_handler(void *vmsg)
-{
+void ping_handler(void *vmsg) {
   printf("PING HANDLER CALLED ON PE %i\n", CmiMyPe());
   stop_handler(NULL);
 }
 
-CmiStartFn mymain(int argc, char **argv)
-{
+CmiStartFn mymain(int argc, char **argv) {
   printf("My PE is %d\n", CmiMyPe());
 
   int handlerId = CmiRegisterHandler(ping_handler);
 
-  if (CmiMyPe() == 0)
-  {
+  if (CmiMyPe() == 0) {
     // create a message
     Message *msg = new Message;
     msg->header.handlerId = handlerId;
@@ -39,8 +32,7 @@ CmiStartFn mymain(int argc, char **argv)
   return 0;
 }
 
-int main(int argc, char **argv)
-{
+int main(int argc, char **argv) {
   ConverseInit(argc, argv, (CmiStartFn)mymain);
   return 0;
 }

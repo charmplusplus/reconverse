@@ -1,6 +1,6 @@
 
 #include <stdlib.h>
-//#include "queueing.h"
+// #include "queueing.h"
 #include "cldb.h"
 #include <math.h>
 
@@ -33,12 +33,11 @@ extern void LoadNotifyFn(int);
 /*
 CpvStaticDeclare(CldEstimatorTable, _estfns);
 */
-void CldRegisterEstimator(CldEstimator fn)
-{
+void CldRegisterEstimator(CldEstimator fn) {
   /*CpvAccess(_estfns).fns[CpvAccess(_estfns).count++] = fn;*/
 }
 
-/* 
+/*
 int CldEstimate(void)
 {
   CldEstimatorTable *estab = &(CpvAccess(_estfns));
@@ -54,13 +53,11 @@ static int CsdEstimator(void)
 }
 */
 
-int CldRegisterInfoFn(CldInfoFn fn)
-{
+int CldRegisterInfoFn(CldInfoFn fn) {
   return CmiRegisterHandler((CmiHandler)fn);
 }
 
-int CldRegisterPackFn(CldPackFn fn)
-{
+int CldRegisterPackFn(CldPackFn fn) {
   return CmiRegisterHandler((CmiHandler)fn);
 }
 
@@ -74,34 +71,29 @@ int CldRegisterPackFn(CldPackFn fn)
  * that it can be retreived from the queue.  Once the message gets
  * handled, it can no longer be retreived.  CldGetToken removes a
  * message that was placed in the scheduler queue in this way.
- * CldCountTokens tells you how many tokens are currently retreivable.  
-*/
+ * CldCountTokens tells you how many tokens are currently retreivable.
+ */
 
-void CldSwitchHandler(char *cmsg, int handler)
-{
-  CmiSetXHandler(cmsg, CmiGetHandler(cmsg)); //probably get rid of this in charm
+void CldSwitchHandler(char *cmsg, int handler) {
+  CmiSetXHandler(cmsg, CmiGetHandler(cmsg)); // probably get rid of this in
+                                             // charm
   CmiSetHandler(cmsg, handler);
 }
 
-void CldRestoreHandler(char *cmsg)
-{
+void CldRestoreHandler(char *cmsg) {
   CmiSetHandler(cmsg, CmiGetXHandler(cmsg));
 }
 
 void CldHandler(char *);
 
-
-void CldModuleGeneralInit(char **argv)
-{
-
-}
-
+void CldModuleGeneralInit(char **argv) {}
 
 /*
 don't really need now but may want to turn this back on later
 void seedBalancerExit(void)
 {
   if (_cldb_cs)
-    CmiPrintf("[%d] Relocate message number is %d\n", CmiMyPe(), CpvAccess(CldRelocatedMessages));
+    CmiPrintf("[%d] Relocate message number is %d\n", CmiMyPe(),
+CpvAccess(CldRelocatedMessages));
 }
 */

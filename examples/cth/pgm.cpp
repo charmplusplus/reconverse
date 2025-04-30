@@ -5,8 +5,8 @@
 
   Orion Lawlor, olawlor@acm.org, 2004/2/20
   */
-#include <stdio.h>
 #include "converse.h"
+#include <stdio.h>
 #include <stdlib.h>
 
 #define NITER 10000 /* Each thread yields this many times */
@@ -16,18 +16,20 @@
 #define VERBOSE(x) /* x */
 
 class threadStackChecker {
-  int val;    // Hash of current id and count
-  int count;  // Current count
+  int val;   // Hash of current id and count
+  int count; // Current count
 
   // Hash this id and count:
   static int fn(char id, int cnt) { return ((int)id) + (cnt << 16); }
 
- public:
+public:
   threadStackChecker(char id) : val(fn(id, -1)), count(-1) {}
 
   void advance(char id, int cnt) {
-    if (val != fn(id, count)) CmiAbort("stack value corrupted!");
-    if (++count != cnt) CmiAbort("stack count corrupted!");
+    if (val != fn(id, count))
+      CmiAbort("stack value corrupted!");
+    if (++count != cnt)
+      CmiAbort("stack count corrupted!");
     val = fn(id, count);
   }
 };
@@ -39,7 +41,7 @@ struct cthTestData {
 
 CpvStaticDeclare(struct cthTestData, data);
 
-void runThread(void* msg) {
+void runThread(void *msg) {
   (void)msg;
   char myId = 'A' + CpvAccess(data).nThreadStart++;
   threadStackChecker sc(myId);
@@ -47,10 +49,10 @@ void runThread(void* msg) {
 
   for (int iter = 0; iter < NITER; iter++) {
     VERBOSE(char buf[NITER + 2];
-        for (int i = 0; i < NITER + 1; i++) buf[i] = ' '; buf[0] = myId;
-        buf[1 + iter] = '0' + (iter % 10); buf[NITER + 1] = 0;
-        printf("%s\n", buf);)
-    if ((iter % 2) == 0) {  // (rand()%NITER)<5) {
+            for (int i = 0; i < NITER + 1; i++) buf[i] = ' '; buf[0] = myId;
+            buf[1 + iter] = '0' + (iter % 10); buf[NITER + 1] = 0;
+            printf("%s\n", buf);)
+    if ((iter % 2) == 0) { // (rand()%NITER)<5) {
       CthYield();
     }
     if (iter == (NITER / 4) && myId < ('A' + NSPAWN - 1)) {
@@ -62,15 +64,15 @@ void runThread(void* msg) {
   }
 
   const int myFinish = ++(CpvAccess(data).nThreadFinish);
-  if (myFinish == NSPAWN) {  // We're the last thread: leave
+  if (myFinish == NSPAWN) { // We're the last thread: leave
     double timeElapsed = CmiWallTimer() - CpvAccess(data).timeStart;
     printf(" %d threads ran successfully (%.3f us per context switch)\n",
-          myFinish, 1.0e6 * timeElapsed / (NITER * NSPAWN));
+           myFinish, 1.0e6 * timeElapsed / (NITER * NSPAWN));
     CsdExitScheduler();
   }
 }
 
-void test_init(int argc, char** argv) {
+void test_init(int argc, char **argv) {
   (void)argc;
   (void)argv;
 
@@ -84,7 +86,7 @@ void test_init(int argc, char** argv) {
   }
 }
 
-int main(int argc, char** argv) {
+int main(int argc, char **argv) {
   ConverseInit(argc, argv, test_init);
   return 0;
 }

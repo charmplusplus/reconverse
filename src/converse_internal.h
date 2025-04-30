@@ -7,19 +7,18 @@
 
 #include "converse.h"
 #include "converse_config.h"
-#include "comm_backend/comm_backend.h"
-#include "comm_backend/comm_backend_internal.h"
 #include "queue.h"
 
-typedef struct GroupDef_s
-{
+#include "comm_backend/comm_backend.h"
+#include "comm_backend/comm_backend_internal.h"
+
+typedef struct GroupDef_s {
   CmiMessageHeader core;
   struct GroupDef_s *next;
   CmiGroup group;
   int npes;
   int pes[1];
-}
-    *GroupDef;
+} *GroupDef;
 
 #define GROUPTAB_SIZE 101
 
@@ -36,16 +35,14 @@ void CmiExitHandler(void *msg);
 void CmiGroupHandler(void *msg);
 void CmiReduceHandler(void *msg);
 
-typedef struct HandlerInfo
-{
+typedef struct HandlerInfo {
   CmiHandler hdlr;
   void *userPtr; // does this point to the mesage data itself
 } CmiHandlerInfo;
 
 std::vector<CmiHandlerInfo> *CmiGetHandlerTable();
 
-typedef struct State
-{
+typedef struct State {
   int pe;
   int rank;
   int node;
@@ -72,8 +69,7 @@ double CmiGetIdleTime();
 void CmiSetIdleTime(double time);
 
 // cpu affinity
-typedef struct
-{
+typedef struct {
   int num_pus;
   int num_cores;
   int num_sockets;
@@ -90,39 +86,48 @@ extern int CmiSetCPUAffinity(int);
 
 #define CMI_REDUCTION_ID_MULTIPLIER 4
 
-using CmiReductionID = decltype(CmiMessageHeader::collectiveMetaInfo);     // needs to match header
-using CmiBroadcastSource = decltype(CmiMessageHeader::collectiveMetaInfo); // needs to match header
-typedef struct
-{
-  int ReductionID;       // ID associated with the reduction. Different reductions will correspond to different IDs
-  int numChildren;       // number of child PEs/chares in the spanning tree for the reduction
-  int messagesReceived;  // used to keep track of how many contributions have been received from child chares
-  bool localContributed; // flag to indicate if the local PE/chare has contributed to the reduction
+using CmiReductionID =
+    decltype(CmiMessageHeader::collectiveMetaInfo); // needs to match header
+using CmiBroadcastSource =
+    decltype(CmiMessageHeader::collectiveMetaInfo); // needs to match header
+typedef struct {
+  int ReductionID; // ID associated with the reduction. Different reductions
+                   // will correspond to different IDs
+  int numChildren; // number of child PEs/chares in the spanning tree for the
+                   // reduction
+  int messagesReceived;  // used to keep track of how many contributions have
+                         // been received from child chares
+  bool localContributed; // flag to indicate if the local PE/chare has
+                         // contributed to the reduction
   void *localbuffer;     // local buffer to store the data
   int localbufferSize;   // size of the local buffer
   void **remotebuffer;   // remote buffer to store the data
   int parent;            // parent PE in the spanning tree
-  struct
-  {
-    CmiHandler desthandler;   // the handler that will process the final result of the reduction
-    CmiReduceMergeFn mergefn; // function used to combine partial results from different PEs into a single result
+  struct {
+    CmiHandler desthandler; // the handler that will process the final result of
+                            // the reduction
+    CmiReduceMergeFn mergefn; // function used to combine partial results from
+                              // different PEs into a single result
   } ops;
 } CmiReduction;
 
 CpvStaticDeclare(CmiReductionID, _reduction_counter);
-CpvStaticDeclare(CmiReduction **, _reduction_info); // an array of pointers to reduction structs
+CpvStaticDeclare(CmiReduction **,
+                 _reduction_info); // an array of pointers to reduction structs
 
 void CmiReductionsInit(void);
 
 // helper function to get the next reduction ID
 CmiReductionID CmiGetNextReductionID();
 
-// helper function to get the index into the reduction table for a specific reduction ID
+// helper function to get the index into the reduction table for a specific
+// reduction ID
 unsigned CmiGetReductionIndex(CmiReductionID id);
 
 static CmiReduction *CmiGetCreateReduction(CmiReductionID id);
 static void CmiClearReduction(CmiReductionID id);
-void CmiInternalReduce(void *msg, int size, CmiReduceMergeFn mergeFn, CmiReduction *red);
+void CmiInternalReduce(void *msg, int size, CmiReduceMergeFn mergeFn,
+                       CmiReduction *red);
 void CmiSendReduce(CmiReduction *red);
 
 // helpers to get and set red ID in a message
