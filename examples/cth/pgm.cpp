@@ -64,6 +64,19 @@ void runThread(void *msg) {
   }
 
   const int myFinish = ++(CpvAccess(data).nThreadFinish);
+
+  // simple ctv test
+  CtvDeclare(int, cthTest);
+  CtvInitialize(int, cthTest);
+
+  if (!CtvInitialized(cthTest))
+    CmiAbort("CtvInitialize failed");
+
+  CtvAccess(cthTest) = myFinish;
+
+  if (CtvAccess(cthTest) != myFinish)
+    CmiAbort("CtvAccess failed");
+
   if (myFinish == NSPAWN) { // We're the last thread: leave
     double timeElapsed = CmiWallTimer() - CpvAccess(data).timeStart;
     printf(" %d threads ran successfully (%.3f us per context switch)\n",

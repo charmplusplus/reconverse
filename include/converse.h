@@ -190,10 +190,13 @@ void CthYield(void);
 
 void CthTraceResume(CthThread t);
 
-size_t CthRegister(size_t size);
-void CthRegistered(size_t maxOffset);
-
 // Ctv functions
+
+CthCpvExtern(char *, CthData);
+extern size_t CthRegister(size_t dataSize);
+extern void CthRegistered(size_t dataOffMax);
+extern char *CthGetData(CthThread t);
+
 #define CtvDeclare(t, v)                                                       \
   typedef t CtvType##v;                                                        \
   CsvDeclare(int, CtvOffs##v) = (-1)

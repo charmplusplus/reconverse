@@ -453,3 +453,7 @@ void CthRegistered(size_t maxOffset) {
     CthCpvAccess(CthData) = th->data;
   }
 }
+
+/* possible hack? CW */
+CmiObjId *CthGetThreadID(CthThread th) { return &(B(th)->tid); }
+char *CthGetData(CthThread t) { return B(t)->data; }
