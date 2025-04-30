@@ -34,7 +34,7 @@ typedef struct CthThreadBase {
   void *stack;   /*Pointer to thread stack*/
   int stacksize; /*Size of thread stack (bytes)*/
   int magic;     /* magic number for checking corruption */
-  struct CthThreadListener *listener; 
+  struct CthThreadListener *listener;
 
 } CthThreadBase;
 
@@ -80,10 +80,7 @@ void CthSetThreadID(CthThread th, int a, int b, int c) {
   B(th)->tid.id[2] = c;
 }
 
-CmiObjId *CthGetThreadID(CthThread th)
-{
-  return &(B(th)->tid);
-}
+CmiObjId *CthGetThreadID(CthThread th) { return &(B(th)->tid); }
 
 static void CthNoStrategy(void) {
   CmiAbort("Called CthAwaken or CthSuspend before calling CthSetStrategy.\n");
@@ -413,16 +410,16 @@ void CthTraceResume(CthThread t) {
   // no tracing
 }
 
-void CthAddListener(CthThread t,struct CthThreadListener *l){
-  struct CthThreadListener *p=B(t)->listener;
-  if(p== NULL){ /* first listener */
-    B(t)->listener=l;
+void CthAddListener(CthThread t, struct CthThreadListener *l) {
+  struct CthThreadListener *p = B(t)->listener;
+  if (p == NULL) { /* first listener */
+    B(t)->listener = l;
     l->thread = t;
-    l->next=NULL;
-    return;	
+    l->next = NULL;
+    return;
   }
   /* Add l at end of current chain of listeners: */
-  while(p->next != NULL){
+  while (p->next != NULL) {
     p = p->next;
   }
   p->next = l;
@@ -476,3 +473,6 @@ void CthRegistered(size_t maxOffset) {
     CthCpvAccess(CthData) = th->data;
   }
 }
+
+/* possible hack? CW */
+char *CthGetData(CthThread t) { return B(t)->data; }
