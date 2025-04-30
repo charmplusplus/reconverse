@@ -59,7 +59,7 @@ typedef __uint128_t CmiUInt16;
   } while (0)
 ;
 
-#define CpvAccess(v) CMK_TAG(Cpv_, v)[CmiMyRank()]
+#define CpvAccess(v) (*CMK_TAG(Cpv_,v))
 #define CpvAccessOther(v, r) CMK_TAG(Cpv_, v)[r]
 #define CpvExtern(t, v) extern t *CMK_TAG(Cpv_, v)
 #define CpvInitialized(v) (0 != CMK_TAG(Cpv_, v))
@@ -72,6 +72,8 @@ typedef __uint128_t CmiUInt16;
   } while (0)
 #define CsvInitialized(v) 1
 #define CsvAccess(v) v
+
+#define MESSAGE_PHASE_CHECK(msg)
 
 // alignment
 #define CMIALIGN(x, n) (size_t)((~((size_t)n - 1)) & ((x) + (n - 1)))
@@ -325,6 +327,7 @@ void CmiSyncNodeBroadcastAllAndFree(unsigned int size, void *msg);
 
 // multicast and group
 CmiGroup CmiEstablishGroup(int npes, int *pes);
+void CmiLookupGroup(CmiGroup grp, int *npes, int **pes);
 void CmiSyncMulticast(CmiGroup grp, int size, void *msg);
 void CmiSyncMulticastAndFree(CmiGroup grp, int size, void *msg);
 void CmiSyncMulticastFn(CmiGroup grp, int size, char *msg);
@@ -334,6 +337,8 @@ void CmiFreeMulticastFn(CmiGroup grp, int size, char *msg);
 void CmiNodeBarrier();
 void CmiNodeAllBarrier();
 void CsdExitScheduler();
+
+void CmiAssignOnce(int* variable, int value);
 
 // Reduction functions
 typedef void *(*CmiReduceMergeFn)(int *, void *, void **, int);
@@ -525,6 +530,10 @@ extern int _immediateFlag;
 #define CmiCheckImmediateLock(ignored) \
   ((_immediateLock)?((_immediateFlag=1),1):0)
 #define CmiClearImmediateFlag() { _immediateFlag=0; }
+#  define CmiBecomeImmediate(msg) /* empty */
+#  define CmiResetImmediate(msg)  /* empty */
+#  define CmiIsImmediate(msg)   (0)
+#  define CmiImmIsRunning()       (0)
 
 CmiNodeLock CmiCreateLock();
 void CmiDestroyLock(CmiNodeLock lock);

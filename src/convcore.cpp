@@ -323,6 +323,11 @@ void CmiNodeAllBarrier() {
   nodeBarrier.wait();
 }
 
+void CmiAssignOnce(int* variable, int value) {
+  if (CmiMyRank() == 0) { *variable = value; }
+  CmiNodeAllBarrier();
+}
+
 // status default is 0
 void CsdExitScheduler() { CmiGetState()->stopFlag = 1; }
 
