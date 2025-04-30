@@ -5,13 +5,12 @@
 
 #include <cstring>
 
-// clang-format off
 #include "converse.h"
 #include "converse_config.h"
+#include "queue.h"
+
 #include "comm_backend/comm_backend.h"
 #include "comm_backend/comm_backend_internal.h"
-#include "queue.h"
-// clang-format on
 
 typedef struct GroupDef_s {
   CmiMessageHeader core;
