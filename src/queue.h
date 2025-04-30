@@ -1,16 +1,14 @@
 #ifndef QUEUE_H
 #define QUEUE_H
 
-#include <mutex>
 #include <queue>
+#include <mutex>
 #include <stdexcept>
+#include <optional>
 #include "concurrentqueue.h"
 
-class QueueResult {
-public:
-  void *msg;
-  operator bool() { return msg != NULL; }
-};
+template<typename T>
+using QueueResult = std::optional<T>;
 
 template<typename ConcreteQ, typename MessageType>
 class MutexAccessControl {
@@ -23,16 +21,15 @@ public:
         q.push(message);
     }
 
-    QueueResult pop_result() {
+    QueueResult<MessageType> pop_result() {
         std::lock_guard<std::mutex> lock(mtx);
-        QueueResult result;
         if (q.empty()) {
-            result.msg = NULL;
+            return std::nullopt;
         } else {
-            result.msg = q.front();
+            MessageType val = q.front();
             q.pop();
+            return QueueResult<MessageType>(val);
         }
-        return result;
     }
 
 
@@ -57,12 +54,10 @@ class AtomicAccessControl {
         q.enqueue(message);
     }
 
-    QueueResult pop_result() {
+    QueueResult<MessageType> pop_result() {
         MessageType message;
         bool success = q.try_dequeue(message);
-        QueueResult result;
-        result.msg = success ? message : nullptr;
-        return result;
+        return success ? QueueResult<MessageType>(message) : std::nullopt;
     }
 
     size_t size() {
@@ -81,9 +76,9 @@ class MPSCQueue
     AccessControlPolicy policy;
 
 public:
-    MessageType pop()
+    QueueResult<MessageType> pop()
     {
-        return policy.pop_result().msg;
+        return policy.pop_result();
     }
 
     void push(MessageType message)
@@ -108,13 +103,7 @@ class MPMCQueue
     AccessControlPolicy policy;
 
 public:
-  QueueResult pop() {
-    AccessControlPolicy::acquire();
-    // This will not work for atomics.
-    // It's fine for now: internal implementation detail.
-
-
-    QueueResult pop()
+    QueueResult<MessageType> pop()
     {
         return policy.pop_result();
     }
@@ -135,21 +124,20 @@ public:
     }
 };
 
-template <typename MessageType>
-using ConverseQueue =
-    MPSCQueue<std::queue<MessageType>, MessageType, MutexAccessControl>;
 
+#ifdef ATOMIC_QUEUE_ENABLED
 template <typename MessageType>
 using ConverseQueue = MPSCQueue<MessageType, AtomicAccessControl<MessageType>>;
 
 template <typename MessageType>
 using ConverseNodeQueue = MPMCQueue<MessageType, AtomicAccessControl<MessageType>>;
+#else
+template <typename MessageType>
+using ConverseQueue = MPSCQueue<MessageType, MutexAccessControl<std::queue<MessageType>, MessageType>>;
 
-// template <typename MessageType>
-// using ConverseQueue = MPSCQueue<MessageType, MutexAccessControl<std::queue<MessageType>, MessageType>>;
-
-// template <typename MessageType>
-// using ConverseNodeQueue = MPMCQueue<MessageType, MutexAccessControl<std::queue<MessageType>, MessageType>>;
+template <typename MessageType>
+using ConverseNodeQueue = MPMCQueue<MessageType, MutexAccessControl<std::queue<MessageType>, MessageType>>;
+#endif
 
 
 #endif
