@@ -1,6 +1,7 @@
 //+pe <N> threads, each running a scheduler
 #include "barrier.h"
 #include "converse_internal.h"
+#include "conv-taskQ.h"
 #include "queue.h"
 #include "scheduler.h"
 
@@ -77,8 +78,13 @@ void converseRunPe(int rank) {
 #endif
 
   Cmi_exitHandler = CmiRegisterHandler(CmiExitHandler);
+
+  //initlialize the task queue for this PE 
+  CpvInitialize(TaskQueue*, task_q);
+  CpvAccess(task_q) = TaskQueueCreate();
+
+  //initalize collective operations/arrays/handlers/etc
   collectiveInit();
-  // Cmi_multicastHandler = CmiRegisterHandler(CmiMulticastHandler);
 
   // barrier to ensure all global structs are initialized
   CmiNodeBarrier();
@@ -89,6 +95,10 @@ void converseRunPe(int rank) {
   // call initial function and start scheduler
   Cmi_startfn(Cmi_argc, Cmi_argv);
   CsdScheduler();
+
+  // cleanup of threads? : destroy each threads task queue and reduction table struct(not the struct itself)
+  TaskQueueDestroy(CpvAccess(task_q));  
+  free(CpvAccess(_reduction_info));
 }
 
 void CmiStartThreads() {
@@ -186,7 +196,6 @@ void CmiInitState(int rank) {
   // allocate global entries
   ConverseQueue<void *> *queue = new ConverseQueue<void *>();
   std::vector<CmiHandlerInfo> *handlerTable = new std::vector<CmiHandlerInfo>();
-
   Cmi_queues[Cmi_myrank] = queue;
   CmiHandlerTable[Cmi_myrank] = handlerTable;
 
@@ -194,6 +203,8 @@ void CmiInitState(int rank) {
   CrnInit();
 
   CcdModuleInit();
+
+  CmiTaskQueueInit();
 }
 
 ConverseQueue<void *> *CmiGetQueue(int rank) { return Cmi_queues[rank]; }

@@ -4,6 +4,7 @@
 #include "queue.h"
 #include <thread>
 
+
 /**
  * The main scheduler loop for the Charm++ runtime.
  */
@@ -14,6 +15,11 @@ void CsdScheduler() {
   // get node level queue
   ConverseNodeQueue<void *> *nodeQueue = CmiGetNodeQueue();
 
+  //get task level queue 
+  TaskQueue* taskQueue = (TaskQueue*)CpvAccess(task_q);
+
+  void* msg = NULL;
+
   while (CmiStopFlag() == 0) {
 
     CcdRaiseCondition(CcdSCHEDLOOP);
@@ -22,7 +28,7 @@ void CsdScheduler() {
     if (!nodeQueue->empty()) {
       QueueResult result = nodeQueue->pop();
       if (result) {
-        void *msg = result.msg;
+        msg = result.msg;
         // process event
         CmiHandleMessage(msg);
 
@@ -32,12 +38,16 @@ void CsdScheduler() {
           CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
         }
       }
-    }
+    } else if (taskQueue && (msg = taskQueuePop(taskQueue))) { //taskqueue pop handles all possible queue cases arleady so we only need to check if it exists or not
+      CmiHandleMessage(msg);
+      // idle stuff 
 
-    // poll thread queue
-    else if (!queue->empty()) {
+
+
+      
+    } else (!queue->empty()) {  // poll thread queue
       // get next event (guaranteed to be there because only single consumer)
-      void *msg = queue->pop();
+      msg = queue->pop();
 
       // process event
       CmiHandleMessage(msg);

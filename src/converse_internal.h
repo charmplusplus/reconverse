@@ -8,6 +8,7 @@
 #include "converse.h"
 #include "converse_config.h"
 #include "queue.h"
+#include "conv-taskQ.h"
 
 #include "comm_backend/comm_backend.h"
 #include "comm_backend/comm_backend_internal.h"
@@ -115,6 +116,8 @@ typedef struct {
 CpvStaticDeclare(CmiReductionID, _reduction_counter);
 CpvStaticDeclare(CmiReduction **,
                  _reduction_info); // an array of pointers to reduction structs
+
+CpvStaticDeclare(TaskQueue*, task_q);
 
 void CmiReductionsInit(void);
 
