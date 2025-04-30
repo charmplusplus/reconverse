@@ -1,0 +1,38 @@
+name: Clang-Format Check
+
+on:
+  pull_request:
+    paths:
+      - '**/*.cpp'
+      - '**/*.h'
+      - '**/*.c'
+      - '**/*.hpp'
+
+jobs:
+  clang-format:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up clang-format
+      run: |
+        sudo apt-get update
+        sudo apt-get install clang-format
+
+    - name: Run clang-format
+      run: |
+        git diff --exit-code --ignore-submodules -- '*.cpp' '*.h' '*.c' '*.hpp'
+        if [ $? -ne 0 ]; then
+          echo "Clang-format failed. Please format your code."
+          exit 1
+        fi
+
+    - name: Clang-format applied
+      run: |
+        clang-format -i '**/*.cpp' '**/*.h' '**/*.c' '**/*.hpp'
+        git diff --exit-code -- '*.cpp' '*.h' '*.c' '*.hpp'
+        git add .
+        git commit -m "Apply clang-format"
+        git push

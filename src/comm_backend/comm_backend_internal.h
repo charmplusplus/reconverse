@@ -4,8 +4,10 @@
 #include <cstdio>
 #include <vector>
 
-#include "comm_backend/comm_backend.h"
+// clang-format off
 #include "converse_config.h"
+#include "comm_backend/comm_backend.h"
+// clang-format on
 
 namespace comm_backend {
 
