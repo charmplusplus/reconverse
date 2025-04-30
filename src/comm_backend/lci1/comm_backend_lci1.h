@@ -1,7 +1,7 @@
 #ifndef RECONVERSE_COMM_BACKEND_LCI1_H
 #define RECONVERSE_COMM_BACKEND_LCI1_H
 
-#include "lci.h"
+#include "lci.hpp"
 #include "converse.h"
 
 #define MEMPOOL_INIT_SIZE_MB_DEFAULT   64

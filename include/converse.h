@@ -9,7 +9,7 @@
 #include <pthread.h>
 #include "comm_backend/comm_backend.h"
 #include "comm_backend/comm_backend_internal.h"
-#include "comm_backend/lc1/comm_backend_lci1.h"
+#include "comm_backend/lci1/comm_backend_lci1.h"
 
 using CmiInt1 = std::int8_t;
 using CmiInt2 = std::int16_t;
