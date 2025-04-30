@@ -1,17 +1,15 @@
 #ifndef QUEUE_H
 #define QUEUE_H
 
-#include <queue>
 #include <mutex>
+#include <queue>
 #include <stdexcept>
 #include "concurrentqueue.h"
 
-class QueueResult{
-    public:
-    void *msg;
-    operator bool(){
-        return msg != NULL;
-    }
+class QueueResult {
+public:
+  void *msg;
+  operator bool() { return msg != NULL; }
 };
 
 template<typename ConcreteQ, typename MessageType>
@@ -110,6 +108,10 @@ class MPMCQueue
     AccessControlPolicy policy;
 
 public:
+  QueueResult pop() {
+    AccessControlPolicy::acquire();
+    // This will not work for atomics.
+    // It's fine for now: internal implementation detail.
 
 
     QueueResult pop()
@@ -133,6 +135,9 @@ public:
     }
 };
 
+template <typename MessageType>
+using ConverseQueue =
+    MPSCQueue<std::queue<MessageType>, MessageType, MutexAccessControl>;
 
 template <typename MessageType>
 using ConverseQueue = MPSCQueue<MessageType, AtomicAccessControl<MessageType>>;

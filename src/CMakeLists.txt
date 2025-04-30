@@ -1,7 +1,7 @@
 target_include_directories(reconverse PRIVATE .)
 target_sources(reconverse PRIVATE conv-conds.cpp convcore.cpp random.cpp 
-                scheduler.cpp cpuaffinity.cpp
-                comm_backend/comm_backend_internal.cpp threads.cpp)
+                scheduler.cpp cpuaffinity.cpp collectives.cpp
+                comm_backend/comm_backend_internal.cpp threads.cpp cldb.none.cpp cldb.cpp)
 target_include_directories(
   reconverse PRIVATE $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}>
                      $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)

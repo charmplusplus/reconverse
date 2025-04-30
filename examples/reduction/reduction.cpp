@@ -1,27 +1,21 @@
 #include "converse.h"
-#include <stdio.h>
 #include <pthread.h>
+#include <stdio.h>
 
 CpvDeclare(int, exitHandlerId);
 
-struct Message
-{
+struct Message {
   CmiMessageHeader header;
   int myReductionData;
 };
 
-void stop_handler(void *vmsg)
-{
-  CsdExitScheduler();
-}
+void stop_handler(void *vmsg) { CsdExitScheduler(); }
 
-void *mergeByAddition(int *size, void *data, void **remote, int n)
-{
+void *mergeByAddition(int *size, void *data, void **remote, int n) {
   Message *localMessage = (Message *)data;
   int localData = localMessage->myReductionData;
 
-  for (int i = 0; i < n; i++)
-  {
+  for (int i = 0; i < n; i++) {
     Message *remoteMessage = (Message *)remote[i];
     int remoteData = remoteMessage->myReductionData;
     localData += remoteData;
@@ -31,22 +25,21 @@ void *mergeByAddition(int *size, void *data, void **remote, int n)
   return localMessage;
 }
 
-void ping_handler(void *vmsg)
-{
+void ping_handler(void *vmsg) {
   // compute expected result:
   int n = CmiNumPes() - 1;
   int expected = n * (n + 1) / 2;
 
-  if (expected != ((Message *)vmsg)->myReductionData)
-  {
-    CmiAbort("Reduction result mismatch: expected %d, got %d\n", expected, ((Message *)vmsg)->myReductionData);
+  if (expected != ((Message *)vmsg)->myReductionData) {
+    CmiAbort("Reduction result mismatch: expected %d, got %d\n", expected,
+             ((Message *)vmsg)->myReductionData);
   }
-  printf("Reduction done on %d. Result matches expected: %d.\n", CmiMyPe(), ((Message *)vmsg)->myReductionData);
+  printf("Reduction done on %d. Result matches expected: %d.\n", CmiMyPe(),
+         ((Message *)vmsg)->myReductionData);
   CmiExit(0);
 }
 
-CmiStartFn mymain(int argc, char **argv)
-{
+CmiStartFn mymain(int argc, char **argv) {
   int handlerId = CmiRegisterHandler(ping_handler);
 
   // create a message
@@ -56,13 +49,10 @@ CmiStartFn mymain(int argc, char **argv)
   msg->myReductionData = CmiMyPe();
 
   CmiReduce(msg, sizeof(Message), mergeByAddition);
-
-  // printf("Answer to the Ultimate Question of Life, the Universe, and Everything: %d\n", CpvAccess(test));
   return 0;
 }
 
-int main(int argc, char **argv)
-{
+int main(int argc, char **argv) {
   ConverseInit(argc, argv, (CmiStartFn)mymain);
   return 0;
 }

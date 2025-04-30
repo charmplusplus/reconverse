@@ -6,8 +6,8 @@
   Sameer Kumar 02/07/05
  ****************************************************************/
 
-#include <stdlib.h>
 #include <converse.h>
+#include <stdlib.h>
 
 CpvDeclare(int, nCycles);
 CpvDeclare(int, minMsgSize);
@@ -31,8 +31,7 @@ PersistentHandle h;
 #endif
 
 // Start the pingpong for each message size
-void startRing()
-{
+void startRing() {
   CpvAccess(cycleNum) = 0;
   char *msg = (char *)CmiAlloc(CpvAccess(msgSize));
   *((int *)(msg + CmiMsgHeaderSizeBytes)) = CpvAccess(msgSize);
@@ -41,29 +40,26 @@ void startRing()
 }
 
 // the pingpong has finished, record message time
-void ringFinished(char *msg)
-{
+void ringFinished(char *msg) {
   size_t msgSizeDiff = CpvAccess(msgSize) - CmiMsgHeaderSizeBytes;
   CmiFree(msg);
 
   // Print the time for that message size
-  CmiPrintf("Size=%zu bytes, time=%lf microseconds one-way\n",
-            msgSizeDiff,
-            (1e6 * (CpvAccess(endTime) - CpvAccess(startTime))) / (2. * CpvAccess(nCycles)));
+  CmiPrintf("Size=%zu bytes, time=%lf microseconds one-way\n", msgSizeDiff,
+            (1e6 * (CpvAccess(endTime) - CpvAccess(startTime))) /
+                (2. * CpvAccess(nCycles)));
 
   // Have we finished all message sizes?
-  if ((CpvAccess(msgSize) - CmiMsgHeaderSizeBytes) < CpvAccess(maxMsgSize))
-  {
+  if ((CpvAccess(msgSize) - CmiMsgHeaderSizeBytes) < CpvAccess(maxMsgSize)) {
     // Increase message in powers of factor. Also add a converse header to that
-    CpvAccess(msgSize) = (CpvAccess(msgSize) - CmiMsgHeaderSizeBytes) * CpvAccess(factor) +
-                         CmiMsgHeaderSizeBytes;
+    CpvAccess(msgSize) =
+        (CpvAccess(msgSize) - CmiMsgHeaderSizeBytes) * CpvAccess(factor) +
+        CmiMsgHeaderSizeBytes;
 
     // start the ring again
     CmiPrintf("Start ring again\n");
     startRing();
-  }
-  else
-  {
+  } else {
     // exit
     void *sendmsg = CmiAlloc(CmiMsgHeaderSizeBytes);
     CmiSetHandler(sendmsg, CpvAccess(exitHandler));
@@ -71,8 +67,7 @@ void ringFinished(char *msg)
   }
 }
 
-void startWarmUp()
-{
+void startWarmUp() {
   // Small pingpong message to ensure that setup is completed
   char *msg = (char *)CmiAlloc(CpvAccess(msgSize));
   *((int *)(msg + CmiMsgHeaderSizeBytes)) = CpvAccess(msgSize);
@@ -81,24 +76,21 @@ void startWarmUp()
 }
 
 // Handler on Node 0 which starts pingpong on warmup completion
-void warmUpDoneHandlerFunc(char *msg)
-{
+void warmUpDoneHandlerFunc(char *msg) {
   CmiFree(msg);
   // Warmup phase completed. Start pingpong
   startRing();
 }
 
 // We finished for all message sizes. Exit now
-CmiHandler exitHandlerFunc(char *msg)
-{
+CmiHandler exitHandlerFunc(char *msg) {
   CmiFree(msg);
   CsdExitScheduler();
   return 0;
 }
 
 // Handler on Node 0
-CmiHandler node0HandlerFunc(char *msg)
-{
+CmiHandler node0HandlerFunc(char *msg) {
   if (CpvAccess(warmUp))
     CpvAccess(warmUp) = false;
   else
@@ -109,13 +101,10 @@ CmiHandler node0HandlerFunc(char *msg)
     CpvAccess(startTime) = CmiWallTimer();
 
   // Stop timer for the last iteration
-  if (CpvAccess(cycleNum) == CpvAccess(nCycles))
-  {
+  if (CpvAccess(cycleNum) == CpvAccess(nCycles)) {
     CpvAccess(endTime) = CmiWallTimer();
     ringFinished(msg);
-  }
-  else
-  {
+  } else {
     CmiSetHandler(msg, CpvAccess(node1Handler));
     *((int *)(msg + CmiMsgHeaderSizeBytes)) = CpvAccess(msgSize);
 
@@ -130,16 +119,13 @@ CmiHandler node0HandlerFunc(char *msg)
   return 0;
 }
 
-CmiHandler node1HandlerFunc(char *msg)
-{
+CmiHandler node1HandlerFunc(char *msg) {
   CpvAccess(msgSize) = *((int *)(msg + CmiMsgHeaderSizeBytes));
 
-  if (CpvAccess(warmUp))
-  {
+  if (CpvAccess(warmUp)) {
     CmiSetHandler(msg, CpvAccess(warmUpDoneHandler));
     CpvAccess(warmUp) = false;
-  }
-  else
+  } else
     CmiSetHandler(msg, CpvAccess(node0Handler));
 
 #if USE_PERSISTENT
@@ -153,11 +139,11 @@ CmiHandler node1HandlerFunc(char *msg)
 }
 
 // Converse handler for beginning operation
-CmiHandler startOperationHandlerFunc(char *msg)
-{
+CmiHandler startOperationHandlerFunc(char *msg) {
 #if USE_PERSISTENT
   if (CmiMyPe() < CmiNumPes())
-    h = CmiCreateCompressPersistent(otherPe, CpvAccess(maxMsgSize) + 1024, 200, CMI_FLOATING);
+    h = CmiCreateCompressPersistent(otherPe, CpvAccess(maxMsgSize) + 1024, 200,
+                                    CMI_FLOATING);
 #endif
 
   if (CmiMyPe() == 0)
@@ -166,8 +152,7 @@ CmiHandler startOperationHandlerFunc(char *msg)
 }
 
 // Converse main. Initialize variables and register handlers
-CmiStartFn mymain(int argc, char *argv[])
-{
+CmiStartFn mymain(int argc, char *argv[]) {
   CpvInitialize(int, msgSize);
   CpvInitialize(int, cycleNum);
 
@@ -179,7 +164,8 @@ CmiStartFn mymain(int argc, char *argv[])
 
   // Register Handlers
   CpvInitialize(int, warmUpDoneHandler);
-  CpvAccess(warmUpDoneHandler) = CmiRegisterHandler((CmiHandler)warmUpDoneHandlerFunc);
+  CpvAccess(warmUpDoneHandler) =
+      CmiRegisterHandler((CmiHandler)warmUpDoneHandlerFunc);
   CpvInitialize(int, exitHandler);
   CpvAccess(exitHandler) = CmiRegisterHandler((CmiHandler)exitHandlerFunc);
   CpvInitialize(int, node0Handler);
@@ -187,7 +173,8 @@ CmiStartFn mymain(int argc, char *argv[])
   CpvInitialize(int, node1Handler);
   CpvAccess(node1Handler) = CmiRegisterHandler((CmiHandler)node1HandlerFunc);
   CpvInitialize(int, startOperationHandler);
-  CpvAccess(startOperationHandler) = CmiRegisterHandler((CmiHandler)startOperationHandlerFunc);
+  CpvAccess(startOperationHandler) =
+      CmiRegisterHandler((CmiHandler)startOperationHandlerFunc);
 
   // set warmup run
   CpvAccess(warmUp) = true;
@@ -208,43 +195,40 @@ CmiStartFn mymain(int argc, char *argv[])
 
   // Update the argc after runtime parameters are extracted out
   argc = CmiGetArgc(argv);
-  if (argc == 5)
-  {
+  if (argc == 5) {
     CpvAccess(nCycles) = atoi(argv[1]);
     CpvAccess(minMsgSize) = atoi(argv[2]);
     CpvAccess(maxMsgSize) = atoi(argv[3]);
     CpvAccess(factor) = atoi(argv[4]);
-  }
-  else if (argc == 1)
-  {
+  } else if (argc == 1) {
     // use default arguments
     CpvAccess(nCycles) = 1000;
     CpvAccess(minMsgSize) = 1 << 9;
     CpvAccess(maxMsgSize) = 1 << 14;
     CpvAccess(factor) = 2;
-  }
-  else
-  {
+  } else {
     if (CmiMyPe() == 0)
-      CmiAbort("Usage: ./pingpong <ncycles> <minsize> <maxsize> <increase factor> \nExample: ./pingpong 100 2 128 2\n");
+      CmiAbort("Usage: ./pingpong <ncycles> <minsize> <maxsize> <increase "
+               "factor> \nExample: ./pingpong 100 2 128 2\n");
   }
 
-  if (CmiMyPe() == 0)
-  {
-    CmiPrintf("Pingpong with iterations = %d, minMsgSize = %d, maxMsgSize = %d, increase factor = %d\n",
-              CpvAccess(nCycles), CpvAccess(minMsgSize), CpvAccess(maxMsgSize), CpvAccess(factor));
+  if (CmiMyPe() == 0) {
+    CmiPrintf("Pingpong with iterations = %d, minMsgSize = %d, maxMsgSize = "
+              "%d, increase factor = %d\n",
+              CpvAccess(nCycles), CpvAccess(minMsgSize), CpvAccess(maxMsgSize),
+              CpvAccess(factor));
   }
 
-  if (CmiNumPes() != 2 && CmiMyPe() == 0)
-  {
-    CmiAbort("This test is designed for only 2 pes and cannot be run on %d pe(s)!\n", CmiNumPes());
+  if (CmiNumPes() != 2 && CmiMyPe() == 0) {
+    CmiAbort(
+        "This test is designed for only 2 pes and cannot be run on %d pe(s)!\n",
+        CmiNumPes());
   }
 
   CpvAccess(msgSize) = CpvAccess(minMsgSize) + CmiMsgHeaderSizeBytes;
 
   // Node 0 waits till all processors finish their topology processing
-  if (CmiMyPe() == 0)
-  {
+  if (CmiMyPe() == 0) {
     // Signal all PEs to begin computing
     char *startOperationMsg = (char *)CmiAlloc(CmiMsgHeaderSizeBytes);
     CmiSetHandler((char *)startOperationMsg, CpvAccess(startOperationHandler));
@@ -256,8 +240,7 @@ CmiStartFn mymain(int argc, char *argv[])
   return 0;
 }
 
-int main(int argc, char *argv[])
-{
+int main(int argc, char *argv[]) {
   ConverseInit(argc, argv, (CmiStartFn)mymain, 0, 0);
   return 0;
 }
