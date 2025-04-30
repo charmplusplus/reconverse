@@ -24,6 +24,7 @@ typedef struct GroupDef_s {
 
 void CmiStartThreads(char **argv);
 void converseRunPe(int rank);
+void collectiveInit(void);
 
 // HANDLERS
 // TODO: what is CmiHandlerEx in old converse?
