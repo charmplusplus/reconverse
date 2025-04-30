@@ -25,16 +25,6 @@ public:
         q.push(message);
     }
 
-    MessageType pop_throw() {
-         std::lock_guard<std::mutex> lock(mtx);
-        if (q.empty()) {
-             throw std::runtime_error("Cannot pop from empty queue");
-        }
-        MessageType message = q.front();
-        q.pop();
-        return message;
-    }
-
     QueueResult pop_result() {
         std::lock_guard<std::mutex> lock(mtx);
         QueueResult result;
@@ -59,6 +49,32 @@ public:
     }
 };
 
+template<typename MessageType>
+class AtomicAccessControl {
+    // what default size?
+    moodycamel::ConcurrentQueue<MessageType> q{256};
+
+    public:
+    void push(MessageType message) {
+        q.enqueue(message);
+    }
+
+    QueueResult pop_result() {
+        MessageType message;
+        bool success = q.try_dequeue(message);
+        QueueResult result;
+        result.msg = success ? message : nullptr;
+        return result;
+    }
+
+    size_t size() {
+        return q.size_approx();
+    }
+
+    bool empty() {
+        return q.size_approx() == 0;
+    }
+};
 
 // An MPSC queue that can be used to send messages between threads.
 template <typename MessageType, typename AccessControlPolicy>
@@ -69,7 +85,7 @@ class MPSCQueue
 public:
     MessageType pop()
     {
-        return policy.pop_throw();
+        return policy.pop_result().msg;
     }
 
     void push(MessageType message)
@@ -119,9 +135,16 @@ public:
 
 
 template <typename MessageType>
-using ConverseQueue = MPSCQueue<MessageType, MutexAccessControl<std::queue<MessageType>, MessageType>>;
+using ConverseQueue = MPSCQueue<MessageType, AtomicAccessControl<MessageType>>;
 
 template <typename MessageType>
-using ConverseNodeQueue = MPMCQueue<MessageType, MutexAccessControl<std::queue<MessageType>, MessageType>>;
+using ConverseNodeQueue = MPMCQueue<MessageType, AtomicAccessControl<MessageType>>;
+
+// template <typename MessageType>
+// using ConverseQueue = MPSCQueue<MessageType, MutexAccessControl<std::queue<MessageType>, MessageType>>;
+
+// template <typename MessageType>
+// using ConverseNodeQueue = MPMCQueue<MessageType, MutexAccessControl<std::queue<MessageType>, MessageType>>;
+
 
 #endif
