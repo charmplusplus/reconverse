@@ -43,8 +43,8 @@ void initiate() {
 
     CpvAccess(iter) = CpvAccess(iter) + 1;
 
-    // if (CmiMyPe() == 0)
-    //   CmiPrintf("Running iteration %d\n", CpvAccess(iter));
+    if (CmiMyPe() == 0)
+      CmiPrintf("Running iteration %d\n", CpvAccess(iter));
 
     // Send a message to myself
     int totalSize = sizeof(selfSendMsg) + CpvAccess(msgSize);
