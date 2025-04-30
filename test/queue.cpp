@@ -54,7 +54,7 @@ bool testMultiThreadedPushPop() {
 
   std::vector<int> values;
   for (int i = 0; i < NUM_THREADS * ITEMS_PER_THREAD; i++) {
-    values.push_back(q.pop());
+    values.push_back(q.pop().value());
   }
   std::sort(values.begin(), values.end());
   for (int i = 0; i < NUM_THREADS * ITEMS_PER_THREAD; i++) {
