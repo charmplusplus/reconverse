@@ -66,6 +66,7 @@ typedef __uint128_t           CmiUInt16;
 #define CpvAccess(v) CMK_TAG(Cpv_, v)[CmiMyRank()]
 #define CpvAccessOther(v, r) CMK_TAG(Cpv_,v)[r]
 #define CpvExtern(t,v)  extern t* CMK_TAG(Cpv_,v)
+#define CpvInitialized(v) (0!=CMK_TAG(Cpv_,v))
 
 #define CsvDeclare(t,v) t v
 #define CsvStaticDeclare(t,v) static t v
@@ -81,6 +82,7 @@ typedef __uint128_t           CmiUInt16;
 #define ALIGN_BYTES           16U //should this be 18U or 8U?
 #define ALIGN_DEFAULT(x) CMIALIGN(x, ALIGN_BYTES)
 #define CMIPADDING(x, n) (CMIALIGN((x), (n)) - (size_t)(x))
+
 
 
 // End of NOTE
@@ -112,6 +114,8 @@ typedef struct Header
   CmiUint1 zcMsgType; // 0: normal, 1: zero-copy
 } CmiMessageHeader;
 
+typedef CmiMessageHeader CmiMsgHeaderBasic;
+
 typedef struct {
   int parent;
   int child_count;
@@ -122,6 +126,7 @@ typedef struct {
 typedef CMK_MULTICAST_GROUP_TYPE CmiGroup;
 
 #define CmiMsgHeaderSizeBytes sizeof(CmiMessageHeader)
+#define CmiReservedHeaderSize CmiMsgHeaderSizeBytes
 
 typedef void (*CmiStartFn)(int argc, char **argv);
 void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched = 0, int initret = 0);
@@ -184,11 +189,13 @@ int CmiMyNodeSize();
 int CmiMyRank();
 int CmiNumPes();
 int CmiNumNodes();
+#define CmiNumPhysicalNodes() CmiNumNodes()
 int CmiNodeOf(int pe);
 int CmiRankOf(int pe);
 int CmiStopFlag();
 #define CmiNodeSize(n) (CmiMyNodeSize())
 int CmiNodeFirst(int node);
+#define CmiGetFirstPeOnPhysicalNode(i) CmiNodeFirst(i)
 
 // handler things
 void CmiSetHandler(void *msg, int handlerId);
@@ -278,6 +285,7 @@ void __CmiEnforceMsgHelper(const char* expr, const char* fileName,
 
 double getCurrentTime(void);
 double CmiWallTimer(void);
+#define CmiCpuTimer() CmiWallTimer()
 
 //rand functions that charm uses
 void   CrnSrand(unsigned int);
@@ -327,8 +335,11 @@ double CrnDrandRange(double, double);
 #define CcdUSERMAX          127
 
 //convcond functions
+typedef CmiHandler CcdVoidFn;
+typedef CmiHandler CcdCondFn;
 void CcdModuleInit();
 void CcdCallFnAfter(CmiHandler fnp, void *arg, double msecs);
+#define CcdCallFnAfterOnPE(fn, arg, msecs, pe) CcdCallFnAfter(fn, arg, msecs)
 int CcdCallOnCondition(int condnum, CmiHandler fnp, void *arg);
 int CcdCallOnConditionKeep(int condnum, CmiHandler fnp, void *arg);
 void CcdCancelCallOnCondition(int condnum, int idx);
@@ -410,6 +421,8 @@ void CthSuspend(void);
 void CthAwaken(CthThread th);
 
 void CthYield(void);
+
+void CthTraceResume(CthThread t);
 
 /* Command-Line-Argument handling */
 void CmiArgGroup(const char *parentName,const char *groupName);

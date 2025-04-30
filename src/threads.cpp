@@ -440,6 +440,11 @@ void CthResumeSchedulingThread(CthThreadToken  *token)
   CthResume(t);
 }
 
+void CthTraceResume(CthThread t)
+{
+  //no tracing
+}
+
 void CthSchedInit()
 {
   CpvInitialize(CthThread, CthMainThread);
