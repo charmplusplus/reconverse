@@ -59,7 +59,7 @@ typedef __uint128_t CmiUInt16;
   } while (0)
 ;
 
-#define CpvAccess(v) (*CMK_TAG(Cpv_,v))
+#define CpvAccess(v) CMK_TAG(Cpv_, v)[CmiMyRank()]
 #define CpvAccessOther(v, r) CMK_TAG(Cpv_, v)[r]
 #define CpvExtern(t, v) extern t *CMK_TAG(Cpv_, v)
 #define CpvInitialized(v) (0 != CMK_TAG(Cpv_, v))
