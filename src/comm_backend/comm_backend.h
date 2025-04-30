@@ -3,6 +3,12 @@
 
 #include <cstddef>
 
+#define MEMPOOL_INIT_SIZE_MB_DEFAULT   64
+#define MEMPOOL_EXPAND_SIZE_MB_DEFAULT 64
+#define MEMPOOL_MAX_SIZE_MB_DEFAULT    512
+#define MEMPOOL_LB_DEFAULT             0
+#define MEMPOOL_RB_DEFAULT             134217728
+
 namespace comm_backend {
 
 struct Status {

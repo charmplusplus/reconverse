@@ -108,7 +108,7 @@ if(ENABLE_CPU_AFFINITY)
 endif()
 
 add_library(reconverse $<TARGET_OBJECTS:boost-context>)
-set_target_properties(reconverse PROPERTIES CXX_STANDARD 11)
+set_target_properties(reconverse PROPERTIES CXX_STANDARD 17)
 add_subdirectory(include)
 add_subdirectory(src)
 target_link_libraries(reconverse PUBLIC Threads::Threads ${HWLOC})

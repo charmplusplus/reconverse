@@ -8,8 +8,6 @@
 #include <cstdio>
 #include <pthread.h>
 #include "comm_backend/comm_backend.h"
-#include "comm_backend/comm_backend_internal.h"
-#include "comm_backend/lci1/comm_backend_lci1.h"
 
 using CmiInt1 = std::int8_t;
 using CmiInt2 = std::int16_t;
@@ -394,13 +392,16 @@ int CmiTryLock(CmiNodeLock lock);
 
 struct alignas(ALIGN_BYTES) CmiChunkHeader {
     int size;
-    mr_t mr;
+    void* mr;
   public:
-    CmiChunkHeader() : mr(comm_backend::MR_NULL) = default;
+    CmiChunkHeader() : mr(comm_backend::MR_NULL) {};
     CmiChunkHeader(const CmiChunkHeader & x)
-      : size{x.size}, mr(x.mr) { }
+      : size{x.size}, mr{x.mr} { }
   };
 
 #define BLKSTART(m) ((CmiChunkHeader *) (((intptr_t)m) - sizeof(CmiChunkHeader)))
 #define SIZEFIELD(m) ((BLKSTART(m))->size)
 #define MRFIELD(m) ((BLKSTART(m))->mr)
+
+#define CMIALIGN(x,n)       (size_t)((~((size_t)n-1))&((x)+(n-1)))
+#define CMIPADDING(x, n) (CMIALIGN((x), (n)) - (size_t)(x))

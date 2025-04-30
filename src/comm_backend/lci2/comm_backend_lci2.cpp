@@ -19,6 +19,113 @@ void remote_callback(lci::status_t status) {
   handler({buffer.base, buffer.size});
 }
 
+void *CommBackendLCI2::alloc_mempool_block(size_t *size, mem_handle_t *mem_hndl, int expand_flag)
+{
+    size_t alloc_size =  expand_flag ? mempool_expand_size : mempool_init_size;
+    if (*size < alloc_size) *size = alloc_size;
+    if (*size > mempool_max_size)
+    {
+        CmiPrintf("Error: there is attempt to allocate memory block with size %ld which is greater than the maximum mempool allowed %lld.\n"
+                  "Please increase the maximum mempool size by using +ofi-mempool-max-size\n",
+                  *size, context.mempool_max_size);
+        CmiAbort("alloc_mempool_block");
+    }
+
+    void *pool;
+    posix_memalign(&pool,ALIGNBUF,*size);
+    registerMemory(pool, *size);
+    return pool;
+}
+
+void CommBackendLCI2::free_mempool_block(void *ptr, mem_handle_t mem_hndl)
+{
+    free(ptr);
+    deregisterMemory((mr_t) mem_hndl);
+}
+
+void CommBackendLCI2::init_mempool()
+{
+  CpvInitialize(mempool_type*, mempool);
+
+  mempool_init_size = MEMPOOL_INIT_SIZE_MB_DEFAULT * ONE_MB;
+  mempool_expand_size = MEMPOOL_EXPAND_SIZE_MB_DEFAULT * ONE_MB;
+  mempool_max_size = MEMPOOL_MAX_SIZE_MB_DEFAULT * ONE_MB;
+  mempool_lb_size = MEMPOOL_LB_DEFAULT;
+  mempool_rb_size = MEMPOOL_RB_DEFAULT;
+
+  CpvAccess(mempool) = mempool_init(mempool_init_size,
+    alloc_mempool_block,
+    free_mempool_block,
+    mempool_max_size);
+}
+
+void* CommBackendLCI2::malloc(int nbytes, int header)
+{
+  char *ptr = NULL;
+  size_t size = n_bytes + header;
+  if (size <= mempool_lb_size)
+  {
+    CmiAbort("OFI pool lower boundary violation");
+  }
+  else
+  {
+    CmiAssert(header+sizeof(mempool_header) <= ALIGNBUF);
+    n_bytes=ALIGN64(n_bytes);
+    if( n_bytes < BIG_MSG)
+      {
+        char *res = (char *)mempool_malloc(CpvAccess(mempool), ALIGNBUF+n_bytes, 1);
+
+        // note CmiAlloc wrapper will move the pointer past the header
+        if (res) ptr = res;
+
+        size_t offset1=GetMemOffsetFromBase(ptr+header);
+        mr_t* extractedmr  = (mr_t *) GetMemHndl(ptr+header);
+      }
+    else
+      {
+        n_bytes = size+ sizeof(out_of_pool_header);
+        n_bytes = ALIGN64(n_bytes);
+        char *res;
+
+        posix_memalign((void **)&res, ALIGNBUF, n_bytes);
+        out_of_pool_header *mptr= (out_of_pool_header*) res;
+        // construct the minimal version of the
+        // mempool_header+block_header like a memory pool message
+        // so that all messages can be handled the same way with
+        // the same macros and functions.  We need the mptr,
+        // block_ptr, and mem_hndl fields and can test the size to
+        // know to not put it back in the normal pool on free
+        mr_t mr = registerMemory(res, n_bytes);
+        mptr->block_head.mem_hndl=mr;
+        mptr->block_head.mptr=(struct mempool_type*) res;
+        mptr->block.block_ptr=(struct block_header *)res;
+        ptr=(char *) res + (sizeof(out_of_pool_header));
+  }
+
+  if (!ptr) CmiAbort("LrtsAlloc");
+  return ptr;
+}
+
+void CommBackendLCI2::free(void *msg)
+{
+  int headersize = sizeof(CmiChunkHeader);
+  char *aligned_addr = (char *)msg + headersize - ALIGNBUF;
+  uint size = SIZEFIELD((char*)msg+headersize);
+  if (size <= context.mempool_lb_size)
+    CmiAbort("LCI: mempool lower boundary violation");
+  else
+    size = ALIGN64(size);
+  if(size>=BIG_MSG)
+  {
+    deregisterMemory( (mr_t)GetMemHndl( (char* )msg  +sizeof(CmiChunkHeader)));
+    free((char *)msg-sizeof(out_of_pool_header));
+  }
+  else
+  {
+    mempool_free_thread(msg);
+  }
+}
+
 void CommBackendLCI2::init(int *argc, char ***argv) {
   lci::g_runtime_init();
   m_local_comp = lci::alloc_handler(local_callback);

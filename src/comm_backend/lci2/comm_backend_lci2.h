@@ -26,6 +26,11 @@ public:
   mr_t registerMemory(void *addr, size_t size) override;
   void deregisterMemory(mr_t mr) override;
 
+  void *malloc(int nbytes, int header);
+  void free(void* msg);
+  void *alloc_mempool_block(size_t *size, mem_handle_t *mem_hndl, int expand_flag);
+  void free_mempool_block(void *ptr, mem_handle_t mem_hndl);
+  void init_mempool();
 private:
   lci::comp_t m_local_comp;
   lci::comp_t m_remote_comp;

@@ -5,7 +5,10 @@
 #include <vector>
 
 #include "converse_config.h"
+#include "mempool.h"
 #include "comm_backend/comm_backend.h"
+
+CpvDeclare(mempool_type*, mempool);
 
 namespace comm_backend {
 

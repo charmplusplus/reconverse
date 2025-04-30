@@ -120,16 +120,27 @@ void* mempool_malloc(mempool_type* mptr, size_t size, int expand);
 void* mempool_large_malloc(mempool_type* mptr, size_t size, int expand);
 void mempool_free(mempool_type* mptr, void* ptr_free);
 
-#if CMK_SMP && (CMK_CONVERSE_UGNI || CMK_OFI)
 void mempool_free_thread(void* ptr_free);
-#endif
 
 #if defined(__cplusplus)
 }
 #endif
 
-#if CMK_CONVERSE_UGNI
-void* getNextRegisteredPool();
-#endif
+#define ALIGNBUF (sizeof(mempool_header)+sizeof(CmiChunkHeader))
+#define   GetMempoolBlockPtr(x)   MEMPOOL_GetBlockPtr(MEMPOOL_GetMempoolHeader(x,ALIGNBUF))
+#define   GetMempoolPtr(x)        MEMPOOL_GetMempoolPtr(MEMPOOL_GetMempoolHeader(x,ALIGNBUF))
+
+#define   GetMempoolsize(x)       MEMPOOL_GetSize(MEMPOOL_GetMempoolHeader(x,ALIGNBUF))
+#define   GetMemHndl(x)           MEMPOOL_GetMemHndl(MEMPOOL_GetMempoolHeader(x,ALIGNBUF))
+
+#define   GetMemHndlFromBlockHeader(x) MEMPOOL_GetBlockMemHndl(x)
+#define   GetSizeFromBlockHeader(x)    MEMPOOL_GetBlockSize(x)
+#define   GetBaseAllocPtr(x) GetMempoolBlockPtr(x)
+#define   GetMemOffsetFromBase(x) ((char*)(x) - (char *) GetBaseAllocPtr(x))
+
+#define ALIGN64(x)       (size_t)((~63)&((x)+63))
+#define ONE_MB (1024ll*1024)
+static int64_t BIG_MSG  =  16 * ONE_MB;
+
 
 #endif /* MEMPOOL.H */
