@@ -1,4 +1,4 @@
-name: CI
+name: LCI2
 
 on:
   push:
