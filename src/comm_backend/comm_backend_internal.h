@@ -23,6 +23,8 @@ class CommBackendBase
   virtual void barrier(void) = 0;
   virtual mr_t registerMemory(void *addr, size_t size) { return MR_NULL; }
   virtual void deregisterMemory(mr_t mr) {}
+  virtual void *malloc(int nbytes, int header);
+  virtual void free(void* msg);
   virtual ~CommBackendBase() {};
 };
 

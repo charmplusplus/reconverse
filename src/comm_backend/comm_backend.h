@@ -55,6 +55,10 @@ mr_t registerMemory(void *addr, size_t size);
  */
 void deregisterMemory(mr_t mr);
 
+void *malloc(int nbytes, int header);
+
+void free(void* msg);
+
 } // namespace comm_backend
 
 #endif // RECONVERSE_COMM_BACKEND_H

@@ -57,6 +57,23 @@ void sendAm(int rank, void* msg, size_t size, mr_t mr, CompHandler localComp, Am
   gCommBackend->sendAm(rank, msg, size, mr, localComp, remoteComp);
 }
 
+void *malloc(int nbytes, int header)
+{
+  if (gCommBackend == nullptr) {
+    return std::malloc(nbytes + header);
+  }
+  return gCommBackend->malloc(nbytes, header);
+}
+
+void free(void* msg)
+{
+  if (gCommBackend == nullptr) {
+    std::free(msg - sizeof(CmiChunkHeader));
+    return;
+  }
+  return gCommBackend->free(msg);
+}
+
 bool progress(void)
 {
   if (gCommBackend == nullptr) {

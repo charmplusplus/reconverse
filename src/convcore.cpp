@@ -291,6 +291,7 @@ void CmiPushPE(int destPE, int messageSize, void *msg)
     Cmi_queues[rank]->push(msg);
 }
 
+
 void *CmiAlloc(int size)
 {
     if (size <= 0)
@@ -298,7 +299,9 @@ void *CmiAlloc(int size)
         CmiPrintf("CmiAlloc: size <= 0\n");
         return nullptr;
     }
-    return malloc(size);
+    void* res = comm_backend::malloc(size, sizeof(CmiChunkHeader));
+    ((CmiChunkHeader*)res)->size = size;
+    return res + sizeof(CmiChunkHeader);
 }
 
 void CmiFree(void *msg)
@@ -308,7 +311,7 @@ void CmiFree(void *msg)
         CmiPrintf("CmiFree: msg is nullptr\n");
         return;
     }
-    free(msg);
+    comm_backend::free(msg);
 }
 
 void CmiSyncSend(int destPE, int messageSize, void *msg)
@@ -336,7 +339,7 @@ void CmiSyncSendAndFree(int destPE, int messageSize, void *msg)
     }
     else
     {
-        comm_backend::sendAm(destNode, msg, messageSize, comm_backend::MR_NULL, CommLocalHandler, AmHandlerPE); // Commlocalhandler will free msg
+        comm_backend::sendAm(destNode, msg, messageSize, MRFIELD(msg), CommLocalHandler, AmHandlerPE); // Commlocalhandler will free msg
     }
 }
 

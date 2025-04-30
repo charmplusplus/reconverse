@@ -1,7 +1,6 @@
 #include "scheduler.h"
 #include "converse_internal.h"
 #include "queue.h"
-#include "converse.h"
 #include <thread>
 
 /**
