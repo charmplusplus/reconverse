@@ -1,4 +1,3 @@
-#include "converse.h"
 #include "converse_internal.h"
 #include "scheduler.h"
 #include "uFcontext.h"
@@ -424,4 +423,33 @@ void CthSchedInit() {
       CmiRegisterHandler((CmiHandler)CthResumeSchedulingThread);
   CthSetStrategy(CthSelf(), CthEnqueueSchedulingThread,
                  CthSuspendSchedulingThread);
+}
+
+// helpers for Ctv variables
+size_t CthRegister(size_t size) {
+  size_t datasize = CthCpvAccess(CthDatasize);
+  CthThreadBase *th = (CthThreadBase *)CthCpvAccess(CthCurrent);
+  size_t result, align = 1;
+  while (size > align)
+    align <<= 1;
+  datasize = (datasize + align - 1) & ~(align - 1);
+  result = datasize;
+  datasize += size;
+  CthCpvAccess(CthDatasize) = datasize;
+  CthFixData(S(th)); /*Make the current thread have this much storage*/
+  CthCpvAccess(CthData) = th->data;
+  return result;
+}
+
+/**
+  Make sure we have room to store up to at least maxOffset
+  bytes of thread-local storage.
+  */
+void CthRegistered(size_t maxOffset) {
+  if (CthCpvAccess(CthDatasize) < maxOffset) {
+    CthThreadBase *th = (CthThreadBase *)CthCpvAccess(CthCurrent);
+    CthCpvAccess(CthDatasize) = maxOffset;
+    CthFixData(S(th)); /*Make the current thread have this much storage*/
+    CthCpvAccess(CthData) = th->data;
+  }
 }
