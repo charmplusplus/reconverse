@@ -73,6 +73,8 @@ typedef __uint128_t CmiUInt16;
 #define CsvInitialized(v) 1
 #define CsvAccess(v) v
 
+#define MESSAGE_PHASE_CHECK(msg)
+
 // alignment
 #define CMIALIGN(x, n) (size_t)((~((size_t)n - 1)) & ((x) + (n - 1)))
 #define ALIGN8(x) CMIALIGN(x, 8)
@@ -252,6 +254,7 @@ void CmiSetInfo(void *msg, int infofn);
 // message allocation
 void *CmiAlloc(int size);
 void CmiFree(void *msg);
+#define CmiMemoryUsage() 0
 
 // state getters
 int CmiMyPe();
@@ -324,6 +327,7 @@ void CmiSyncNodeBroadcastAllAndFree(unsigned int size, void *msg);
 
 // multicast and group
 CmiGroup CmiEstablishGroup(int npes, int *pes);
+void CmiLookupGroup(CmiGroup grp, int *npes, int **pes);
 void CmiSyncMulticast(CmiGroup grp, int size, void *msg);
 void CmiSyncMulticastAndFree(CmiGroup grp, int size, void *msg);
 void CmiSyncMulticastFn(CmiGroup grp, int size, char *msg);
@@ -333,6 +337,8 @@ void CmiFreeMulticastFn(CmiGroup grp, int size, char *msg);
 void CmiNodeBarrier();
 void CmiNodeAllBarrier();
 void CsdExitScheduler();
+
+void CmiAssignOnce(int* variable, int value);
 
 // Reduction functions
 typedef void *(*CmiReduceMergeFn)(int *, void *, void **, int);
@@ -516,6 +522,18 @@ void CmiDeprecateArgInt(char **argv, const char *arg, const char *desc,
 
 typedef pthread_mutex_t *CmiNodeLock;
 typedef CmiNodeLock CmiImmediateLockType;
+extern int _immediateLock;
+extern int _immediateFlag;
+#define CmiCreateImmediateLock() (0)
+#define CmiImmediateLock(ignored) { _immediateLock++; }
+#define CmiImmediateUnlock(ignored) { _immediateLock--; }
+#define CmiCheckImmediateLock(ignored) \
+  ((_immediateLock)?((_immediateFlag=1),1):0)
+#define CmiClearImmediateFlag() { _immediateFlag=0; }
+#  define CmiBecomeImmediate(msg) /* empty */
+#  define CmiResetImmediate(msg)  /* empty */
+#  define CmiIsImmediate(msg)   (0)
+#  define CmiImmIsRunning()       (0)
 
 CmiNodeLock CmiCreateLock();
 void CmiDestroyLock(CmiNodeLock lock);
