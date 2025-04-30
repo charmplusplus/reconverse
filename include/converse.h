@@ -145,6 +145,79 @@ public:
   int decRef() { return ref--; }
 };
 
+// threads library
+
+// Cth functions
+#define CthCpvDeclare(t, v) CpvDeclare(t, v)
+#define CthCpvExtern(t, v) CpvExtern(t, v)
+#define CthCpvStatic(t, v) CpvStaticDeclare(t, v)
+#define CthCpvInitialize(t, v) CpvInitialize(t, v)
+#define CthCpvAccess(x) CpvAccess(x)
+
+typedef struct CthThreadStruct *CthThread;
+typedef struct {
+  /*Start with a message header so threads can be enqueued
+    as messages (e.g., by CthEnqueueNormalThread in convcore.C)
+  */
+  char cmicore[CmiMsgHeaderSizeBytes];
+  CthThread thread;
+  int serialNo;
+} CthThreadToken;
+
+typedef void (*CthVoidFn)(void *);
+typedef void (*CthAwkFn)(CthThreadToken *, int, int prioBits,
+                         unsigned int *prioptr);
+typedef CthThread (*CthThFn)(void);
+
+CthThreadToken *CthGetToken(CthThread);
+
+void CthInit(char **argv);
+void CthSchedInit();
+
+CthThread CthSelf(void);
+
+CthThread CthCreate(CthVoidFn fn, void *arg, int size);
+
+static void CthThreadFree(CthThread t);
+
+void CthResume(CthThread t);
+
+void CthSuspend(void);
+
+void CthAwaken(CthThread th);
+
+void CthYield(void);
+
+void CthTraceResume(CthThread t);
+
+size_t CthRegister(size_t size);
+void CthRegistered(size_t maxOffset);
+
+// Ctv functions
+#define CtvDeclare(t, v)                                                       \
+  typedef t CtvType##v;                                                        \
+  CsvDeclare(int, CtvOffs##v) = (-1)
+#define CtvStaticDeclare(t, v)                                                 \
+  typedef t CtvType##v;                                                        \
+  CsvStaticDeclare(int, CtvOffs##v) = (-1)
+#define CtvExtern(t, v)                                                        \
+  typedef t CtvType##v;                                                        \
+  CsvExtern(int, CtvOffs##v)
+
+#define CtvAccess(v)                                                           \
+  (*((CtvType##v *)(CthCpvAccess(CthData) + CsvAccess(CtvOffs##v))))
+#define CtvAccessOther(t, v)                                                   \
+  (*((CtvType##v *)(CthGetData(t) + CsvAccess(CtvOffs##v))))
+#define CtvInitialize(t, v)                                                    \
+  do {                                                                         \
+    if (CsvAccess(CtvOffs##v) == (-1))                                         \
+      CsvAccess(CtvOffs##v) = CthRegister(sizeof(CtvType##v));                 \
+    else                                                                       \
+      CthRegistered(CsvAccess(CtvOffs##v) + sizeof(CtvType##v));               \
+  } while (0)
+
+#define CtvInitialized(v) (CsvAccess(CtvOffs##v) != (-1))
+
 /* Given a user chunk m, extract the enclosing chunk header fields: */
 #define BLKSTART(m) ((CmiChunkHeader *)(((intptr_t)m) - sizeof(CmiChunkHeader)))
 #define SIZEFIELD(m) ((BLKSTART(m))->size)
@@ -340,8 +413,6 @@ void CcdCancelCallOnConditionKeep(int condnum, int idx);
 void CcdRaiseCondition(int condnum);
 void CcdCallBacks(void);
 
-// Cth implementation
-
 #define CQS_QUEUEING_FIFO 2
 #define CQS_QUEUEING_LIFO 3
 #define CQS_QUEUEING_IFIFO 4
@@ -380,42 +451,6 @@ typedef struct _CmiObjId {
   }
 #endif
 } CmiObjId;
-
-typedef struct CthThreadStruct *CthThread;
-typedef struct {
-  /*Start with a message header so threads can be enqueued
-    as messages (e.g., by CthEnqueueNormalThread in convcore.C)
-  */
-  char cmicore[CmiMsgHeaderSizeBytes];
-  CthThread thread;
-  int serialNo;
-} CthThreadToken;
-
-typedef void (*CthVoidFn)(void *);
-typedef void (*CthAwkFn)(CthThreadToken *, int, int prioBits,
-                         unsigned int *prioptr);
-typedef CthThread (*CthThFn)(void);
-
-CthThreadToken *CthGetToken(CthThread);
-
-void CthInit(char **argv);
-void CthSchedInit();
-
-CthThread CthSelf(void);
-
-CthThread CthCreate(CthVoidFn fn, void *arg, int size);
-
-static void CthThreadFree(CthThread t);
-
-void CthResume(CthThread t);
-
-void CthSuspend(void);
-
-void CthAwaken(CthThread th);
-
-void CthYield(void);
-
-void CthTraceResume(CthThread t);
 
 /* Command-Line-Argument handling */
 void CmiArgGroup(const char *parentName, const char *groupName);
