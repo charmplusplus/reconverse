@@ -446,6 +446,10 @@ double getCurrentTime() {
 // TODO: implement timer
 double CmiWallTimer() { return getCurrentTime() - Cmi_startTime; }
 
+double CmiStartTimer() {
+  return 0.0;
+}
+
 void CmiAbortHelper(const char *source, const char *message,
                     const char *suggestion, int tellDebugger,
                     int framesToSkip) {
