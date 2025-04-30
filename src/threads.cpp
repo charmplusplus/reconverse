@@ -34,6 +34,7 @@ typedef struct CthThreadBase {
   void *stack;   /*Pointer to thread stack*/
   int stacksize; /*Size of thread stack (bytes)*/
   int magic;     /* magic number for checking corruption */
+  struct CthThreadListener *listener; 
 
 } CthThreadBase;
 
@@ -77,6 +78,11 @@ void CthSetThreadID(CthThread th, int a, int b, int c) {
   B(th)->tid.id[0] = a;
   B(th)->tid.id[1] = b;
   B(th)->tid.id[2] = c;
+}
+
+CmiObjId *CthGetThreadID(CthThread th)
+{
+  return &(B(th)->tid);
 }
 
 static void CthNoStrategy(void) {
@@ -405,6 +411,23 @@ void CthResumeSchedulingThread(CthThreadToken *token) {
 
 void CthTraceResume(CthThread t) {
   // no tracing
+}
+
+void CthAddListener(CthThread t,struct CthThreadListener *l){
+  struct CthThreadListener *p=B(t)->listener;
+  if(p== NULL){ /* first listener */
+    B(t)->listener=l;
+    l->thread = t;
+    l->next=NULL;
+    return;	
+  }
+  /* Add l at end of current chain of listeners: */
+  while(p->next != NULL){
+    p = p->next;
+  }
+  p->next = l;
+  l->next = NULL;
+  l->thread = t;
 }
 
 void CthSchedInit() {

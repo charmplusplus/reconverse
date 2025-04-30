@@ -265,6 +265,20 @@ int CmiStopFlag();
 int CmiNodeFirst(int node);
 #define CmiGetFirstPeOnPhysicalNode(i) CmiNodeFirst(i)
 
+//partitions (still needs to implement)
+#define CmiMyPartition()         0
+#define CmiPartitionSize(part)       CmiNumNodes()
+#define CmiMyPartitionSize()         CmiNumNodes()
+#define CmiNumPartitions()       1
+#define CmiNumNodesGlobal()      CmiNumNodes()
+#define CmiMyNodeGlobal()        CmiMyNode()
+#define CmiNumPesGlobal()        CmiNumPes()
+#define CmiMyPeGlobal()          CmiMyPe()
+#define CmiGetPeGlobal(pe,part)         (pe)
+#define CmiGetNodeGlobal(node,part)     (node)
+#define CmiGetPeLocal(pe)               (pe)
+#define CmiGetNodeLocal(node)           (node)
+
 // handler things
 void CmiSetHandler(void *msg, int handlerId);
 void CmiSetXHandler(void *msg, int xhandlerId);
@@ -352,6 +366,7 @@ void __CmiEnforceMsgHelper(const char *expr, const char *fileName, int lineNum,
 double getCurrentTime(void);
 double CmiWallTimer(void);
 #define CmiCpuTimer() CmiWallTimer()
+double CmiStartTimer(void);
 
 // rand functions that charm uses
 void CrnSrand(unsigned int);
@@ -451,6 +466,27 @@ typedef struct _CmiObjId {
   }
 #endif
 } CmiObjId;
+
+
+CmiObjId *CthGetThreadID(CthThread th);
+void CthSetThreadID(CthThread th, int a, int b, int c);
+
+struct CthThreadListener;
+
+typedef void (*CthThreadListener_suspend)(struct CthThreadListener *l);
+typedef void (*CthThreadListener_resume)(struct CthThreadListener *l);
+typedef void (*CthThreadListener_free)(struct CthThreadListener *l);
+
+struct CthThreadListener {
+  CthThreadListener_suspend suspend; // This thread is about to block.
+  CthThreadListener_resume resume; // This thread is about to begin execution after blocking.
+  CthThreadListener_free free; // This thread is being destroyed.
+  void *data; // Pointer to listener-specific data (if needed). Set by listener.
+  CthThread thread; // Pointer to the thread this listener controls. Set by CthAddListener.
+  struct CthThreadListener *next; // The next listener, or NULL at end of chain. Set by CthAddListener, and used only by threads.C.
+};
+
+void CthAddListener(CthThread th,struct CthThreadListener *l);
 
 /* Command-Line-Argument handling */
 void CmiArgGroup(const char *parentName, const char *groupName);
