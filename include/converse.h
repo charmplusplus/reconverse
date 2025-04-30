@@ -252,6 +252,7 @@ void CmiSetInfo(void *msg, int infofn);
 // message allocation
 void *CmiAlloc(int size);
 void CmiFree(void *msg);
+#define CmiMemoryUsage() 0
 
 // state getters
 int CmiMyPe();
@@ -516,6 +517,14 @@ void CmiDeprecateArgInt(char **argv, const char *arg, const char *desc,
 
 typedef pthread_mutex_t *CmiNodeLock;
 typedef CmiNodeLock CmiImmediateLockType;
+extern int _immediateLock;
+extern int _immediateFlag;
+#define CmiCreateImmediateLock() (0)
+#define CmiImmediateLock(ignored) { _immediateLock++; }
+#define CmiImmediateUnlock(ignored) { _immediateLock--; }
+#define CmiCheckImmediateLock(ignored) \
+  ((_immediateLock)?((_immediateFlag=1),1):0)
+#define CmiClearImmediateFlag() { _immediateFlag=0; }
 
 CmiNodeLock CmiCreateLock();
 void CmiDestroyLock(CmiNodeLock lock);
