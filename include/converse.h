@@ -18,10 +18,33 @@ using CmiUint2 = std::uint16_t;
 using CmiUint4 = std::uint32_t;
 using CmiUint8 = std::uint64_t;
 
+#include <stdint.h>
+typedef int8_t  CMK_TYPEDEF_INT1;
+typedef int16_t CMK_TYPEDEF_INT2;
+typedef int32_t CMK_TYPEDEF_INT4;
+typedef int64_t CMK_TYPEDEF_INT8;
+typedef uint8_t  CMK_TYPEDEF_UINT1;
+typedef uint16_t CMK_TYPEDEF_UINT2;
+typedef uint32_t CMK_TYPEDEF_UINT4;
+typedef uint64_t CMK_TYPEDEF_UINT8;
+typedef intptr_t CmiIntPtr;
+
+typedef CMK_TYPEDEF_INT1      CmiInt1;
+typedef CMK_TYPEDEF_INT2      CmiInt2;
+typedef CMK_TYPEDEF_INT4      CmiInt4;
+typedef CMK_TYPEDEF_INT8      CmiInt8;
+typedef CMK_TYPEDEF_UINT1     CmiUInt1;
+typedef CMK_TYPEDEF_UINT2     CmiUInt2;
+typedef CMK_TYPEDEF_UINT4     CmiUInt4;
+typedef CMK_TYPEDEF_UINT8     CmiUInt8;
+typedef __int128_t            CmiInt16;
+typedef __uint128_t           CmiUInt16;
+
 // NOTE: these are solely for backwards compatibility
 // Do not use in reconverse impl
 
 #define CMK_TAG(x, y) x##y##_
+#define CMK_CONCAT(x,y) x##y
 
 #define CpvDeclare(t, v) t *CMK_TAG(Cpv_, v)
 #define CpvStaticDeclare(t, v) static t *CMK_TAG(Cpv_, v)
@@ -42,22 +65,59 @@ using CmiUint8 = std::uint64_t;
 ;
 
 #define CpvAccess(v) CMK_TAG(Cpv_, v)[CmiMyRank()]
+#define CpvAccessOther(v, r) CMK_TAG(Cpv_,v)[r]
+#define CpvExtern(t,v)  extern t* CMK_TAG(Cpv_,v)
+
+#define CsvDeclare(t,v) t v
+#define CsvStaticDeclare(t,v) static t v
+#define CsvExtern(t,v) extern t v
+#define CsvInitialize(t,v) do{}while(0)
+#define CsvInitialized(v) 1
+#define CsvAccess(v) v
+
+//alignment
+#define CMIALIGN(x,n)       (size_t)((~((size_t)n-1))&((x)+(n-1)))
+#define ALIGN8(x)          CMIALIGN(x,8)
+#define ALIGN16(x)         CMIALIGN(x,16)
+#define ALIGN_BYTES           16U //should this be 18U or 8U?
+#define ALIGN_DEFAULT(x) CMIALIGN(x, ALIGN_BYTES)
+#define CMIPADDING(x, n) (CMIALIGN((x), (n)) - (size_t)(x))
+
 
 // End of NOTE
+
+typedef void (*CmiHandler)(void *msg);
+typedef void (*CmiHandlerEx)(void *msg, void *userPtr); // ignore for now
+
+typedef void (*CldPackFn)(void *msg);
+
+typedef void (*CldInfoFn)(void *msg, 
+                          CldPackFn *packer,
+                          int *len,
+                          int *queueing,
+                          int *priobits, 
+                          unsigned int **prioptr);
+
+typedef int (*CldEstimator)(void);
 
 typedef struct Header
 {
   CmiInt2 handlerId;
   CmiUint4 destPE; // global ID of destination PE
-
   int messageSize;
-
   // used for bcast (bcast source pe/node), multicast (group id), reductions (reduction id)
   CmiUint4 collectiveMetaInfo;
-
   // used for special ops (bcast, reduction, multicast) when the handler field is repurposed
   CmiInt2 swapHandlerId;
+  bool nokeep;
+  CmiUint1 zcMsgType; // 0: normal, 1: zero-copy
 } CmiMessageHeader;
+
+typedef struct {
+  int parent;
+  int child_count;
+  int *children;
+} CmiSpanningTreeInfo;
 
 #define CMK_MULTICAST_GROUP_TYPE                struct { unsigned pe, id; }
 typedef CMK_MULTICAST_GROUP_TYPE CmiGroup;
@@ -69,10 +129,50 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched = 0, int init
 
 static CmiStartFn Cmi_startfn;
 
+struct alignas(ALIGN_BYTES) CmiChunkHeader {
+    int size;
+  private:
+    int ref;
+  public:
+    CmiChunkHeader() = default;
+    CmiChunkHeader(const CmiChunkHeader & x)
+      : size{x.size}, ref{x.getRef()} { }
+    int getRef() const { return ref; }
+    void setRef(int r) { ref = r; }
+    int incRef() { return ref++; }
+    int decRef() { return ref--; }
+  };
+  
+  /* Given a user chunk m, extract the enclosing chunk header fields: */
+  #define BLKSTART(m) ((CmiChunkHeader *) (((intptr_t)m) - sizeof(CmiChunkHeader)))
+  #define SIZEFIELD(m) ((BLKSTART(m))->size)
+  #define REFFIELD(m) ((BLKSTART(m))->getRef())
+  #define REFFIELDSET(m, r) ((BLKSTART(m))->setRef(r))
+  #define REFFIELDINC(m) ((BLKSTART(m))->incRef())
+  #define REFFIELDDEC(m) ((BLKSTART(m))->decRef())
+
+  #  define CmiTmpAlloc(size) malloc(size)
+#  define CmiTmpFree(ptr) free(ptr)
+
+enum ncpyRegModes {
+  CMK_BUFFER_REG      = 0,
+  CMK_BUFFER_UNREG    = 1,
+  CMK_BUFFER_PREREG   = 2,
+  CMK_BUFFER_NOREG    = 3
+};
+
+enum ncpyDeregModes {
+  CMK_BUFFER_DEREG    = 4,
+  CMK_BUFFER_NODEREG  = 5
+};
+
 // handler tools
 typedef void (*CmiHandler)(void *msg);
 typedef void (*CmiHandlerEx)(void *msg, void *userPtr);
 int CmiRegisterHandler(CmiHandler h);
+CmiHandler CmiHandlerToFunction(int handlerId);
+int CmiGetInfo(void *msg);
+void CmiSetInfo(void *msg, int infofn);
 
 // message allocation
 void *CmiAlloc(int size);
@@ -93,13 +193,22 @@ int CmiNodeFirst(int node);
 
 // handler things
 void CmiSetHandler(void *msg, int handlerId);
+void CmiSetXHandler(void *msg, int xhandlerId);
 int CmiGetHandler(void *msg);
+int CmiGetXHandler(void *msg);
 CmiHandler CmiGetHandlerFunction(void *msg);
 void CmiHandleMessage(void *msg);
 
 // message sending
 void CmiSyncSend(int destPE, int messageSize, void *msg);
 void CmiSyncSendAndFree(int destPE, int messageSize, void *msg);
+void CmiSyncListSend(int npes, const int *pes, int len, void *msg);
+void CmiSyncListSendAndFree(int npes, const int *pes, int len, void *msg);
+
+void CmiSyncSendFn(int destPE, int messageSize, char *msg);
+void CmiFreeSendFn(int destPE, int messageSize, char *msg);
+void CmiSyncListSendFn(int npes, const int *pes, int len, char *msg);
+void CmiFreeListSendFn(int npes, const int *pes, int len, char *msg);
 
 // broadcasts
 void CmiSyncBroadcast(int size, void *msg);
@@ -108,6 +217,14 @@ void CmiSyncBroadcastAll(int size, void *msg);
 void CmiSyncBroadcastAllAndFree(int size, void *msg);
 void CmiSyncNodeSend(unsigned int destNode, unsigned int size, void *msg);
 void CmiSyncNodeSendAndFree(unsigned int destNode, unsigned int size, void *msg);
+
+void CmiSyncBroadcastFn(int size, char *msg);
+void CmiFreeBroadcastFn(int size, char *msg);
+void CmiSyncBroadcastAllFn(int size, char *msg);
+void CmiFreeBroadcastAllFn(int size, char *msg);
+void CmiFreeNodeSendFn(int node, int size, char *msg);
+
+
 void CmiWithinNodeBroadcast(int size, void *msg);
 void CmiSyncNodeBroadcast(unsigned int size, void *msg);
 void CmiSyncNodeBroadcastAndFree(unsigned int size, void *msg);
@@ -118,8 +235,8 @@ void CmiSyncNodeBroadcastAllAndFree(unsigned int size, void *msg);
 CmiGroup CmiEstablishGroup(int npes, int *pes);
 void CmiSyncMulticast(CmiGroup grp, int size, void *msg);
 void CmiSyncMulticastAndFree(CmiGroup grp, int size, void *msg);
-void CmiSyncListSend(int npes, int *pes, int size, void *msg);
-void CmiSyncListSendAndFree(int npes, int *pes, int size, void *msg);
+void CmiSyncMulticastFn(CmiGroup grp, int size, char *msg);
+void CmiFreeMulticastFn(CmiGroup grp, int size, char *msg);
 
 // Barrier functions
 void CmiNodeBarrier();
@@ -138,6 +255,12 @@ void CmiAbort(const char *format, ...);
 int CmiPrintf(const char *format, ...);
 int CmiGetArgc(char **argv);
 void CmiAbort(const char *format, ...);
+int CmiScanf(const char *format, ...);
+int CmiError(const char *format, ...);
+#define CmiMemcpy(dest, src, size) memcpy((dest), (src), (size))
+
+#define setMemoryTypeChare(p) /* empty memory debugging method */
+#define setMemoryTypeMessage(p)
 
 void CmiInitCPUTopology(char **argv);
 void CmiInitCPUAffinity(char **argv);
@@ -308,6 +431,7 @@ int CmiArgGivingUsage(void);
 void CmiDeprecateArgInt(char **argv,const char *arg,const char *desc,const char *warning);
 
 typedef pthread_mutex_t* CmiNodeLock;
+typedef CmiNodeLock CmiImmediateLockType;
 
 CmiNodeLock CmiCreateLock();
 void CmiDestroyLock(CmiNodeLock lock);
@@ -348,6 +472,145 @@ int CmiTryLock(CmiNodeLock lock);
     abort(); \
   } \
 } while(0)
+
+//Cld
+
+#define CLD_ANYWHERE (-1)
+#define CLD_BROADCAST (-2)
+#define CLD_BROADCAST_ALL (-3)
+
+int CldRegisterInfoFn(CldInfoFn fn);
+int CldRegisterPackFn(CldPackFn fn);
+void CldRegisterEstimator(CldEstimator fn);
+int CldEstimate(void);
+const char *CldGetStrategy(void);
+
+void CldEnqueue(int pe, void *msg, int infofn);
+void CldEnqueueMulti(int npes, const int *pes, void *msg, int infofn);
+void CldEnqueueGroup(CmiGroup grp, void *msg, int infofn);
+// CldNodeEnqueue enqueues a single message for a node, whereas
+// CldEnqueueWithinNode enqueues a message for each PE on the node.
+void CldNodeEnqueue(int node, void *msg, int infofn);
+void CldEnqueueWithinNode(void *msg, int infofn);
+
+#define CmiImmIsRunning()        (0)
+#define CMI_MSG_NOKEEP(msg)  ((CmiMessageHeader*) msg)->nokeep
+
+enum cmiZCMsgType {
+  CMK_REG_NO_ZC_MSG = 0,
+  CMK_ZC_P2P_SEND_MSG = 1,
+  CMK_ZC_P2P_RECV_MSG = 2,
+  CMK_ZC_SEND_DONE_MSG = 3, // USED for both ZC_BCAST_SEND_DONE_MSG & ZC_P2P_SEND_DONE_MSG
+  CMK_ZC_BCAST_SEND_MSG = 4,
+  CMK_ZC_BCAST_RECV_MSG = 5,
+  CMK_ZC_BCAST_RECV_DONE_MSG = 6,
+  CMK_ZC_BCAST_RECV_ALL_DONE_MSG = 7,
+  CMK_ZC_DEVICE_MSG = 8
+};
+
+#define CMI_ZC_MSGTYPE(msg)                  ((CmiMsgHeaderBasic *)msg)->zcMsgType
+#define CMI_IS_ZC_P2P(msg)                   (CMI_ZC_MSGTYPE(msg) == CMK_ZC_P2P_SEND_MSG || CMI_ZC_MSGTYPE(msg) == CMK_ZC_P2P_RECV_MSG)
+#define CMI_IS_ZC_BCAST(msg)                 (CMI_ZC_MSGTYPE(msg) == CMK_ZC_BCAST_SEND_MSG || CMI_ZC_MSGTYPE(msg) == CMK_ZC_BCAST_RECV_MSG)
+#define CMI_IS_ZC_RECV(msg)                  (CMI_ZC_MSGTYPE(msg) == CMK_ZC_P2P_RECV_MSG || CMI_ZC_MSGTYPE(msg) == CMK_ZC_BCAST_RECV_MSG)
+#define CMI_IS_ZC(msg)                       (CMI_IS_ZC_P2P(msg) || CMI_IS_ZC_BCAST(msg))
+#define CMI_IS_ZC_DEVICE(msg)                (CMI_ZC_MSGTYPE(msg) == CMK_ZC_DEVICE_MSG)
+
+//queues
+#define CQS_QUEUEING_FIFO 2
+#define CQS_QUEUEING_LIFO 3
+#define CQS_QUEUEING_IFIFO 4
+#define CQS_QUEUEING_ILIFO 5
+#define CQS_QUEUEING_BFIFO 6
+#define CQS_QUEUEING_BLIFO 7
+#define CQS_QUEUEING_LFIFO 8
+#define CQS_QUEUEING_LLIFO 9
+
+//libc internals
+#if defined __cplusplus && defined __THROW
+# define CMK_THROW __THROW
+#else
+# define CMK_THROW
+#endif
+
+#ifndef __has_builtin
+# define __has_builtin(x) 0  // Compatibility with non-clang compilers.
+#endif
+#ifndef __has_attribute
+# define __has_attribute(x) 0  // Compatibility with non-clang compilers.
+#endif
+
+#if (defined __GNUC__ || __has_builtin(__builtin_unreachable)) && !defined _CRAYC
+// Technically GCC 4.5 is the minimum for this feature, but we require C++11.
+# define CMI_UNREACHABLE_SECTION(...) __builtin_unreachable()
+#elif _MSC_VER
+# define CMI_UNREACHABLE_SECTION(...) __assume(0)
+#else
+# define CMI_UNREACHABLE_SECTION(...) __VA_ARGS__
+#endif
+
+#define CMI_NORETURN_FUNCTION_END CMI_UNREACHABLE_SECTION(while(1));
+
+# if defined __cplusplus
+#  define CMK_NORETURN [[noreturn]]
+# else
+#  if defined _Noreturn
+#   define CMK_NORETURN _Noreturn
+#  elif defined _MSC_VER && 1200 <= _MSC_VER
+#   define CMK_NORETURN __declspec (noreturn)
+#  else
+#   define CMK_NORETURN __attribute__ ((__noreturn__))
+#  endif
+# endif
+
+// must be placed before return type and at both declaration and definition
+#if defined __GNUC__ && __GNUC__ >= 4
+# define CMI_WARN_UNUSED_RESULT __attribute__ ((warn_unused_result))
+#elif defined _MSC_VER && _MSC_VER >= 1700
+# define CMI_WARN_UNUSED_RESULT _Check_return_
+#else
+# define CMI_WARN_UNUSED_RESULT
+#endif
+
+#if defined __cplusplus && __cplusplus >= 201402L
+#  define CMK_DEPRECATED_MSG(x) [[deprecated(x)]]
+#  define CMK_DEPRECATED [[deprecated]]
+#elif defined __GNUC__ || defined __clang__
+#  define CMK_DEPRECATED_MSG(x) __attribute__((deprecated(x)))
+#  define CMK_DEPRECATED __attribute__((deprecated))
+#elif defined _MSC_VER
+#  define CMK_DEPRECATED_MSG(x) __declspec(deprecated(x))
+#  define CMK_DEPRECATED __declspec(deprecated)
+#else
+#  define CMK_DEPRECATED_MSG(x)
+#  define CMK_DEPRECATED
+#endif
+
+#if __has_builtin(__builtin_expect) || \
+  (defined __GNUC__ && __GNUC__ >= 3) || \
+  (defined __INTEL_COMPILER && __INTEL_COMPILER >= 800) || \
+  (defined __ibmxl__ && __ibmxl_version__ >= 10) || \
+  (defined __xlC__ && __xlC__ >= (10 << 8)) || \
+  (defined _CRAYC && _RELEASE_MAJOR >= 8) || \
+  defined __clang__
+# define CMI_LIKELY(x)   __builtin_expect(!!(x),1)
+# define CMI_UNLIKELY(x) __builtin_expect(!!(x),0)
+#else
+# define CMI_LIKELY(x)   (x)
+# define CMI_UNLIKELY(x) (x)
+#endif
+
+#if __has_attribute(noinline) || \
+  defined __GNUC__ || \
+  defined __INTEL_COMPILER || \
+  defined __ibmxl__ || defined __xlC__
+# define CMI_NOINLINE __attribute__((noinline))
+#elif defined _MSC_VER
+# define CMI_NOINLINE __declspec(noinline)
+#elif defined __PGI
+# define CMI_NOINLINE _Pragma("noinline")
+#else
+# define CMI_NOINLINE
+#endif
 
 //spantree
 //later: fix the naming of these macros to be clearer
