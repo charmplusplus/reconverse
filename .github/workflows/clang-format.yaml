@@ -33,6 +33,3 @@ jobs:
       run: |
         clang-format -i '**/*.cpp' '**/*.h' '**/*.c' '**/*.hpp'
         git diff --exit-code -- '*.cpp' '*.h' '*.c' '*.hpp'
-        git add .
-        git commit -m "Apply clang-format"
-        git push
