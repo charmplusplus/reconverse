@@ -116,6 +116,11 @@ CpvStaticDeclare(CmiReductionID, _reduction_counter);
 CpvStaticDeclare(CmiReduction **,
                  _reduction_info); // an array of pointers to reduction structs
 
+CsvStaticDeclare(CmiReductionID, _node_reduction_counter);
+CsvStaticDeclare(
+    CmiReduction **,
+    _node_reduction_info); // an array of pointers to reduction structs
+
 void CmiReductionsInit(void);
 
 // helper function to get the next reduction ID
@@ -126,10 +131,18 @@ CmiReductionID CmiGetNextReductionID();
 unsigned CmiGetReductionIndex(CmiReductionID id);
 
 static CmiReduction *CmiGetCreateReduction(CmiReductionID id);
-static void CmiClearReduction(CmiReductionID id);
+static void CmiClearReduction(CmiReductionID id, CmiReduction **table);
 void CmiInternalReduce(void *msg, int size, CmiReduceMergeFn mergeFn,
                        CmiReduction *red);
 void CmiSendReduce(CmiReduction *red);
+
+// internal node reduction functions
+CmiReductionID CmiGetNextNodeReductionID();
+static CmiReduction *CmiGetCreateNodeReduction(CmiReductionID id);
+void CmiInternalNodeReduce(void *msg, int size, CmiReduceMergeFn mergeFn,
+                           CmiReduction *red);
+void CmiSendNodeReduce(CmiReduction *red);
+void CmiNodeReduceHandler(void *msg);
 
 // helpers to get and set red ID in a message
 CmiReductionID CmiGetRedID(void *msg);
