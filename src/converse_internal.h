@@ -115,6 +115,7 @@ typedef struct {
 CpvStaticDeclare(CmiReductionID, _reduction_counter);
 CpvStaticDeclare(CmiReduction **,
                  _reduction_info); // an array of pointers to reduction structs
+CpvStaticDeclare(CmiReductionID, _reduce_seqID_global);
 
 void CmiReductionsInit(void);
 

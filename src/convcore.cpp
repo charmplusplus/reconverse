@@ -159,6 +159,7 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
 #endif
 
   Cmi_startfn = fn;
+  CharmLibInterOperate = 0;
 
   CmiStartThreads();
   free(Cmi_argv);
@@ -260,6 +261,8 @@ void CmiFree(void *msg) {
   }
   free(msg);
 }
+
+void CmiMemoryMarkBlock(void *blk) {}
 
 void CmiSyncSend(int destPE, int messageSize, void *msg) {
   char *copymsg = (char *)CmiAlloc(messageSize);
