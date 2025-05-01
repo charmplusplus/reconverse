@@ -97,6 +97,9 @@ void CmiStartThreads() {
   CmiHandlerTable = new std::vector<CmiHandlerInfo> *[Cmi_mynodesize];
   CmiNodeQueue = new ConverseNodeQueue<void *>();
 
+  // make sure the queues are allocated before PEs start sending messages around
+  comm_backend::barrier();
+
   std::vector<std::thread> threads;
   for (int i = 0; i < Cmi_mynodesize; i++) {
     std::thread t(converseRunPe, i);
@@ -106,6 +109,9 @@ void CmiStartThreads() {
   for (auto &thread : threads) {
     thread.join();
   }
+
+  // make sure all PEs are done before we free the queues.
+  comm_backend::barrier();
   delete[] Cmi_queues;
   delete CmiNodeQueue;
   delete[] CmiHandlerTable;
