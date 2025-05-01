@@ -26,9 +26,9 @@ void CsdScheduler() {
 
     // poll node queue
     if (!nodeQueue->empty()) {
-      QueueResult result = nodeQueue->pop();
+      auto result = nodeQueue->pop();
       if (result) {
-        msg = result.msg;
+        msg = result.value();
         // process event
         CmiHandleMessage(msg);
 
@@ -52,7 +52,7 @@ void CsdScheduler() {
 
     } else if (!queue->empty()) {  // poll thread queue
       // get next event (guaranteed to be there because only single consumer)
-      msg = queue->pop();
+      msg = queue->pop().value();
 
       // process event
       CmiHandleMessage(msg);

@@ -73,6 +73,8 @@ typedef __uint128_t CmiUInt16;
 #define CsvInitialized(v) 1
 #define CsvAccess(v) v
 
+#define MESSAGE_PHASE_CHECK(msg)
+
 // alignment
 #define CMIALIGN(x, n) (size_t)((~((size_t)n - 1)) & ((x) + (n - 1)))
 #define ALIGN8(x) CMIALIGN(x, 8)
@@ -145,6 +147,82 @@ public:
   int decRef() { return ref--; }
 };
 
+// threads library
+
+// Cth functions
+#define CthCpvDeclare(t, v) CpvDeclare(t, v)
+#define CthCpvExtern(t, v) CpvExtern(t, v)
+#define CthCpvStatic(t, v) CpvStaticDeclare(t, v)
+#define CthCpvInitialize(t, v) CpvInitialize(t, v)
+#define CthCpvAccess(x) CpvAccess(x)
+
+typedef struct CthThreadStruct *CthThread;
+typedef struct {
+  /*Start with a message header so threads can be enqueued
+    as messages (e.g., by CthEnqueueNormalThread in convcore.C)
+  */
+  char cmicore[CmiMsgHeaderSizeBytes];
+  CthThread thread;
+  int serialNo;
+} CthThreadToken;
+
+typedef void (*CthVoidFn)(void *);
+typedef void (*CthAwkFn)(CthThreadToken *, int, int prioBits,
+                         unsigned int *prioptr);
+typedef CthThread (*CthThFn)(void);
+
+CthThreadToken *CthGetToken(CthThread);
+
+void CthInit(char **argv);
+void CthSchedInit();
+
+CthThread CthSelf(void);
+
+CthThread CthCreate(CthVoidFn fn, void *arg, int size);
+
+static void CthThreadFree(CthThread t);
+
+void CthResume(CthThread t);
+
+void CthSuspend(void);
+
+void CthAwaken(CthThread th);
+
+void CthYield(void);
+
+void CthTraceResume(CthThread t);
+
+// Ctv functions
+
+CthCpvExtern(char *, CthData);
+extern size_t CthRegister(size_t dataSize);
+extern void CthRegistered(size_t dataOffMax);
+extern char *CthGetData(CthThread t);
+
+#define CtvDeclare(t, v)                                                       \
+  typedef t CtvType##v;                                                        \
+  CsvDeclare(int, CtvOffs##v) = (-1)
+#define CtvStaticDeclare(t, v)                                                 \
+  typedef t CtvType##v;                                                        \
+  CsvStaticDeclare(int, CtvOffs##v) = (-1)
+#define CtvExtern(t, v)                                                        \
+  typedef t CtvType##v;                                                        \
+  CsvExtern(int, CtvOffs##v)
+
+#define CtvAccess(v)                                                           \
+  (*((CtvType##v *)(CthCpvAccess(CthData) + CsvAccess(CtvOffs##v))))
+#define CtvAccessOther(t, v)                                                   \
+  (*((CtvType##v *)(CthGetData(t) + CsvAccess(CtvOffs##v))))
+#define CtvInitialize(t, v)                                                    \
+  do {                                                                         \
+    if (CsvAccess(CtvOffs##v) == (-1))                                         \
+      CsvAccess(CtvOffs##v) = CthRegister(sizeof(CtvType##v));                 \
+    else                                                                       \
+      CthRegistered(CsvAccess(CtvOffs##v) + sizeof(CtvType##v));               \
+  } while (0)
+
+#define CtvInitialized(v) (CsvAccess(CtvOffs##v) != (-1))
+
 /* Given a user chunk m, extract the enclosing chunk header fields: */
 #define BLKSTART(m) ((CmiChunkHeader *)(((intptr_t)m) - sizeof(CmiChunkHeader)))
 #define SIZEFIELD(m) ((BLKSTART(m))->size)
@@ -176,6 +254,7 @@ void CmiSetInfo(void *msg, int infofn);
 // message allocation
 void *CmiAlloc(int size);
 void CmiFree(void *msg);
+#define CmiMemoryUsage() 0
 
 // state getters
 int CmiMyPe();
@@ -191,6 +270,20 @@ int CmiStopFlag();
 #define CmiNodeSize(n) (CmiMyNodeSize())
 int CmiNodeFirst(int node);
 #define CmiGetFirstPeOnPhysicalNode(i) CmiNodeFirst(i)
+
+//partitions (still needs to implement)
+#define CmiMyPartition()         0
+#define CmiPartitionSize(part)       CmiNumNodes()
+#define CmiMyPartitionSize()         CmiNumNodes()
+#define CmiNumPartitions()       1
+#define CmiNumNodesGlobal()      CmiNumNodes()
+#define CmiMyNodeGlobal()        CmiMyNode()
+#define CmiNumPesGlobal()        CmiNumPes()
+#define CmiMyPeGlobal()          CmiMyPe()
+#define CmiGetPeGlobal(pe,part)         (pe)
+#define CmiGetNodeGlobal(node,part)     (node)
+#define CmiGetPeLocal(pe)               (pe)
+#define CmiGetNodeLocal(node)           (node)
 
 // handler things
 void CmiSetHandler(void *msg, int handlerId);
@@ -234,6 +327,7 @@ void CmiSyncNodeBroadcastAllAndFree(unsigned int size, void *msg);
 
 // multicast and group
 CmiGroup CmiEstablishGroup(int npes, int *pes);
+void CmiLookupGroup(CmiGroup grp, int *npes, int **pes);
 void CmiSyncMulticast(CmiGroup grp, int size, void *msg);
 void CmiSyncMulticastAndFree(CmiGroup grp, int size, void *msg);
 void CmiSyncMulticastFn(CmiGroup grp, int size, char *msg);
@@ -243,6 +337,8 @@ void CmiFreeMulticastFn(CmiGroup grp, int size, char *msg);
 void CmiNodeBarrier();
 void CmiNodeAllBarrier();
 void CsdExitScheduler();
+
+void CmiAssignOnce(int* variable, int value);
 
 // Reduction functions
 typedef void *(*CmiReduceMergeFn)(int *, void *, void **, int);
@@ -279,6 +375,7 @@ void __CmiEnforceMsgHelper(const char *expr, const char *fileName, int lineNum,
 double getCurrentTime(void);
 double CmiWallTimer(void);
 #define CmiCpuTimer() CmiWallTimer()
+double CmiStartTimer(void);
 
 // rand functions that charm uses
 void CrnSrand(unsigned int);
@@ -340,8 +437,6 @@ void CcdCancelCallOnConditionKeep(int condnum, int idx);
 void CcdRaiseCondition(int condnum);
 void CcdCallBacks(void);
 
-// Cth implementation
-
 #define CQS_QUEUEING_FIFO 2
 #define CQS_QUEUEING_LIFO 3
 #define CQS_QUEUEING_IFIFO 4
@@ -381,41 +476,26 @@ typedef struct _CmiObjId {
 #endif
 } CmiObjId;
 
-typedef struct CthThreadStruct *CthThread;
-typedef struct {
-  /*Start with a message header so threads can be enqueued
-    as messages (e.g., by CthEnqueueNormalThread in convcore.C)
-  */
-  char cmicore[CmiMsgHeaderSizeBytes];
-  CthThread thread;
-  int serialNo;
-} CthThreadToken;
 
-typedef void (*CthVoidFn)(void *);
-typedef void (*CthAwkFn)(CthThreadToken *, int, int prioBits,
-                         unsigned int *prioptr);
-typedef CthThread (*CthThFn)(void);
+CmiObjId *CthGetThreadID(CthThread th);
+void CthSetThreadID(CthThread th, int a, int b, int c);
 
-CthThreadToken *CthGetToken(CthThread);
+struct CthThreadListener;
 
-void CthInit(char **argv);
-void CthSchedInit();
+typedef void (*CthThreadListener_suspend)(struct CthThreadListener *l);
+typedef void (*CthThreadListener_resume)(struct CthThreadListener *l);
+typedef void (*CthThreadListener_free)(struct CthThreadListener *l);
 
-CthThread CthSelf(void);
+struct CthThreadListener {
+  CthThreadListener_suspend suspend; // This thread is about to block.
+  CthThreadListener_resume resume; // This thread is about to begin execution after blocking.
+  CthThreadListener_free free; // This thread is being destroyed.
+  void *data; // Pointer to listener-specific data (if needed). Set by listener.
+  CthThread thread; // Pointer to the thread this listener controls. Set by CthAddListener.
+  struct CthThreadListener *next; // The next listener, or NULL at end of chain. Set by CthAddListener, and used only by threads.C.
+};
 
-CthThread CthCreate(CthVoidFn fn, void *arg, int size);
-
-static void CthThreadFree(CthThread t);
-
-void CthResume(CthThread t);
-
-void CthSuspend(void);
-
-void CthAwaken(CthThread th);
-
-void CthYield(void);
-
-void CthTraceResume(CthThread t);
+void CthAddListener(CthThread th,struct CthThreadListener *l);
 
 /* Command-Line-Argument handling */
 void CmiArgGroup(const char *parentName, const char *groupName);
@@ -442,6 +522,18 @@ void CmiDeprecateArgInt(char **argv, const char *arg, const char *desc,
 
 typedef pthread_mutex_t *CmiNodeLock;
 typedef CmiNodeLock CmiImmediateLockType;
+extern int _immediateLock;
+extern int _immediateFlag;
+#define CmiCreateImmediateLock() (0)
+#define CmiImmediateLock(ignored) { _immediateLock++; }
+#define CmiImmediateUnlock(ignored) { _immediateLock--; }
+#define CmiCheckImmediateLock(ignored) \
+  ((_immediateLock)?((_immediateFlag=1),1):0)
+#define CmiClearImmediateFlag() { _immediateFlag=0; }
+#  define CmiBecomeImmediate(msg) /* empty */
+#  define CmiResetImmediate(msg)  /* empty */
+#  define CmiIsImmediate(msg)   (0)
+#  define CmiImmIsRunning()       (0)
 
 CmiNodeLock CmiCreateLock();
 void CmiDestroyLock(CmiNodeLock lock);

@@ -330,6 +330,11 @@ void CmiNodeAllBarrier() {
   nodeBarrier.wait();
 }
 
+void CmiAssignOnce(int* variable, int value) {
+  if (CmiMyRank() == 0) { *variable = value; }
+  CmiNodeAllBarrier();
+}
+
 // status default is 0
 void CsdExitScheduler() { CmiGetState()->stopFlag = 1; }
 
@@ -452,6 +457,10 @@ double getCurrentTime() {
 
 // TODO: implement timer
 double CmiWallTimer() { return getCurrentTime() - Cmi_startTime; }
+
+double CmiStartTimer() {
+  return 0.0;
+}
 
 void CmiAbortHelper(const char *source, const char *message,
                     const char *suggestion, int tellDebugger,

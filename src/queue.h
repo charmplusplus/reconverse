@@ -1,110 +1,143 @@
 #ifndef QUEUE_H
 #define QUEUE_H
 
-#include <mutex>
 #include <queue>
+#include <mutex>
 #include <stdexcept>
+#include <optional>
+#include "concurrentqueue.h"
 
+template<typename T>
+using QueueResult = std::optional<T>;
+
+template<typename ConcreteQ, typename MessageType>
 class MutexAccessControl {
+    ConcreteQ q;
+    std::mutex mtx;
+
 public:
-  static std::mutex mutex;
-  static void acquire();
-  static void release();
+    void push(MessageType message) {
+        std::lock_guard<std::mutex> lock(mtx);
+        q.push(message);
+    }
+
+    QueueResult<MessageType> pop_result() {
+        std::lock_guard<std::mutex> lock(mtx);
+        if (q.empty()) {
+            return std::nullopt;
+        } else {
+            MessageType val = q.front();
+            q.pop();
+            return QueueResult<MessageType>(val);
+        }
+    }
+
+
+    size_t size() {
+        std::lock_guard<std::mutex> lock(mtx);
+        return q.size();
+    }
+
+    bool empty() {
+         std::lock_guard<std::mutex> lock(mtx);
+        return q.empty();
+    }
 };
 
-class QueueResult {
-public:
-  void *msg;
-  operator bool() { return msg != NULL; }
+template<typename MessageType>
+class AtomicAccessControl {
+    // what default size?
+    moodycamel::ConcurrentQueue<MessageType> q{256};
+
+    public:
+    void push(MessageType message) {
+        q.enqueue(message);
+    }
+
+    QueueResult<MessageType> pop_result() {
+        MessageType message;
+        bool success = q.try_dequeue(message);
+        return success ? QueueResult<MessageType>(message) : std::nullopt;
+    }
+
+    size_t size() {
+        return q.size_approx();
+    }
+
+    bool empty() {
+        return q.size_approx() == 0;
+    }
 };
 
 // An MPSC queue that can be used to send messages between threads.
-template <typename ConcreteQ, typename MessageType,
-          typename AccessControlPolicy>
-class MPSCQueue {
-  ConcreteQ q;
+template <typename MessageType, typename AccessControlPolicy>
+class MPSCQueue
+{
+    AccessControlPolicy policy;
 
 public:
-  MessageType pop() {
-    AccessControlPolicy::acquire();
-    // This will not work for atomics.
-    // It's fine for now: internal implementation detail.
-
-    if (q.size() == 0) {
-      // TODO: throw something?
-      throw std::runtime_error("Cannot pop from empty queue is empty");
+    QueueResult<MessageType> pop()
+    {
+        return policy.pop_result();
     }
 
-    MessageType message = q.front();
-    q.pop();
-    AccessControlPolicy::release();
-    return message;
-  }
+    void push(MessageType message)
+    {
+        policy.push(message);
+    }
 
-  void push(MessageType message) {
-    AccessControlPolicy::acquire();
-    q.push(message);
-    AccessControlPolicy::release();
-  }
+    bool empty()
+    {
+        return policy.empty();
+    }
 
-  bool empty() { return this->size() == 0; }
-
-  size_t size() {
-    AccessControlPolicy::acquire();
-    size_t result = q.size();
-    AccessControlPolicy::release();
-
-    return result;
-  }
+    size_t size()
+    {
+        return policy.size();
+    }
 };
 
-// Type for node queue (will have to implement atomics later)
-template <typename ConcreteQ, typename MessageType,
-          typename AccessControlPolicy>
-class MPMCQueue {
-  ConcreteQ q;
+template <typename MessageType, typename AccessControlPolicy>
+class MPMCQueue
+{
+    AccessControlPolicy policy;
 
 public:
-  QueueResult pop() {
-    AccessControlPolicy::acquire();
-    // This will not work for atomics.
-    // It's fine for now: internal implementation detail.
-
-    QueueResult result;
-    if (q.size() == 0) {
-      result.msg = NULL;
-    } else {
-      result.msg = q.front();
-      q.pop();
+    QueueResult<MessageType> pop()
+    {
+        return policy.pop_result();
     }
 
-    AccessControlPolicy::release();
-    return result;
-  }
+    void push(MessageType message)
+    {
+        policy.push(message);
+    }
 
-  void push(MessageType message) {
-    AccessControlPolicy::acquire();
-    q.push(message);
-    AccessControlPolicy::release();
-  }
+    bool empty()
+    {
+        return policy.empty();
+    }
 
-  bool empty() { return this->size() == 0; }
-
-  size_t size() {
-    AccessControlPolicy::acquire();
-    size_t result = q.size();
-    AccessControlPolicy::release();
-
-    return result;
-  }
+    size_t size()
+    {
+        return policy.size();
+    }
 };
 
+
+#ifdef ATOMIC_QUEUE_ENABLED
 template <typename MessageType>
-using ConverseQueue =
-    MPSCQueue<std::queue<MessageType>, MessageType, MutexAccessControl>;
+using ConverseQueue = MPSCQueue<MessageType, AtomicAccessControl<MessageType>>;
 
 template <typename MessageType>
-using ConverseNodeQueue =
-    MPMCQueue<std::queue<MessageType>, MessageType, MutexAccessControl>;
+using ConverseNodeQueue = MPMCQueue<MessageType, AtomicAccessControl<MessageType>>;
+#else
+template <typename MessageType>
+using ConverseQueue = MPSCQueue<MessageType, MutexAccessControl<std::queue<MessageType>, MessageType>>;
+
+template <typename MessageType>
+using ConverseNodeQueue = MPMCQueue<MessageType, MutexAccessControl<std::queue<MessageType>, MessageType>>;
+#endif
+
 
 #endif
