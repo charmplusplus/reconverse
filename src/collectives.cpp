@@ -197,13 +197,19 @@ void CmiReductionsInit(void) {
   CpvAccess(_reduction_counter) = 0;
 
   // SETUP NODE-LEVEL REDUCTIONS
-  CsvInitialize(CmiReduction **, _node_reduction_info);
-  CsvInitialize(CmiReductionID, _node_reduction_counter);
+  CsvInitialize(CmiNodeReduction *, _node_reduction_info);
+  CsvInitialize(CmiNodeReductionID, _node_reduction_counter);
 
   auto noderedinfo =
-      (CmiReduction **)malloc(CmiMaxReductions * sizeof(CmiReduction *));
-  for (int i = 0; i < CmiMaxReductions; ++i)
-    noderedinfo[i] = NULL;
+      (CmiNodeReduction *)malloc(CmiMaxReductions * sizeof(CmiNodeReduction));
+  for (int i = 0; i < CmiMaxReductions; ++i) {
+    CmiNodeReduction &nodered = noderedinfo[i];
+#ifdef CMK_SMP
+    // node reduction must be initialized with a valid lock
+    nodered.lock = CmiCreateLock();
+#endif
+    nodered.red = nullptr;
+  }
   CsvAccess(_node_reduction_info) = noderedinfo;
   CsvAccess(_node_reduction_counter) = 0;
 }
@@ -233,7 +239,8 @@ static inline CmiReductionID getNextID(CmiReductionID &ctr) {
 
 // TODO: is this needed for node reductions?? old Converse uses locks and
 // atomics in SMP for node reductions
-#if CMK_SMP
+// TODO: this overflow is not thread-safe
+#ifdef CMK_SMP
 static inline CmiReductionID getNextID(std::atomic<CmiReductionID> &ctr) {
   CmiReductionID old =
       ctr.fetch_add(1, std::memory_order_relaxed); // Increment atomically
@@ -255,9 +262,9 @@ unsigned CmiGetReductionIndex(CmiReductionID id) {
   return id;
 }
 
-static void CmiClearReduction(CmiReductionID id,
-                              CmiReduction **reduction_info) {
-  auto &reduction_ref = reduction_info[CmiGetReductionIndex(id)];
+// PROCESS REDUCTIONS
+static void CmiClearReduction(CmiReductionID id) {
+  auto &reduction_ref = CpvAccess(_reduction_info)[CmiGetReductionIndex(id)];
   CmiReduction *red = reduction_ref;
   if (red != NULL) {
     free(red->remotebuffer);
@@ -267,8 +274,6 @@ static void CmiClearReduction(CmiReductionID id,
   }
   reduction_ref = NULL;
 }
-
-// PROCESS REDUCTIONS
 
 CmiReductionID CmiGetNextReductionID() {
   return getNextID(CpvAccess(_reduction_counter));
@@ -360,7 +365,7 @@ void CmiSendReduce(CmiReduction *red) {
   } else {
     (red->ops.desthandler)(msg);
   }
-  CmiClearReduction(red->ReductionID, CpvAccess(_reduction_info));
+  CmiClearReduction(red->ReductionID);
 }
 
 void CmiReduceHandler(void *msg) {
@@ -373,11 +378,32 @@ void CmiReduceHandler(void *msg) {
 }
 
 // NODE REDUCTION
+static void CmiClearNodeReduction(CmiReductionID id) {
+  auto &reduction_ref =
+      CsvAccess(_node_reduction_info)[CmiGetReductionIndex(id)].red;
+  CmiReduction *red = reduction_ref;
+  if (red != NULL) {
+    free(red->remotebuffer);
+    // we assume the user is freeing the actual messages that the buffer is
+    // holding or is that something we do?
+    free(red);
+  }
+  reduction_ref = NULL;
+}
 
 void CmiNodeReduce(void *msg, int size, CmiReduceMergeFn mergeFn) {
+#ifdef CMK_SMP
+  CmiNodeReduction nodeRed =
+      CsvAccess(_node_reduction_info)[CmiGetReductionIndex(CmiGetRedID(msg))];
+  CmiLock(nodeRed.lock);
+#endif
   const CmiReductionID id = CmiGetNextNodeReductionID();
   CmiReduction *red = CmiGetCreateNodeReduction(id);
   CmiInternalNodeReduce(msg, size, mergeFn, red);
+
+#ifdef CMK_SMP
+  CmiUnlock(nodeRed.lock);
+#endif
 }
 
 CmiReductionID CmiGetNextNodeReductionID() {
@@ -391,7 +417,7 @@ static CmiReduction *CmiGetCreateNodeReduction(CmiReductionID id) {
   // 2. a reduction structure already exists adn teh parent has initiaited its
   // own contribution
   auto &reduction_ref =
-      CsvAccess(_node_reduction_info)[CmiGetReductionIndex(id)];
+      CsvAccess(_node_reduction_info)[CmiGetReductionIndex(id)].red;
   CmiReduction *red = reduction_ref;
   if (reduction_ref == NULL) {
     CmiReduction *newred = (CmiReduction *)malloc(sizeof(CmiReduction));
@@ -462,16 +488,25 @@ void CmiSendNodeReduce(CmiReduction *red) {
   } else {
     (red->ops.desthandler)(msg);
   }
-  CmiClearReduction(red->ReductionID, CsvAccess(_node_reduction_info));
+  CmiClearNodeReduction(red->ReductionID);
 }
 
 void CmiNodeReduceHandler(void *msg) {
+#ifdef CMK_SMP
+  CmiNodeReduction nodeRed =
+      CsvAccess(_node_reduction_info)[CmiGetReductionIndex(CmiGetRedID(msg))];
+  CmiLock(nodeRed.lock);
+#endif
   CmiReduction *reduction = CmiGetCreateNodeReduction(CmiGetRedID(msg));
 
   // how are we ensuring the messages arrive in order again?
   reduction->remotebuffer[reduction->messagesReceived] = (char *)msg;
   reduction->messagesReceived++;
   CmiSendNodeReduce(reduction);
+
+#ifdef CMK_SMP
+  CmiUnlock(nodeRed.lock);
+#endif
 }
 
 /************* Groups ***************/
