@@ -43,6 +43,11 @@ static void TaskStealBeginIdle() {
 void CmiTaskQueueInit() {
     // makes sure that the node has more than one PE, because we can only steal
     // from other PE's that share the same node
+
+    //initlialize the task queue for this PE 
+    CpvInitialize(TaskQueue*, task_q);
+    CpvAccess(task_q) = TaskQueueCreate();
+
     if(CmiMyNodeSize() > 1) { 
         CcdCallOnConditionKeep(CcdPROCESSOR_BEGIN_IDLE, (CcdCondFn) TaskStealBeginIdle, NULL);
     

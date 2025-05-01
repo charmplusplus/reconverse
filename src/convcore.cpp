@@ -79,10 +79,6 @@ void converseRunPe(int rank) {
 
   Cmi_exitHandler = CmiRegisterHandler(CmiExitHandler);
 
-  //initlialize the task queue for this PE 
-  CpvInitialize(TaskQueue*, task_q);
-  CpvAccess(task_q) = TaskQueueCreate();
-
   //initalize collective operations/arrays/handlers/etc
   collectiveInit();
 

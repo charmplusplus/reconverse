@@ -1,8 +1,8 @@
 #ifndef _CK_TASKQ_H_
 #define _CK_TASKQ_H_
 
-#include "src/converse_internal.h"
-#include "include/converse.h"
+#include "converse_internal.h"
+#include "converse.h"
 #include "taskqueue.h"
 
 #if CMK_TRACE_ENABLED
@@ -13,7 +13,9 @@
     #define TASKQ_QUEUE_STEAL_EVENTID 151
 #endif
 
-void StealTask();
-void CmiTaskQueueInit();
+CpvStaticDeclare(TaskQueue*, task_q);
+
+void StealTask(void);
+void CmiTaskQueueInit(void);
 
 #endif

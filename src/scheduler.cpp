@@ -38,14 +38,19 @@ void CsdScheduler() {
           CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
         }
       }
-    } else if (taskQueue && (msg = taskQueuePop(taskQueue))) { //taskqueue pop handles all possible queue cases arleady so we only need to check if it exists or not
+    } else if (taskQueue && (msg = TaskQueuePop(taskQueue))) { //taskqueue pop handles all possible queue cases arleady so we only need to check if it exists or not
+      //process event 
       CmiHandleMessage(msg);
-      // idle stuff 
-
-
-
       
-    } else (!queue->empty()) {  // poll thread queue
+      // release idle if necessary 
+      if (CmiGetIdle()) {
+        CmiSetIdle(false);
+        CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
+      }
+
+      //do we want idle check to be here? 
+
+    } else if (!queue->empty()) {  // poll thread queue
       // get next event (guaranteed to be there because only single consumer)
       msg = queue->pop();
 
@@ -58,7 +63,6 @@ void CsdScheduler() {
         CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
       }
     }
-
     // the processor is idle
     else {
       // if not already idle, set idle and raise condition

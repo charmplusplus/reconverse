@@ -117,8 +117,6 @@ CpvStaticDeclare(CmiReductionID, _reduction_counter);
 CpvStaticDeclare(CmiReduction **,
                  _reduction_info); // an array of pointers to reduction structs
 
-CpvStaticDeclare(TaskQueue*, task_q);
-
 void CmiReductionsInit(void);
 
 // helper function to get the next reduction ID
