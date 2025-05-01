@@ -29,6 +29,7 @@ std::vector<CmiHandlerInfo> **CmiHandlerTable; // array of handler vectors
 ConverseNodeQueue<void *> *CmiNodeQueue;
 double Cmi_startTime;
 CmiSpanningTreeInfo *_topoTree = NULL;
+int CharmLibInterOperate;
 
 void CldModuleInit(char **);
 

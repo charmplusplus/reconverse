@@ -131,7 +131,7 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched = 0,
                   int initret = 0);
 
 static CmiStartFn Cmi_startfn;
-int CharmLibInterOperate;
+extern int CharmLibInterOperate;
 
 struct alignas(ALIGN_BYTES) CmiChunkHeader {
   int size;
@@ -820,4 +820,5 @@ enum cmiZCMsgType {
         (c)[_c++] = CST_NF(CST_ND(p)) + _x;                                    \
     }                                                                          \
   } while (0)
+
 #endif
