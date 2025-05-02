@@ -182,7 +182,6 @@ void CmiSyncBroadcast(int size, void *msg) {
 void CmiReductionsInit(void) {
     CpvInitialize(CmiReduction **, _reduction_info);
     CpvInitialize(CmiReductionID, _reduction_counter);
-    CpvInitialize(CmiReductionID, _reduce_seqID_global);
   
     // allocating memory for reduction info table
     auto redinfo =
@@ -195,7 +194,6 @@ void CmiReductionsInit(void) {
     // how do we ensure that 2 threads who call reductions at the same time don't
     // get the same ID again?
     CpvAccess(_reduction_counter) = 0;
-    CpvAccess(_reduce_seqID_global) = 0;
   }
   
   static inline CmiReductionID getNextID(CmiReductionID &ctr) {
@@ -226,9 +224,6 @@ void CmiReductionsInit(void) {
     return getNextID(CpvAccess(_reduction_counter));
   }
 
-  void CmiResetGlobalReduceSeqID(void) {
-    CpvAccess(_reduce_seqID_global) = 0;
-  }
   
   // treating the id as the index into the reduction table
   // utilized in getCreateReduction and clearReduction to find the reduction
