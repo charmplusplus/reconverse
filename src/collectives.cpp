@@ -262,6 +262,7 @@ unsigned CmiGetReductionIndex(CmiReductionID id) {
   return id;
 }
 
+
 // PROCESS REDUCTIONS
 static void CmiClearReduction(CmiReductionID id) {
   auto &reduction_ref = CpvAccess(_reduction_info)[CmiGetReductionIndex(id)];
@@ -277,6 +278,10 @@ static void CmiClearReduction(CmiReductionID id) {
 
 CmiReductionID CmiGetNextReductionID() {
   return getNextID(CpvAccess(_reduction_counter));
+}
+
+void CmiResetGlobalReduceSeqID(void) {
+  CpvAccess(_reduction_counter) = 0;
 }
 
 static CmiReduction *CmiGetCreateReduction(CmiReductionID id) {
@@ -408,6 +413,10 @@ void CmiNodeReduce(void *msg, int size, CmiReduceMergeFn mergeFn) {
 
 CmiReductionID CmiGetNextNodeReductionID() {
   return getNextID(CsvAccess(_node_reduction_counter));
+}
+
+void CmiResetGlobalNodeReduceSeqID(){
+  CsvAccess(_node_reduction_counter) = 0;
 }
 
 static CmiReduction *CmiGetCreateNodeReduction(CmiReductionID id) {
