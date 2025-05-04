@@ -1,7 +1,6 @@
 //+pe <N> threads, each running a scheduler
 #include "barrier.h"
 #include "converse_internal.h"
-#include "conv-taskQ.h"
 #include "queue.h"
 #include "scheduler.h"
 
@@ -207,6 +206,7 @@ void CmiInitState(int rank) {
   CcdModuleInit();
 
   CmiTaskQueueInit();
+  printf("task queue created at pointer: %p\n", (void*)CpvAccess(task_q));
 }
 
 ConverseQueue<void *> *CmiGetQueue(int rank) { return Cmi_queues[rank]; }
@@ -887,3 +887,119 @@ void CmiLock(CmiNodeLock lock) { pthread_mutex_lock(lock); }
 void CmiUnlock(CmiNodeLock lock) { pthread_mutex_unlock(lock); }
 
 int CmiTryLock(CmiNodeLock lock) { return pthread_mutex_trylock(lock); }
+
+
+//Task Queue Functions/Definitions 
+// Function to create a new TaskQueue and initialize its members
+TaskQueue* TaskQueueCreate() {
+  TaskQueue* taskqueue = (TaskQueue*)malloc(sizeof(TaskQueue));
+  taskqueue->head = 0; 
+  taskqueue->tail = 0; 
+  for (int i = 0; i < TASKQUEUE_SIZE; i++) {
+      taskqueue->data[i] = NULL;
+  }
+  return taskqueue; 
+}
+
+// Function to push a task onto the TaskQueue
+void TaskQueuePush(TaskQueue* queue, void* data) {
+   queue->data[queue->tail % TASKQUEUE_SIZE] = data; 
+   CmiMemoryWriteFence(); //makes sure the data is fully written before updating the tail pointer
+   queue->tail++; 
+   if (queue->tail >= TASKQUEUE_SIZE) {
+       fprintf(stderr, "TaskQueue overflow: possible corruption/overwrite possibility of data\n");
+   }
+}
+
+// Function to pop a task from the TaskQueue. Victims pop from the tail 
+void* TaskQueuePop(TaskQueue* queue) {
+   queue->tail = queue->tail - 1; 
+   CmiMemoryWriteFence();
+   taskq_idx head = queue->head;
+   taskq_idx tail = queue->tail; 
+   if (tail > head) { // there are more than two tasks in the queue, so it is safe to pop a task from the queue.
+       return queue->data[tail % TASKQUEUE_SIZE];
+   }
+
+   if (tail < head) { // The taskqueue is empty and the last task has been stolen by a thief.
+       queue->tail = head; // reset the tail pointer to the head pointer
+       return NULL;
+   }
+
+   // head==tail case: there is only one task so thieves and victim can try to obtain this task simultaneously.
+   queue->tail = head + 1;
+   if (!__sync_bool_compare_and_swap(&(queue->head), head, head+1)) { // Check whether the last task has already stolen.
+       return NULL;
+   }
+   return queue->data[tail % TASKQUEUE_SIZE];
+}
+
+// Function to steal a task from another TaskQueue. Other PEs/Threads steal from the head
+void* TaskQueueSteal(TaskQueue* queue) {
+   taskq_idx head, tail; 
+   while (1) {
+       head = queue->head;
+       tail = queue->tail;
+       if (head >= tail) { 
+           // The queue is empty
+           // or the last element has been stolen by other thieves 
+           // or popped by the victim.
+           return NULL;
+       }
+
+       if (!__sync_bool_compare_and_swap(&(queue->head), head, head+1)) { // Check whether the task this thief is trying to steal is still in the queue and not stolen by the other thieves.
+           continue;
+       } 
+       return queue->data[head % TASKQUEUE_SIZE];
+   }
+}
+
+// Function to destroy the TaskQueue and free its memory
+void TaskQueueDestroy(TaskQueue* queue) {
+   if (queue != NULL) {
+       free(queue);
+   }
+}
+
+void StealTask() {
+    // start up timer if trace is enabled 
+    //steal from a random PE on the same node
+    int random_rank = CrnRand() % (CmiMyNodeSize()-1);
+    if (random_rank == CmiMyRank()) {
+        random_rank++; 
+        if (random_rank >= CmiMyNodeSize()) {
+            random_rank = 0; // wrap around if our random_selected node is the same as our own 
+                              // and we are the last PE on our node
+        }
+    }
+
+    void* msg = TaskQueueSteal((TaskQueue*)CpvAccessOther(task_q, random_rank));
+    if (msg != NULL) {
+        TaskQueuePush((TaskQueue*)CpvAccess(task_q), msg);
+    }
+}
+  
+  // this function is passed into CcdCallOnConditionKeep 
+  static void TaskStealBeginIdle() {
+      // can discuss whether we need to add the isHelper csv variable that is in old converse. 
+      // not going to add it for now, because it's turned/left on by default in old converse 
+      if (CmiMyNodeSize() > 1) {
+          StealTask();
+      }
+  }
+  
+  // each pe will call this function because each pe has its own task queue 
+  void CmiTaskQueueInit() {
+      // makes sure that the node has more than one PE, because we can only steal
+      // from other PE's that share the same node
+  
+      //initlialize the task queue for this PE 
+      CpvInitialize(TaskQueue*, task_q);
+      CpvAccess(task_q) = TaskQueueCreate();
+  
+      if(CmiMyNodeSize() > 1) { 
+          CcdCallOnConditionKeep(CcdPROCESSOR_BEGIN_IDLE, (CcdCondFn) TaskStealBeginIdle, NULL);
+      
+          CcdCallOnConditionKeep(CcdPROCESSOR_STILL_IDLE, (CcdCondFn) TaskStealBeginIdle, NULL);
+      }
+  }

@@ -8,7 +8,6 @@
 #include "converse.h"
 #include "converse_config.h"
 #include "queue.h"
-#include "conv-taskQ.h"
 
 #include "comm_backend/comm_backend.h"
 #include "comm_backend/comm_backend_internal.h"
@@ -139,5 +138,35 @@ void CmiSetRedID(void *msg, CmiReductionID redID);
 // helpers for broadcast
 void CmiSetBcastSource(void *msg, CmiBroadcastSource source);
 CmiBroadcastSource CmiGetBcastSource(void *msg);
+
+
+// TASK QUEUE RELATED FUNCTIONS/DEFINITIONS
+#define TASKQUEUE_SIZE 1024
+#if CMK_SMP
+    #define CmiMemoryWriteFence() __sync_synchronize() // This is a memory fence to ensure that writes are visible to other threads/cores
+#else 
+    #define CmiMemoryWriteFence() // No-op if not in SMP mode
+#endif
+
+typedef int taskq_idx;
+
+typedef struct TaskQueueStruct {
+  taskq_idx head; // This pointer indicates the first task in the queue
+  taskq_idx tail; // The tail indicates the array element next to the last available task in the queue. So, if head == tail, the queue is empty
+  void *data[TASKQUEUE_SIZE];
+} TaskQueue;
+
+CpvStaticDeclare(TaskQueue*, task_q);
+
+TaskQueue* TaskQueueCreate();
+void TaskQueuePush(TaskQueue* queue, void* data);
+void* TaskQueuePop(TaskQueue* queue);
+void* TaskQueueSteal(TaskQueue* queue);
+void TaskQueueDestroy(TaskQueue* queue);
+
+void StealTask(void);
+void CmiTaskQueueInit(void);
+
+
 
 #endif

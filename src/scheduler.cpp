@@ -39,6 +39,7 @@ void CsdScheduler() {
         }
       }
     } else if (taskQueue && (msg = TaskQueuePop(taskQueue))) { //taskqueue pop handles all possible queue cases arleady so we only need to check if it exists or not
+      assert(msg != NULL);
       //process event 
       CmiHandleMessage(msg);
       
@@ -47,8 +48,6 @@ void CsdScheduler() {
         CmiSetIdle(false);
         CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
       }
-
-      //do we want idle check to be here? 
 
     } else if (!queue->empty()) {  // poll thread queue
       // get next event (guaranteed to be there because only single consumer)
@@ -71,6 +70,8 @@ void CsdScheduler() {
         CmiSetIdleTime(CmiWallTimer());
         CcdRaiseCondition(CcdPROCESSOR_BEGIN_IDLE);
       }
+      // at this point the condition should be raised and the pe should be called. 
+
       // if already idle, call still idle and (maybe) long idle
       else {
         CcdRaiseCondition(CcdPROCESSOR_STILL_IDLE);
@@ -78,6 +79,8 @@ void CsdScheduler() {
           CcdRaiseCondition(CcdPROCESSOR_LONG_IDLE);
         }
       }
+      // at this point the condition should be raised and the pe should be called. 
+
       // poll the communication layer
       comm_backend::progress();
     }
@@ -87,5 +90,4 @@ void CsdScheduler() {
     // TODO: suspend? or spin?
   }
 }
-
 // TODO: implement CsdEnqueue/Dequeue (why are these necessary?)
