@@ -9,8 +9,6 @@ int gMyNodeID = 0;
 void init(int *argc, char ***argv) {
 #ifdef RECONVERSE_ENABLE_COMM_LCI2
   gCommBackend = new CommBackendLCI2();
-#elif defined(RECONVERSE_ENABLE_COMM_LCI1)
-  gCommBackend = new CommBackendLCI1();
 #endif
   if (gCommBackend == nullptr) {
     return;

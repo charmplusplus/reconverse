@@ -33,13 +33,6 @@ set(RECONVERSE_AUTOFETCH_LCI2_TAG
     "85dc99f3b32cfc8b3b4b0e0590ee445282964b57"
     CACHE STRING "The tag to fetch for LCIv2") # master branch as of 2025-04-17
 
-option(RECONVERSE_TRY_ENABLE_COMM_LCI1 "whether to enable the LCIv1 backend" OFF)
-option(RECONVERSE_AUTOFETCH_LCI1
-       "whether to autofetch LCIv1 if LCI1 cannot be found" OFF)
-set(RECONVERSE_AUTOFETCH_LCI1_TAG
-    "ad1c43e5ff28bb2cfc8a300615f4d502b7bce31f"
-    CACHE STRING "The tag to fetch for LCIv1") # master branch as of 2025-04-17
-
 option(SPANTREE "whether to enable spanning tree collectives" ON)
 option(CMK_SMP "whether to enable SMP support" ON)
 

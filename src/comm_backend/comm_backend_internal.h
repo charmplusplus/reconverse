@@ -31,8 +31,5 @@ public:
 #ifdef RECONVERSE_ENABLE_COMM_LCI2
 #include "comm_backend/lci2/comm_backend_lci2.h"
 #endif
-#ifdef RECONVERSE_ENABLE_COMM_LCI1
-#include "comm_backend/lci1/comm_backend_lci1.h"
-#endif
 
 #endif // COMM_BACKEND_INTERNAL_H

@@ -2,7 +2,6 @@
 #define CONVERSE_CONFIG_H
 
 #cmakedefine RECONVERSE_ENABLE_COMM_LCI2
-#cmakedefine RECONVERSE_ENABLE_COMM_LCI1
 #cmakedefine SPANTREE
 #cmakedefine CMK_SMP
 
