@@ -349,6 +349,9 @@ void CmiAssignOnce(int* variable, int value);
 // Reduction functions
 typedef void *(*CmiReduceMergeFn)(int *, void *, void **, int);
 void CmiReduce(void *msg, int size, CmiReduceMergeFn mergeFn);
+void CmiNodeReduce(void *msg, int size, CmiReduceMergeFn mergeFn);
+void CmiResetGlobalReduceSeqID();
+void CmiResetGlobalNodeReduceSeqID();
 
 // Exit functions
 void CmiExit(int status);

@@ -112,10 +112,28 @@ typedef struct {
   } ops;
 } CmiReduction;
 
+typedef struct {
+  // in non-SMP, node reduction is equivalent to PE reduction
+#ifdef CMK_SMP
+  CmiNodeLock lock;
+#endif
+  CmiReduction *red;
+} CmiNodeReduction;
+
 CpvStaticDeclare(CmiReductionID, _reduction_counter);
 CpvStaticDeclare(CmiReduction **,
                  _reduction_info); // an array of pointers to reduction structs
 CpvStaticDeclare(CmiReductionID, _reduce_seqID_global);
+
+#ifdef CMK_SMP
+using CmiNodeReductionID = std::atomic<CmiReductionID>;
+#else
+using CmiNodeReductionID = CmiReductionID;
+#endif
+CsvStaticDeclare(CmiNodeReductionID, _node_reduction_counter);
+CsvStaticDeclare(
+    CmiNodeReduction *,
+    _node_reduction_info); // an array of pointers to reduction structs
 
 void CmiReductionsInit(void);
 
@@ -128,9 +146,20 @@ unsigned CmiGetReductionIndex(CmiReductionID id);
 
 static CmiReduction *CmiGetCreateReduction(CmiReductionID id);
 static void CmiClearReduction(CmiReductionID id);
+static void CmiClearNodeReduction(CmiReductionID id);
+
 void CmiInternalReduce(void *msg, int size, CmiReduceMergeFn mergeFn,
                        CmiReduction *red);
 void CmiSendReduce(CmiReduction *red);
+
+// internal node reduction functions
+
+CmiReductionID CmiGetNextNodeReductionID();
+static CmiReduction *CmiGetCreateNodeReduction(CmiReductionID id);
+void CmiInternalNodeReduce(void *msg, int size, CmiReduceMergeFn mergeFn,
+                           CmiReduction *red);
+void CmiSendNodeReduce(CmiReduction *red);
+void CmiNodeReduceHandler(void *msg);
 
 // helpers to get and set red ID in a message
 CmiReductionID CmiGetRedID(void *msg);
