@@ -9,15 +9,16 @@
  * The main scheduler loop for the Charm++ runtime.
  */
 void CsdScheduler() {
+  //printf("my rank: %d\n", CmiMyRank());
   // get pthread level queue
-  printf("scheduler %d: taskq pointer %p", __LINE__, CpvAccess(task_q));
   ConverseQueue<void *> *queue = CmiGetQueue(CmiMyRank());
 
   // get node level queue
   ConverseNodeQueue<void *> *nodeQueue = CmiGetNodeQueue();
 
   //get task level queue 
-  TaskQueue* taskQueue = (TaskQueue*)CpvAccess(task_q);
+  TaskQueue* taskQueue = (TaskQueue*)(Cmi_taskqueues[CmiMyRank()]);
+  //printf("scheduler %d: taskq pointer %p", __LINE__, taskQueue);
 
   void* msg = NULL;
 

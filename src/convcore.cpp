@@ -34,7 +34,8 @@ int CharmLibInterOperate;
 void CldModuleInit(char **);
 
 // PE LOCALS that need global access sometimes
-static ConverseQueue<void *> **Cmi_queues; // array of queue pointers
+ConverseQueue<void *> **Cmi_queues = nullptr; // array of queue pointers
+TaskQueue** Cmi_taskqueues = nullptr; 
 
 // PE LOCALS
 thread_local int Cmi_myrank;
@@ -76,7 +77,6 @@ void converseRunPe(int rank) {
 #ifdef SET_CPU_AFFINITY
   CmiSetCPUAffinity(rank);
 #endif
-  printf("%d: taskqueue pointer: %p\n", __LINE__, CpvAccess(task_q));
 
   Cmi_exitHandler = CmiRegisterHandler(CmiExitHandler);
 
@@ -92,12 +92,12 @@ void converseRunPe(int rank) {
   // call initial function and start scheduler
   Cmi_startfn(Cmi_argc, Cmi_argv);
 
-  printf("%d: taskqueue pointer: %p\n", __LINE__, CpvAccess(task_q));
+  //printf("%d: taskqueue pointer: %p\n", __LINE__, CsvAccess(task_q)[Cmi_myrank]);
   CsdScheduler();
 
   // cleanup of threads? : destroy each threads task queue and reduction table struct(not the struct itself)
-  TaskQueueDestroy(CpvAccess(task_q));  
-  free(CpvAccess(_reduction_info));
+  TaskQueueDestroy(Cmi_taskqueues[Cmi_myrank]);  
+  //free(CpvAccess(_reduction_info));
 }
 
 void CmiStartThreads() {
@@ -106,6 +106,8 @@ void CmiStartThreads() {
   CmiHandlerTable = new std::vector<CmiHandlerInfo> *[Cmi_mynodesize];
   CmiNodeQueue = new ConverseNodeQueue<void *>();
 
+  Cmi_taskqueues = new TaskQueue*[Cmi_mynodesize];
+  //CmiTaskQueueInit();
   // make sure the queues are allocated before PEs start sending messages around
   comm_backend::barrier();
 
@@ -124,9 +126,12 @@ void CmiStartThreads() {
   delete[] Cmi_queues;
   delete CmiNodeQueue;
   delete[] CmiHandlerTable;
+  delete [] Cmi_taskqueues;
+
   Cmi_queues = nullptr;
   CmiNodeQueue = nullptr;
   CmiHandlerTable = nullptr;
+  Cmi_taskqueues = nullptr;
 }
 
 // argument form: ./prog +pe <N>
@@ -205,13 +210,18 @@ void CmiInitState(int rank) {
   Cmi_queues[Cmi_myrank] = queue;
   CmiHandlerTable[Cmi_myrank] = handlerTable;
 
+  //task queue stuff
+  Cmi_taskqueues[Cmi_myrank] = TaskQueueCreate();
+  //printf("task queue created at pointer: %p\n", Cmi_taskqueues[Cmi_myrank]);
+  if(CmiMyNodeSize() > 1) { 
+      CcdCallOnConditionKeep(CcdPROCESSOR_BEGIN_IDLE, (CcdCondFn) TaskStealBeginIdle, NULL);
+      CcdCallOnConditionKeep(CcdPROCESSOR_STILL_IDLE, (CcdCondFn) TaskStealBeginIdle, NULL);
+  }
+
   // random
   CrnInit();
 
   CcdModuleInit();
-
-  CmiTaskQueueInit();
-  printf("task queue created at pointer: %p\n", (void*)CpvAccess(task_q));
 }
 
 ConverseQueue<void *> *CmiGetQueue(int rank) { return Cmi_queues[rank]; }
@@ -980,14 +990,14 @@ void StealTask() {
         }
     }
 
-    void* msg = TaskQueueSteal((TaskQueue*)CpvAccessOther(task_q, random_rank));
+    void* msg = TaskQueueSteal((TaskQueue*)(Cmi_taskqueues[random_rank]));
     if (msg != NULL) {
-        TaskQueuePush((TaskQueue*)CpvAccess(task_q), msg);
+        TaskQueuePush((TaskQueue*)(Cmi_taskqueues[Cmi_myrank]), msg);
     }
 }
   
   // this function is passed into CcdCallOnConditionKeep 
-  static void TaskStealBeginIdle() {
+  void TaskStealBeginIdle() {
       // can discuss whether we need to add the isHelper csv variable that is in old converse. 
       // not going to add it for now, because it's turned/left on by default in old converse 
       if (CmiMyNodeSize() > 1) {
@@ -995,18 +1005,24 @@ void StealTask() {
       }
   }
   
-  // each pe will call this function because each pe has its own task queue 
-  void CmiTaskQueueInit() {
-      // makes sure that the node has more than one PE, because we can only steal
-      // from other PE's that share the same node
+  // // each pe will call this function because each pe has its own task queue 
+  // void CmiTaskQueueInit() {
+  //     // makes sure that the node has more than one PE, because we can only steal
+  //     // from other PE's that share the same node
   
-      //initlialize the task queue for this PE 
-      CpvInitialize(TaskQueue*, task_q);
-      CpvAccess(task_q) = TaskQueueCreate();
-  
-      if(CmiMyNodeSize() > 1) { 
-          CcdCallOnConditionKeep(CcdPROCESSOR_BEGIN_IDLE, (CcdCondFn) TaskStealBeginIdle, NULL);
+  //     //initlialize the task queue for this PE 
+  //     CsvInitialize(TaskQueue**, task_q);
+  //     auto taskqueues = (TaskQueue** )malloc(Cmi_mynodesize * sizeof(TaskQueue* ));
+  //     for (int i = 0; i < Cmi_mynodesize; ++i)
+  //       taskqueues[i] = TaskQueueCreate();
       
-          CcdCallOnConditionKeep(CcdPROCESSOR_STILL_IDLE, (CcdCondFn) TaskStealBeginIdle, NULL);
-      }
-  }
+  //     CsvAccess(task_q) = taskqueues;
+  //     for (int i = 0; i < Cmi_mynodesize; i++) {
+  //       printf("task queue created at pointer: %p\n", (void*)CsvAccess(task_q)[i]);
+  //     }
+  
+  //     if(CmiMyNodeSize() > 1) { 
+  //         CcdCallOnConditionKeep(CcdPROCESSOR_BEGIN_IDLE, (CcdCondFn) TaskStealBeginIdle, NULL);
+  //         CcdCallOnConditionKeep(CcdPROCESSOR_STILL_IDLE, (CcdCondFn) TaskStealBeginIdle, NULL);
+  //     }
+  // }

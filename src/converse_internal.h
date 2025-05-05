@@ -172,11 +172,7 @@ CmiBroadcastSource CmiGetBcastSource(void *msg);
 
 // TASK QUEUE RELATED FUNCTIONS/DEFINITIONS
 #define TASKQUEUE_SIZE 1024
-#if CMK_SMP
-    #define CmiMemoryWriteFence() __sync_synchronize() // This is a memory fence to ensure that writes are visible to other threads/cores
-#else 
-    #define CmiMemoryWriteFence() // No-op if not in SMP mode
-#endif
+#define CmiMemoryWriteFence() // No-op if not in SMP mode
 
 typedef int taskq_idx;
 
@@ -186,17 +182,20 @@ typedef struct TaskQueueStruct {
   void *data[TASKQUEUE_SIZE];
 } TaskQueue;
 
-CpvStaticDeclare(TaskQueue*, task_q);
+//CsvStaticDeclare(TaskQueue**, task_q);
 
 TaskQueue* TaskQueueCreate();
 void TaskQueuePush(TaskQueue* queue, void* data);
 void* TaskQueuePop(TaskQueue* queue);
 void* TaskQueueSteal(TaskQueue* queue);
 void TaskQueueDestroy(TaskQueue* queue);
+void TaskStealBeginIdle(void);
 
 void StealTask(void);
-void CmiTaskQueueInit(void);
+// void CmiTaskQueueInit(void);
 
 
+extern ConverseQueue<void *> **Cmi_queues; // array of queue pointers
+extern TaskQueue** Cmi_taskqueues; 
 
 #endif
