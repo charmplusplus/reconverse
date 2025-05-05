@@ -41,6 +41,7 @@ set(RECONVERSE_AUTOFETCH_LCI1_TAG
     CACHE STRING "The tag to fetch for LCIv1") # master branch as of 2025-04-17
 
 option(SPANTREE "whether to enable spanning tree collectives" ON)
+option(CMK_SMP "whether to enable SMP support" ON)
 
 option(RECONVERSE_ATOMIC_QUEUE "whether to use atomic queue" ON)
 
