@@ -50,7 +50,7 @@ typedef __uint128_t CmiUInt16;
 
 #define CpvInitialize(t, v)                                                    \
   do {                                                                         \
-    if (false /* I don't understand */) {                                      \
+    if (CmiMyRank()) {                                      \
       CmiNodeBarrier();                                                        \
     } else {                                                                   \
       CMK_TAG(Cpv_, v) = new t[CmiMyNodeSize()];                               \
@@ -131,6 +131,7 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched = 0,
                   int initret = 0);
 
 static CmiStartFn Cmi_startfn;
+extern int CharmLibInterOperate;
 
 struct alignas(ALIGN_BYTES) CmiChunkHeader {
   int size;
@@ -251,10 +252,11 @@ CmiHandler CmiHandlerToFunction(int handlerId);
 int CmiGetInfo(void *msg);
 void CmiSetInfo(void *msg, int infofn);
 
-// message allocation
+// message allocation/memory
 void *CmiAlloc(int size);
 void CmiFree(void *msg);
 #define CmiMemoryUsage() 0
+void CmiMemoryMarkBlock(void *blk);
 
 // state getters
 int CmiMyPe();
@@ -336,7 +338,11 @@ void CmiFreeMulticastFn(CmiGroup grp, int size, char *msg);
 // Barrier functions
 void CmiNodeBarrier();
 void CmiNodeAllBarrier();
+
+//scheduler
 void CsdExitScheduler();
+int CsdScheduler(int maxmsgs);
+void CsdEnqueueGeneral(void *Message, int strategy, int priobits, int *prioptr);
 
 void CmiAssignOnce(int* variable, int value);
 
@@ -606,6 +612,44 @@ void CldEnqueueWithinNode(void *msg, int infofn);
 #define CmiImmIsRunning() (0)
 #define CMI_MSG_NOKEEP(msg) ((CmiMessageHeader *)msg)->nokeep
 
+// zerocopy
+
+typedef struct ncpystruct{
+
+  const void *srcPtr;
+  char *srcLayerInfo;
+  char *srcAck;
+  const void *srcRef;
+  int srcPe;
+  size_t srcSize;
+  short int srcLayerSize;
+  short int srcAckSize;
+  unsigned char srcRegMode;
+  unsigned char srcDeregMode;
+  unsigned char isSrcRegistered;
+
+  const void *destPtr;
+  char *destLayerInfo;
+  char *destAck;
+  const void *destRef;
+  int destPe;
+  size_t destSize;
+  short int destAckSize;
+  short int destLayerSize;
+  unsigned char destRegMode;
+  unsigned char destDeregMode;
+  unsigned char isDestRegistered;
+  unsigned char opMode;
+
+  // Variables used for ack handling
+  unsigned char ackMode; 
+  unsigned char freeMe;
+  short int ncpyOpInfoSize;
+  int rootNode;
+  void *refPtr;
+
+}NcpyOperationInfo;
+
 enum cmiZCMsgType {
   CMK_REG_NO_ZC_MSG = 0,
   CMK_ZC_P2P_SEND_MSG = 1,
@@ -778,4 +822,5 @@ enum cmiZCMsgType {
         (c)[_c++] = CST_NF(CST_ND(p)) + _x;                                    \
     }                                                                          \
   } while (0)
+
 #endif
