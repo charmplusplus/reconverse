@@ -19,11 +19,18 @@ public:
   int getMyNodeId() override;
   int getNumNodes() override;
   AmHandler registerAmHandler(CompHandler handler) override;
-  void sendAm(int rank, void *msg, size_t size, mr_t mr, CompHandler localComp,
-              AmHandler remoteComp) override;
+  void issueAm(int rank, void *local_buf, size_t size, mr_t mr,
+               CompHandler localComp, AmHandler remoteComp) override;
+  void issueRget(int rank, void *local_buf, size_t size, mr_t local_mr,
+                 uintptr_t remote_disp, void *rmr,
+                 CompHandler localComp) override;
+  void issueRput(int rank, void *local_buf, size_t size, mr_t local_mr,
+                 uintptr_t remote_disp, void *rmr,
+                 CompHandler localComp) override;
   bool progress(void) override;
   void barrier(void) override;
   mr_t registerMemory(void *addr, size_t size) override;
+  size_t getRMR(mr_t mr, void *addr, size_t size) override;
   void deregisterMemory(mr_t mr) override;
 
 private:

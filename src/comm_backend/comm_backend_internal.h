@@ -16,12 +16,19 @@ public:
   virtual int getMyNodeId() = 0;
   virtual int getNumNodes() = 0;
   virtual AmHandler registerAmHandler(CompHandler handler) = 0;
-  virtual void sendAm(int rank, void *msg, size_t size, mr_t mr,
-                      CompHandler localComp, AmHandler remoteComp) = 0;
+  virtual void issueAm(int rank, void *local_buf, size_t size, mr_t mr,
+                       CompHandler localComp, AmHandler remoteComp) = 0;
+  virtual void issueRget(int rank, void *local_buf, size_t size, mr_t local_mr,
+                         uintptr_t remote_disp, void *rmr,
+                         CompHandler localComp) = 0;
+  virtual void issueRput(int rank, void *local_buf, size_t size, mr_t local_mr,
+                         uintptr_t remote_disp, void *rmr,
+                         CompHandler localComp) = 0;
   // return true if there is more work to do
   virtual bool progress(void) = 0;
   virtual void barrier(void) = 0;
   virtual mr_t registerMemory(void *addr, size_t size) { return MR_NULL; }
+  virtual size_t getRMR(mr_t mr, void *addr, size_t size) { return 0; }
   virtual void deregisterMemory(mr_t mr) {}
   virtual ~CommBackendBase() {};
 };

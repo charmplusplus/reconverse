@@ -53,16 +53,18 @@ int Cmi_exitHandler;
 comm_backend::AmHandler AmHandlerPE;
 comm_backend::AmHandler AmHandlerNode;
 
-void CommLocalHandler(comm_backend::Status status) { CmiFree(status.msg); }
+void CommLocalHandler(comm_backend::Status status) {
+  CmiFree(status.local_buf);
+}
 
 void CommRemoteHandlerPE(comm_backend::Status status) {
-  CmiMessageHeader *header = (CmiMessageHeader *)status.msg;
+  CmiMessageHeader *header = (CmiMessageHeader *)status.local_buf;
   int destPE = header->destPE;
-  CmiPushPE(destPE, status.size, status.msg);
+  CmiPushPE(destPE, status.size, status.local_buf);
 }
 
 void CommRemoteHandlerNode(comm_backend::Status status) {
-  CmiNodeQueue->push(status.msg);
+  CmiNodeQueue->push(status.local_buf);
 }
 
 void CmiCallHandler(int handler, void *msg) {
@@ -347,9 +349,9 @@ void CmiSyncSendAndFree(int destPE, int messageSize, void *msg) {
   if (CmiMyNode() == destNode) {
     CmiPushPE(destPE, messageSize, msg);
   } else {
-    comm_backend::sendAm(destNode, msg, messageSize, comm_backend::MR_NULL,
-                         CommLocalHandler,
-                         AmHandlerPE); // Commlocalhandler will free msg
+    comm_backend::issueAm(destNode, msg, messageSize, comm_backend::MR_NULL,
+                          CommLocalHandler,
+                          AmHandlerPE); // Commlocalhandler will free msg
   }
 }
 
@@ -430,8 +432,8 @@ void CmiSyncNodeSendAndFree(unsigned int destNode, unsigned int size,
   if (CmiMyNode() == destNode) {
     CmiNodeQueue->push(msg);
   } else {
-    comm_backend::sendAm(destNode, msg, size, comm_backend::MR_NULL,
-                         CommLocalHandler, AmHandlerNode);
+    comm_backend::issueAm(destNode, msg, size, comm_backend::MR_NULL,
+                          CommLocalHandler, AmHandlerNode);
   }
 }
 
