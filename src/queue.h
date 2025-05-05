@@ -131,6 +131,7 @@ using ConverseQueue = MPSCQueue<MessageType, AtomicAccessControl<MessageType>>;
 
 template <typename MessageType>
 using ConverseNodeQueue = MPMCQueue<MessageType, AtomicAccessControl<MessageType>>;
+
 #else
 template <typename MessageType>
 using ConverseQueue = MPSCQueue<MessageType, MutexAccessControl<std::queue<MessageType>, MessageType>>;

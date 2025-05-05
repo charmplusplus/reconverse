@@ -223,6 +223,7 @@ void CmiReductionsInit(void) {
   CmiReductionID CmiGetNextReductionID() {
     return getNextID(CpvAccess(_reduction_counter));
   }
+
   
   // treating the id as the index into the reduction table
   // utilized in getCreateReduction and clearReduction to find the reduction
