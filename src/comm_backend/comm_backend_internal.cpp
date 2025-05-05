@@ -40,12 +40,30 @@ AmHandler registerAmHandler(CompHandler handler) {
   return gCommBackend->registerAmHandler(handler);
 }
 
-void sendAm(int rank, void *msg, size_t size, mr_t mr, CompHandler localComp,
-            AmHandler remoteComp) {
+void issueAm(int rank, void *msg, size_t size, mr_t mr, CompHandler localComp,
+             AmHandler remoteComp) {
   if (gCommBackend == nullptr) {
     return;
   }
-  gCommBackend->sendAm(rank, msg, size, mr, localComp, remoteComp);
+  gCommBackend->issueAm(rank, msg, size, mr, localComp, remoteComp);
+}
+
+void issueRget(int rank, void *local_buf, size_t size, mr_t local_mr,
+               uintptr_t remote_buf, rkey_t rkey, CompHandler localComp) {
+  if (gCommBackend == nullptr) {
+    return;
+  }
+  gCommBackend->issueRget(rank, local_buf, size, local_mr, remote_buf, rkey,
+                          localComp);
+}
+
+void issueRput(int rank, void *local_buf, size_t size, mr_t local_mr,
+               uintptr_t remote_buf, rkey_t rkey, CompHandler localComp) {
+  if (gCommBackend == nullptr) {
+    return;
+  }
+  gCommBackend->issueRput(rank, local_buf, size, local_mr, remote_buf, rkey,
+                          localComp);
 }
 
 bool progress(void) {
@@ -67,6 +85,13 @@ mr_t registerMemory(void *addr, size_t size) {
     return nullptr;
   }
   return gCommBackend->registerMemory(addr, size);
+}
+
+rkey_t getRKey(mr_t mr) {
+  if (gCommBackend == nullptr) {
+    return 0;
+  }
+  return gCommBackend->getRKey(mr);
 }
 
 void deregisterMemory(mr_t mr) {
