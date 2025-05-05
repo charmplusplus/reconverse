@@ -10,6 +10,7 @@
  */
 void CsdScheduler() {
   // get pthread level queue
+  printf("scheduler %d: taskq pointer %p", __LINE__, CpvAccess(task_q));
   ConverseQueue<void *> *queue = CmiGetQueue(CmiMyRank());
 
   // get node level queue

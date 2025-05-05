@@ -75,6 +75,7 @@ void converseRunPe(int rank) {
 #ifdef SET_CPU_AFFINITY
   CmiSetCPUAffinity(rank);
 #endif
+  printf("%d: taskqueue pointer: %p\n", __LINE__, CpvAccess(task_q));
 
   Cmi_exitHandler = CmiRegisterHandler(CmiExitHandler);
 
@@ -89,6 +90,8 @@ void converseRunPe(int rank) {
 
   // call initial function and start scheduler
   Cmi_startfn(Cmi_argc, Cmi_argv);
+
+  printf("%d: taskqueue pointer: %p\n", __LINE__, CpvAccess(task_q));
   CsdScheduler();
 
   // cleanup of threads? : destroy each threads task queue and reduction table struct(not the struct itself)
