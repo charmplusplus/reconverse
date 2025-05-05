@@ -50,7 +50,7 @@ typedef __uint128_t CmiUInt16;
 
 #define CpvInitialize(t, v)                                                    \
   do {                                                                         \
-    if (false /* I don't understand */) {                                      \
+    if (CmiMyRank()) {                                      \
       CmiNodeBarrier();                                                        \
     } else {                                                                   \
       CMK_TAG(Cpv_, v) = new t[CmiMyNodeSize()];                               \
