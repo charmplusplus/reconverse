@@ -50,7 +50,7 @@ typedef __uint128_t CmiUInt16;
 
 #define CpvInitialize(t, v)                                                    \
   do {                                                                         \
-    if (CmiMyRank()) {                                      \
+    if (CmiMyRank()) {                                                         \
       CmiNodeBarrier();                                                        \
     } else {                                                                   \
       CMK_TAG(Cpv_, v) = new t[CmiMyNodeSize()];                               \
@@ -63,6 +63,12 @@ typedef __uint128_t CmiUInt16;
 #define CpvAccessOther(v, r) CMK_TAG(Cpv_, v)[r]
 #define CpvExtern(t, v) extern t *CMK_TAG(Cpv_, v)
 #define CpvInitialized(v) (0 != CMK_TAG(Cpv_, v))
+
+#define CMK_THREADLOCAL __thread
+#define CpvCExtern(t, v)                                                       \
+  extern "C" CMK_THREADLOCAL t *CMK_TAG(Cpv_, v);                              \
+  extern "C" int CMK_TAG(Cpv_inited_, v);                                      \
+  extern "C" t **CMK_TAG(Cpv_addr_, v)
 
 #define CsvDeclare(t, v) t v
 #define CsvStaticDeclare(t, v) static t v
@@ -111,11 +117,15 @@ typedef struct Header {
 
 typedef CmiMessageHeader CmiMsgHeaderBasic;
 
+#define CMK_NODE_QUEUE_AVAILABLE CMK_SMP
+
 typedef struct {
   int parent;
   int child_count;
   int *children;
 } CmiSpanningTreeInfo;
+
+extern CmiSpanningTreeInfo *_topoTree;
 
 #define CMK_MULTICAST_GROUP_TYPE                                               \
   struct {                                                                     \
@@ -137,15 +147,26 @@ struct alignas(ALIGN_BYTES) CmiChunkHeader {
   int size;
 
 private:
+#if CMK_SMP
+  std::atomic<int> ref;
+#else
   int ref;
+#endif
 
 public:
   CmiChunkHeader() = default;
   CmiChunkHeader(const CmiChunkHeader &x) : size{x.size}, ref{x.getRef()} {}
+#if CMK_SMP
+  int getRef() const { return ref.load(std::memory_order_acquire); }
+  void setRef(int r) { return ref.store(r, std::memory_order_release); }
+  int incRef() { return ref.fetch_add(1, std::memory_order_release); }
+  int decRef() { return ref.fetch_sub(1, std::memory_order_release); }
+#else
   int getRef() const { return ref; }
   void setRef(int r) { ref = r; }
   int incRef() { return ref++; }
   int decRef() { return ref--; }
+#endif
 };
 
 // threads library
@@ -232,6 +253,10 @@ extern char *CthGetData(CthThread t);
 #define REFFIELDINC(m) ((BLKSTART(m))->incRef())
 #define REFFIELDDEC(m) ((BLKSTART(m))->decRef())
 
+int CmiGetReference(void *blk);
+void CmiReference(void *blk);
+int CmiSize(void *blk);
+
 #define CmiTmpAlloc(size) malloc(size)
 #define CmiTmpFree(ptr) free(ptr)
 
@@ -248,15 +273,20 @@ enum ncpyDeregModes { CMK_BUFFER_DEREG = 4, CMK_BUFFER_NODEREG = 5 };
 typedef void (*CmiHandler)(void *msg);
 typedef void (*CmiHandlerEx)(void *msg, void *userPtr);
 int CmiRegisterHandler(CmiHandler h);
+int CmiRegisterHandlerEx(CmiHandlerEx h, void *userPtr);
 CmiHandler CmiHandlerToFunction(int handlerId);
 int CmiGetInfo(void *msg);
 void CmiSetInfo(void *msg, int infofn);
+void CmiNumberHandler(int n, CmiHandler h);
+void CmiNumberHandlerEx(int n, CmiHandlerEx h, void *userPtr);
 
 // message allocation/memory
 void *CmiAlloc(int size);
 void CmiFree(void *msg);
 #define CmiMemoryUsage() 0
 void CmiMemoryMarkBlock(void *blk);
+extern void
+    *memory_stack_top; // TODO: replace this with actual memory implementation
 
 // state getters
 int CmiMyPe();
@@ -273,19 +303,19 @@ int CmiStopFlag();
 int CmiNodeFirst(int node);
 #define CmiGetFirstPeOnPhysicalNode(i) CmiNodeFirst(i)
 
-//partitions (still needs to implement)
-#define CmiMyPartition()         0
-#define CmiPartitionSize(part)       CmiNumNodes()
-#define CmiMyPartitionSize()         CmiNumNodes()
-#define CmiNumPartitions()       1
-#define CmiNumNodesGlobal()      CmiNumNodes()
-#define CmiMyNodeGlobal()        CmiMyNode()
-#define CmiNumPesGlobal()        CmiNumPes()
-#define CmiMyPeGlobal()          CmiMyPe()
-#define CmiGetPeGlobal(pe,part)         (pe)
-#define CmiGetNodeGlobal(node,part)     (node)
-#define CmiGetPeLocal(pe)               (pe)
-#define CmiGetNodeLocal(node)           (node)
+// partitions (still needs to implement)
+#define CmiMyPartition() 0
+#define CmiPartitionSize(part) CmiNumNodes()
+#define CmiMyPartitionSize() CmiNumNodes()
+#define CmiNumPartitions() 1
+#define CmiNumNodesGlobal() CmiNumNodes()
+#define CmiMyNodeGlobal() CmiMyNode()
+#define CmiNumPesGlobal() CmiNumPes()
+#define CmiMyPeGlobal() CmiMyPe()
+#define CmiGetPeGlobal(pe, part) (pe)
+#define CmiGetNodeGlobal(node, part) (node)
+#define CmiGetPeLocal(pe) (pe)
+#define CmiGetNodeLocal(node) (node)
 
 // handler things
 void CmiSetHandler(void *msg, int handlerId);
@@ -300,6 +330,7 @@ void CmiSyncSend(int destPE, int messageSize, void *msg);
 void CmiSyncSendAndFree(int destPE, int messageSize, void *msg);
 void CmiSyncListSend(int npes, const int *pes, int len, void *msg);
 void CmiSyncListSendAndFree(int npes, const int *pes, int len, void *msg);
+void CmiPushPE(int destPE, void *msg);
 
 void CmiSyncSendFn(int destPE, int messageSize, char *msg);
 void CmiFreeSendFn(int destPE, int messageSize, char *msg);
@@ -338,13 +369,14 @@ void CmiFreeMulticastFn(CmiGroup grp, int size, char *msg);
 // Barrier functions
 void CmiNodeBarrier();
 void CmiNodeAllBarrier();
+#define CmiBarrier() CmiNodeBarrier()
 
-//scheduler
+// scheduler
 void CsdExitScheduler();
 int CsdScheduler(int maxmsgs);
 void CsdEnqueueGeneral(void *Message, int strategy, int priobits, int *prioptr);
 
-void CmiAssignOnce(int* variable, int value);
+void CmiAssignOnce(int *variable, int value);
 
 // Reduction functions
 typedef void *(*CmiReduceMergeFn)(int *, void *, void **, int);
@@ -355,6 +387,7 @@ void CmiResetGlobalNodeReduceSeqID();
 
 // Exit functions
 void CmiExit(int status);
+#define ConverseExit(status) CmiExit(status)
 void CmiAbort(const char *format, ...);
 
 // Utility functions
@@ -485,7 +518,6 @@ typedef struct _CmiObjId {
 #endif
 } CmiObjId;
 
-
 CmiObjId *CthGetThreadID(CthThread th);
 void CthSetThreadID(CthThread th, int a, int b, int c);
 
@@ -497,14 +529,18 @@ typedef void (*CthThreadListener_free)(struct CthThreadListener *l);
 
 struct CthThreadListener {
   CthThreadListener_suspend suspend; // This thread is about to block.
-  CthThreadListener_resume resume; // This thread is about to begin execution after blocking.
+  CthThreadListener_resume
+      resume; // This thread is about to begin execution after blocking.
   CthThreadListener_free free; // This thread is being destroyed.
   void *data; // Pointer to listener-specific data (if needed). Set by listener.
-  CthThread thread; // Pointer to the thread this listener controls. Set by CthAddListener.
-  struct CthThreadListener *next; // The next listener, or NULL at end of chain. Set by CthAddListener, and used only by threads.C.
+  CthThread thread; // Pointer to the thread this listener controls. Set by
+                    // CthAddListener.
+  struct CthThreadListener
+      *next; // The next listener, or NULL at end of chain. Set by
+             // CthAddListener, and used only by threads.C.
 };
 
-void CthAddListener(CthThread th,struct CthThreadListener *l);
+void CthAddListener(CthThread th, struct CthThreadListener *l);
 
 /* Command-Line-Argument handling */
 void CmiArgGroup(const char *parentName, const char *groupName);
@@ -533,16 +569,27 @@ typedef pthread_mutex_t *CmiNodeLock;
 typedef CmiNodeLock CmiImmediateLockType;
 extern int _immediateLock;
 extern int _immediateFlag;
+extern CmiNodeLock _smp_mutex;
+
 #define CmiCreateImmediateLock() (0)
-#define CmiImmediateLock(ignored) { _immediateLock++; }
-#define CmiImmediateUnlock(ignored) { _immediateLock--; }
-#define CmiCheckImmediateLock(ignored) \
-  ((_immediateLock)?((_immediateFlag=1),1):0)
-#define CmiClearImmediateFlag() { _immediateFlag=0; }
-#  define CmiBecomeImmediate(msg) /* empty */
-#  define CmiResetImmediate(msg)  /* empty */
-#  define CmiIsImmediate(msg)   (0)
-#  define CmiImmIsRunning()       (0)
+#define CmiImmediateLock(ignored)                                              \
+  {                                                                            \
+    _immediateLock++;                                                          \
+  }
+#define CmiImmediateUnlock(ignored)                                            \
+  {                                                                            \
+    _immediateLock--;                                                          \
+  }
+#define CmiCheckImmediateLock(ignored)                                         \
+  ((_immediateLock) ? ((_immediateFlag = 1), 1) : 0)
+#define CmiClearImmediateFlag()                                                \
+  {                                                                            \
+    _immediateFlag = 0;                                                        \
+  }
+#define CmiBecomeImmediate(msg) /* empty */
+#define CmiResetImmediate(msg)  /* empty */
+#define CmiIsImmediate(msg) (0)
+#define CmiImmIsRunning() (0)
 
 CmiNodeLock CmiCreateLock();
 void CmiDestroyLock(CmiNodeLock lock);
@@ -614,7 +661,7 @@ void CldEnqueueWithinNode(void *msg, int infofn);
 
 // zerocopy
 
-typedef struct ncpystruct{
+typedef struct ncpystruct {
 
   const void *srcPtr;
   char *srcLayerInfo;
@@ -642,13 +689,25 @@ typedef struct ncpystruct{
   unsigned char opMode;
 
   // Variables used for ack handling
-  unsigned char ackMode; 
+  unsigned char ackMode;
   unsigned char freeMe;
   short int ncpyOpInfoSize;
   int rootNode;
   void *refPtr;
 
-}NcpyOperationInfo;
+} NcpyOperationInfo;
+
+enum ncpyOperationMode {
+  CMK_DIRECT_API = 0,
+  CMK_EM_API = 1,
+  CMK_EM_API_SRC_ACK_INVOKE = 2,
+  CMK_EM_API_DEST_ACK_INVOKE = 3,
+  CMK_EM_API_REVERSE = 4,
+  CMK_BCAST_EM_API = 5,
+  CMK_BCAST_EM_API_REVERSE = 6,
+  CMK_READONLY_BCAST = 7,
+  CMK_ZC_PUP = 8
+};
 
 enum cmiZCMsgType {
   CMK_REG_NO_ZC_MSG = 0,
@@ -661,6 +720,13 @@ enum cmiZCMsgType {
   CMK_ZC_BCAST_RECV_DONE_MSG = 6,
   CMK_ZC_BCAST_RECV_ALL_DONE_MSG = 7,
   CMK_ZC_DEVICE_MSG = 8
+};
+
+enum ncpyAckMode { CMK_SRC_DEST_ACK = 0, CMK_SRC_ACK = 1, CMK_DEST_ACK = 2 };
+
+enum ncpyFreeNcpyOpInfoMode {
+  CMK_FREE_NCPYOPINFO = 0,
+  CMK_DONT_FREE_NCPYOPINFO = 1
 };
 
 #define CMI_ZC_MSGTYPE(msg) ((CmiMsgHeaderBasic *)msg)->zcMsgType
