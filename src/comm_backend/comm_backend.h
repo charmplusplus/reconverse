@@ -6,13 +6,14 @@
 namespace comm_backend {
 
 struct Status {
-  void *msg;
+  void *local_buf;
   size_t size;
 };
 using CompHandler = void (*)(Status status);
 using AmHandler = int;
 using mr_t = void *;
 const mr_t MR_NULL = nullptr;
+using rkey_t = uint64_t;
 
 /**
  * @brief Initialize the communication backend. Not thread-safe.
@@ -35,10 +36,20 @@ int getNumNodes();
  */
 AmHandler registerAmHandler(CompHandler handler);
 /**
- * @brief Send an active message. Thread-safe.
+ * @brief Issue an active message. Thread-safe.
  */
-void sendAm(int rank, void *msg, size_t size, mr_t mr, CompHandler localComp,
-            AmHandler remoteComp);
+void issueAm(int rank, void *local_buf, size_t size, mr_t mr,
+             CompHandler localComp, AmHandler remoteComp);
+/**
+ * @brief Issue a remote get operation. Thread-safe.
+ */
+void issueRget(int rank, void *local_buf, size_t size, mr_t local_mr,
+               uintptr_t remote_buf, rkey_t rkey, CompHandler localComp);
+/**
+ * @brief Issue a remote put operation. Thread-safe.
+ */
+void issueRput(int rank, void *local_buf, size_t size, mr_t local_mr,
+               uintptr_t remote_buf, rkey_t rkey, CompHandler localComp);
 /**
  * @brief Make progress on the communication backend. Thread-safe.
  */
@@ -51,6 +62,10 @@ void barrier(void);
  * @brief Register a memory region
  */
 mr_t registerMemory(void *addr, size_t size);
+/**
+ * @brief Get the remote key for a registered memory region
+ */
+rkey_t getRKey(mr_t mr);
 /**
  * @brief Deregister a memory region
  */
