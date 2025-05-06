@@ -112,10 +112,10 @@ void CmiStartThreads() {
   Cmi_queues = new ConverseQueue<void *> *[Cmi_mynodesize];
   CmiHandlerTable = new std::vector<CmiHandlerInfo> *[Cmi_mynodesize];
   CmiNodeQueue = new ConverseNodeQueue<void *>();
+  Cmi_taskqueues = new TaskQueue*[Cmi_mynodesize];
 
   _smp_mutex = CmiCreateLock();
-
-  Cmi_taskqueues = new TaskQueue*[Cmi_mynodesize];
+  
   // make sure the queues are allocated before PEs start sending messages around
   comm_backend::barrier();
 

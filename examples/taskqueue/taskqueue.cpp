@@ -2,7 +2,7 @@
 #include <pthread.h>
 #include <stdio.h>
 
-#define K 1600
+#define K 1000
 #define X 10000
 
 CsvDeclare(int, globalCounter);
