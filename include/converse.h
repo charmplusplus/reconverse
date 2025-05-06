@@ -306,6 +306,8 @@ void CmiFreeSendFn(int destPE, int messageSize, char *msg);
 void CmiSyncListSendFn(int npes, const int *pes, int len, char *msg);
 void CmiFreeListSendFn(int npes, const int *pes, int len, char *msg);
 
+void CmiTaskQueueSyncSend(int destPE, int messageSize, void *msg);
+
 // broadcasts
 void CmiSyncBroadcast(int size, void *msg);
 void CmiSyncBroadcastAndFree(int size, void *msg);

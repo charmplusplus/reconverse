@@ -72,8 +72,7 @@ void converseRunPe(int rank) {
   // init state
   CmiInitState(rank);
 
-  // init things like cld module, ccs, etc
-  CldModuleInit(Cmi_argv);
+  
 #ifdef SET_CPU_AFFINITY
   CmiSetCPUAffinity(rank);
 #endif
@@ -82,6 +81,11 @@ void converseRunPe(int rank) {
 
   //initalize collective operations/arrays/handlers/etc
   collectiveInit();
+
+  // init things like cld module, ccs, etc
+  // moved this after Cmi_Exithandler so exithandler will theoretically be 
+  //registered at index 0, so if user forgets to specify handlerid, it will exit 
+  CldModuleInit(Cmi_argv); 
 
   // barrier to ensure all global structs are initialized
   CmiNodeBarrier();
@@ -214,6 +218,7 @@ void CmiInitState(int rank) {
   Cmi_taskqueues[Cmi_myrank] = TaskQueueCreate();
   //printf("task queue created at pointer: %p\n", Cmi_taskqueues[Cmi_myrank]);
   if(CmiMyNodeSize() > 1) { 
+      //fprintf(stderr, "%d: called by pe %d\n", __LINE__, CmiMyPe());
       CcdCallOnConditionKeep(CcdPROCESSOR_BEGIN_IDLE, (CcdCondFn) TaskStealBeginIdle, NULL);
       CcdCallOnConditionKeep(CcdPROCESSOR_STILL_IDLE, (CcdCondFn) TaskStealBeginIdle, NULL);
   }
@@ -266,6 +271,8 @@ void CmiSetInfo(void *msg, int infofn) {
 
 void CmiPushPE(int destPE, int messageSize, void *msg) {
   int rank = CmiRankOf(destPE);
+  // printf("in cmipushpe: myPe: %d, destPe: %d, nodeSize: %d\n", CmiMyPe(), destPE,
+  //       Cmi_mynodesize);
   CmiAssertMsg(
       rank >= 0 && rank < Cmi_mynodesize,
       "CmiPushPE(myPe: %d, destPe: %d, nodeSize: %d): rank out of range",
@@ -309,6 +316,7 @@ void CmiSyncSendAndFree(int destPE, int messageSize, void *msg) {
   }
 
   if (CmiMyNode() == destNode) {
+
     CmiPushPE(destPE, messageSize, msg);
   } else {
     comm_backend::sendAm(destNode, msg, messageSize, comm_backend::MR_NULL,
@@ -907,6 +915,25 @@ int CmiTryLock(CmiNodeLock lock) { return pthread_mutex_trylock(lock); }
 
 
 //Task Queue Functions/Definitions 
+void CmiTaskQueueSyncSend(int destPE, int messageSize, void *msg) {
+  // fprintf(stderr, "task queue sync send called by pe %d and the destPe is %d\n", CmiMyPe(), destPE);
+  char *copymsg = (char *)CmiAlloc(messageSize);
+  std::memcpy(copymsg, msg,
+              messageSize); // optionally avoid memcpy and block instead
+  
+  int destindex = CmiRankOf(destPE);
+  // fprintf(stderr, "destindex: %d\n", destindex);
+  TaskQueue* dest_taskq = (TaskQueue*)(Cmi_taskqueues[destindex]);
+  if (dest_taskq == NULL) {
+      CmiFree(copymsg);
+      return;
+  }
+
+  //fprintf(stderr, "copymsg: %p\n", copymsg);
+  TaskQueuePush(dest_taskq, copymsg);
+}
+
+
 // Function to create a new TaskQueue and initialize its members
 TaskQueue* TaskQueueCreate() {
   TaskQueue* taskqueue = (TaskQueue*)malloc(sizeof(TaskQueue));
@@ -923,9 +950,6 @@ void TaskQueuePush(TaskQueue* queue, void* data) {
    queue->data[queue->tail % TASKQUEUE_SIZE] = data; 
    CmiMemoryWriteFence(); //makes sure the data is fully written before updating the tail pointer
    queue->tail++; 
-   if (queue->tail >= TASKQUEUE_SIZE) {
-       fprintf(stderr, "TaskQueue overflow: possible corruption/overwrite possibility of data\n");
-   }
 }
 
 // Function to pop a task from the TaskQueue. Victims pop from the tail 
@@ -935,7 +959,8 @@ void* TaskQueuePop(TaskQueue* queue) {
    taskq_idx head = queue->head;
    taskq_idx tail = queue->tail; 
    if (tail > head) { // there are more than two tasks in the queue, so it is safe to pop a task from the queue.
-       return queue->data[tail % TASKQUEUE_SIZE];
+      //fprintf(stderr, "%d: taskpop called by pe %d\n", __LINE__, CmiMyPe());
+      return queue->data[tail % TASKQUEUE_SIZE];
    }
 
    if (tail < head) { // The taskqueue is empty and the last task has been stolen by a thief.
@@ -948,6 +973,7 @@ void* TaskQueuePop(TaskQueue* queue) {
    if (!__sync_bool_compare_and_swap(&(queue->head), head, head+1)) { // Check whether the last task has already stolen.
        return NULL;
    }
+   //fprintf(stderr, "%d: taskpop called by pe %d\n", __LINE__, CmiMyPe());
    return queue->data[tail % TASKQUEUE_SIZE];
 }
 
@@ -1000,6 +1026,7 @@ void StealTask() {
   void TaskStealBeginIdle() {
       // can discuss whether we need to add the isHelper csv variable that is in old converse. 
       // not going to add it for now, because it's turned/left on by default in old converse 
+      //fprintf(stderr, "%d: task steal queue idle called: %d\n", __LINE__, CmiMyPe());
       if (CmiMyNodeSize() > 1) {
           StealTask();
       }

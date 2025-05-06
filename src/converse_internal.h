@@ -171,7 +171,7 @@ CmiBroadcastSource CmiGetBcastSource(void *msg);
 
 
 // TASK QUEUE RELATED FUNCTIONS/DEFINITIONS
-#define TASKQUEUE_SIZE 1024
+#define TASKQUEUE_SIZE 2000
 #define CmiMemoryWriteFence() // No-op if not in SMP mode
 
 typedef int taskq_idx;
