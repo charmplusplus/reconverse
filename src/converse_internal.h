@@ -38,7 +38,10 @@ void CmiReduceHandler(void *msg);
 void CmiUndefinedHandler(void *msg);
 
 typedef struct HandlerInfo {
-  CmiHandler hdlr;
+  union{
+    CmiHandler hdlr; // handler function
+    CmiHandlerEx exhdlr; // handler function with user pointer
+  };
   void *userPtr; // does this point to the mesage data itself
 } CmiHandlerInfo;
 

@@ -30,6 +30,8 @@ ConverseNodeQueue<void *> *CmiNodeQueue;
 double Cmi_startTime;
 CmiSpanningTreeInfo *_topoTree = NULL;
 int CharmLibInterOperate;
+void *memory_stack_top;
+CmiNodeLock _smp_mutex;
 
 void CldModuleInit(char **);
 
@@ -111,8 +113,9 @@ void CmiStartThreads() {
   CmiHandlerTable = new std::vector<CmiHandlerInfo> *[Cmi_mynodesize];
   CmiNodeQueue = new ConverseNodeQueue<void *>();
 
+  _smp_mutex = CmiCreateLock();
+
   Cmi_taskqueues = new TaskQueue*[Cmi_mynodesize];
-  //CmiTaskQueueInit();
   // make sure the queues are allocated before PEs start sending messages around
   comm_backend::barrier();
 
@@ -268,6 +271,26 @@ void CmiSetInfo(void *msg, int infofn) {
   header->collectiveMetaInfo = infofn;
 }
 
+void CmiNumberHandler(int n, CmiHandler h){
+  CmiHandlerInfo newEntry;
+  newEntry.hdlr = h;
+  newEntry.userPtr = nullptr;
+  if (n >= CmiGetHandlerTable()->size()) {
+    CmiGetHandlerTable()->resize(n + 1);
+  }
+  CmiGetHandlerTable()->at(n) = newEntry;
+}
+
+void CmiNumberHandlerEx(int n, CmiHandlerEx h, void *userPtr) {
+  CmiHandlerInfo newEntry;
+  newEntry.exhdlr = h;
+  newEntry.userPtr = userPtr;
+  if (n >= CmiGetHandlerTable()->size()) {
+    CmiGetHandlerTable()->resize(n + 1);
+  }
+  CmiGetHandlerTable()->at(n) = newEntry;
+}
+
 void CmiPushPE(int destPE, int messageSize, void *msg) {
   int rank = CmiRankOf(destPE);
   // printf("in cmipushpe: myPe: %d, destPe: %d, nodeSize: %d\n", CmiMyPe(), destPE,
@@ -277,6 +300,12 @@ void CmiPushPE(int destPE, int messageSize, void *msg) {
       "CmiPushPE(myPe: %d, destPe: %d, nodeSize: %d): rank out of range",
       CmiMyPe(), destPE, Cmi_mynodesize);
   Cmi_queues[rank]->push(msg);
+}
+
+void CmiPushPE(int destPE, void *msg) {
+  CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
+  int messageSize = header->messageSize;
+  CmiPushPE(destPE, messageSize, msg);
 }
 
 void *CmiAlloc(int size) {
@@ -293,6 +322,32 @@ void CmiFree(void *msg) {
     return;
   }
   free(msg);
+}
+
+//header ref count methods
+
+static void *CmiAllocFindEnclosing(void *blk) {
+  int refCount = REFFIELD(blk);
+  while (refCount < 0) {
+    blk = (void *)((char*)blk+refCount); /* Jump to enclosing block */
+    refCount = REFFIELD(blk);
+  }
+  return blk;
+}
+
+int CmiGetReference(void *blk)
+{
+  return REFFIELD(CmiAllocFindEnclosing(blk));
+}
+
+void CmiReference(void *blk)
+{
+  REFFIELDINC(CmiAllocFindEnclosing(blk));
+}
+
+int CmiSize(void *blk)
+{
+  return SIZEFIELD(blk);
 }
 
 void CmiMemoryMarkBlock(void *blk) {}
@@ -345,6 +400,17 @@ int CmiRegisterHandler(CmiHandler h) {
   std::vector<CmiHandlerInfo> *handlerVector = CmiGetHandlerTable();
 
   handlerVector->push_back({h, nullptr});
+  return handlerVector->size() - 1;
+}
+
+int CmiRegisterHandlerEx(CmiHandlerEx h, void *userPtr) {
+  // add handler to vector
+  std::vector<CmiHandlerInfo> *handlerVector = CmiGetHandlerTable();
+
+  CmiHandlerInfo newEntry;
+  newEntry.exhdlr = h;
+  newEntry.userPtr = userPtr;
+  handlerVector->push_back(newEntry);
   return handlerVector->size() - 1;
 }
 
