@@ -35,6 +35,7 @@ void CmiNodeBcastHandler(void *msg);
 void CmiExitHandler(void *msg);
 void CmiGroupHandler(void *msg);
 void CmiReduceHandler(void *msg);
+void CmiUndefinedHandler(void *msg);
 
 typedef struct HandlerInfo {
   CmiHandler hdlr;
@@ -172,7 +173,12 @@ CmiBroadcastSource CmiGetBcastSource(void *msg);
 
 // TASK QUEUE RELATED FUNCTIONS/DEFINITIONS
 #define TASKQUEUE_SIZE 2000
+
+#ifdef CMK_SMP
+#define CmiMemoryWriteFence() __sync_synchronize() // Memory fence for SMP mode
+#else
 #define CmiMemoryWriteFence() // No-op if not in SMP mode
+#endif
 
 typedef int taskq_idx;
 

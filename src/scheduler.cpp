@@ -42,7 +42,6 @@ void CsdScheduler() {
       }
     } else if (taskQueue && (msg = TaskQueuePop(taskQueue))) { //taskqueue pop handles all possible queue cases arleady so we only need to check if it exists or not
       assert(msg != NULL);
-      //fprintf(stderr, "%d: taskqueue popped message: %p\n", CmiMyPe(), msg);
       //process event 
       CmiHandleMessage(msg);
       

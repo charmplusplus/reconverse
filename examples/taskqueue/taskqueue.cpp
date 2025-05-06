@@ -59,10 +59,7 @@ CmiStartFn mymain(int argc, char **argv) {
             newmsg->data[0] = i; 
             newmsg->header.messageSize = sizeof(Message);
             newmsg->header.handlerId = handlerID;
-            //fprintf(stderr, "before: PE %d: sending message with data: %p\n", CmiMyRank(), newmsg);
             CmiTaskQueueSyncSend(CmiMyRank(), sizeof(Message), newmsg);
-            //CmiSyncSendAndFree(CmiMyPe(), sizeof(Message), newmsg);
-            //fprintf(stderr, "after: PE %d: sending message with data: %p\n", CmiMyRank(), newmsg);
         }
     }
     return 0;

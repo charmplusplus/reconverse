@@ -45,6 +45,7 @@ thread_local double idle_time;
 
 // Special operation handlers (TODO: should these be special values instead like
 // the exit handler)
+int Cmi_undefinedHandler; 
 int Cmi_exitHandler;
 
 // TODO: padding for all these thread_locals and cmistates?
@@ -76,7 +77,7 @@ void converseRunPe(int rank) {
 #ifdef SET_CPU_AFFINITY
   CmiSetCPUAffinity(rank);
 #endif
-
+  Cmi_undefinedHandler = CmiRegisterHandler(CmiUndefinedHandler); //should be at index 0 which is what gets called if user doesnt define a handlerid in their message 
   Cmi_exitHandler = CmiRegisterHandler(CmiExitHandler);
 
   //initalize collective operations/arrays/handlers/etc
@@ -216,9 +217,7 @@ void CmiInitState(int rank) {
 
   //task queue stuff
   Cmi_taskqueues[Cmi_myrank] = TaskQueueCreate();
-  //printf("task queue created at pointer: %p\n", Cmi_taskqueues[Cmi_myrank]);
   if(CmiMyNodeSize() > 1) { 
-      //fprintf(stderr, "%d: called by pe %d\n", __LINE__, CmiMyPe());
       CcdCallOnConditionKeep(CcdPROCESSOR_BEGIN_IDLE, (CcdCondFn) TaskStealBeginIdle, NULL);
       CcdCallOnConditionKeep(CcdPROCESSOR_STILL_IDLE, (CcdCondFn) TaskStealBeginIdle, NULL);
   }
@@ -376,6 +375,14 @@ void CmiExitHandler(void *msg) {
   if (status == 1)
     abort();
 
+  CsdExitScheduler();
+}
+
+// this will only stop the program on pe1, so it will exit the program if its +pe 1 and hang if it is +pe > 1
+void CmiUndefinedHandler(void* msg) {
+  (void)msg;
+
+  CmiPrintf("Possible undefined handler called. Please check to see if you've populated the handlerId field of your message.\n");
   CsdExitScheduler();
 }
 
@@ -916,20 +923,17 @@ int CmiTryLock(CmiNodeLock lock) { return pthread_mutex_trylock(lock); }
 
 //Task Queue Functions/Definitions 
 void CmiTaskQueueSyncSend(int destPE, int messageSize, void *msg) {
-  // fprintf(stderr, "task queue sync send called by pe %d and the destPe is %d\n", CmiMyPe(), destPE);
   char *copymsg = (char *)CmiAlloc(messageSize);
   std::memcpy(copymsg, msg,
               messageSize); // optionally avoid memcpy and block instead
   
   int destindex = CmiRankOf(destPE);
-  // fprintf(stderr, "destindex: %d\n", destindex);
   TaskQueue* dest_taskq = (TaskQueue*)(Cmi_taskqueues[destindex]);
   if (dest_taskq == NULL) {
       CmiFree(copymsg);
       return;
   }
 
-  //fprintf(stderr, "copymsg: %p\n", copymsg);
   TaskQueuePush(dest_taskq, copymsg);
 }
 
@@ -959,7 +963,6 @@ void* TaskQueuePop(TaskQueue* queue) {
    taskq_idx head = queue->head;
    taskq_idx tail = queue->tail; 
    if (tail > head) { // there are more than two tasks in the queue, so it is safe to pop a task from the queue.
-      //fprintf(stderr, "%d: taskpop called by pe %d\n", __LINE__, CmiMyPe());
       return queue->data[tail % TASKQUEUE_SIZE];
    }
 
@@ -973,7 +976,6 @@ void* TaskQueuePop(TaskQueue* queue) {
    if (!__sync_bool_compare_and_swap(&(queue->head), head, head+1)) { // Check whether the last task has already stolen.
        return NULL;
    }
-   //fprintf(stderr, "%d: taskpop called by pe %d\n", __LINE__, CmiMyPe());
    return queue->data[tail % TASKQUEUE_SIZE];
 }
 
@@ -1026,7 +1028,6 @@ void StealTask() {
   void TaskStealBeginIdle() {
       // can discuss whether we need to add the isHelper csv variable that is in old converse. 
       // not going to add it for now, because it's turned/left on by default in old converse 
-      //fprintf(stderr, "%d: task steal queue idle called: %d\n", __LINE__, CmiMyPe());
       if (CmiMyNodeSize() > 1) {
           StealTask();
       }
