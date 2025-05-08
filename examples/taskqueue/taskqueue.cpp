@@ -1,12 +1,13 @@
 #include "converse.h"
 #include <pthread.h>
 #include <stdio.h>
+#include <atomic>
 
-#define K 1000
+#define K 500
 #define X 10000
 
-CsvDeclare(int, globalCounter);
-CpvDeclare(int, tasksExecuted);
+thread_local int tasksExecuted = 0;
+static std::atomic<int> globalCounter{K};
 
 int handlerID;
 int print_handlerID;
@@ -17,7 +18,7 @@ struct Message {
 };
 
 void print_results_handler_func(void* vmsg) {
-    printf("PE %d executed %d tasks.\n", CmiMyRank(), CpvAccess(tasksExecuted));
+    printf("PE %d executed %d tasks.\n", CmiMyRank(), tasksExecuted);
     CmiNodeBarrier();
     if (CmiMyRank() == 0) {
         CmiExit(0);
@@ -33,9 +34,11 @@ void handler_func(void *vmsg) {
     CmiWallTimer();
   }
 
-  CpvAccess(tasksExecuted)++; 
-  CsvAccess(globalCounter) = CsvAccess(globalCounter) - 1;
-  if (CsvAccess(globalCounter) == 0) {
+  tasksExecuted++; 
+
+  int prev = globalCounter.fetch_sub(1, std::memory_order_acq_rel);
+  CmiPrintf("Current globalCounter: %d\n", prev - 1);
+  if (prev == 1) {
     Message* msg = new Message; 
     msg->header.handlerId = print_handlerID; 
     msg->header.messageSize = sizeof(Message);
@@ -44,16 +47,11 @@ void handler_func(void *vmsg) {
   }
 }
 
-CmiStartFn mymain(int argc, char **argv) {
-    CpvInitialize(int, tasksExecuted);
-    CpvAccess(tasksExecuted) = 0; 
-
+CmiStartFn mymain(int argc, char **argv) { 
     handlerID = CmiRegisterHandler(handler_func);
     print_handlerID = CmiRegisterHandler(print_results_handler_func);
 
     if (CmiMyPe() == 0) {
-        CsvInitialize(int, globalCounter);
-        CsvAccess(globalCounter) = K;
         for (int i = 0; i < K; i++) {
             Message* newmsg = new Message; 
             newmsg->data[0] = i; 

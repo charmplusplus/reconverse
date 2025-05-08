@@ -194,7 +194,7 @@ CmiBroadcastSource CmiGetBcastSource(void *msg);
  * (by specifying the exponent), so there is no chance of someone changing it to a non power of 2, 
  * and then changing the modulo operator to a bitmas
  */
-#define TASKQUEUE_SIZE 2000
+#define TASKQUEUE_SIZE 2048 // in old converse it is 1024
 
 #ifdef CMK_SMP
 #define CmiMemoryWriteFence() __sync_synchronize() // Memory fence for SMP mode

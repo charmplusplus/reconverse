@@ -1017,6 +1017,16 @@ TaskQueue* TaskQueueCreate() {
 
 // Function to push a task onto the TaskQueue
 void TaskQueuePush(TaskQueue* queue, void* data) {
+   // compute estimated size 
+   //probably not thread safe, so that's why its estimated size?
+   taskq_idx head = queue->head; 
+   taskq_idx tail = queue->tail; 
+   size_t estimated_size = std::abs(tail - head);
+   if (estimated_size > TASKQUEUE_SIZE - (2 * CmiMyNodeSize())) {
+    CmiPrintf("tail: %lu, head: %lu\n", tail, head);
+    CmiAbort("TaskQueuePush: TaskQueue is approaching full. Estimated size: %lu, threshold: %lu \n", estimated_size, TASKQUEUE_SIZE - (2 * CmiMyNodeSize()));
+   }
+
    queue->data[queue->tail % TASKQUEUE_SIZE] = data; 
    CmiMemoryWriteFence(); //makes sure the data is fully written before updating the tail pointer
    queue->tail++; 
