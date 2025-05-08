@@ -993,20 +993,20 @@ void CmiSyncTaskQSend(int destPE, int messageSize, void *msg) {
   std::memcpy(copymsg, msg,
               messageSize); // optionally avoid memcpy and block instead
   
-  int destindex = CmiRankOf(destPE);
-  TaskQueue* dest_taskq = (TaskQueue*)(Cmi_taskqueues[destindex]);
-  if (dest_taskq == NULL) {
-      CmiFree(copymsg);
-      return;
-  }
-
-  TaskQueuePush(dest_taskq, copymsg);
+  CmiSyncTaskQSendAndFree(destPE, messageSize, copymsg);
 }
 
 void CmiSyncTaskQSendAndFree(int destPE, int messageSize, void *msg) {
+  int destindex = CmiRankOf(destPE);
+  TaskQueue* dest_taskq = (TaskQueue*)(Cmi_taskqueues[destindex]);
+  if (dest_taskq == NULL) {
+      CmiFree(msg);
+      return;
+  }
+
+  TaskQueuePush(dest_taskq, msg);
   return;
 }
-
 
 // Function to create a new TaskQueue and initialize its members
 TaskQueue* TaskQueueCreate() {

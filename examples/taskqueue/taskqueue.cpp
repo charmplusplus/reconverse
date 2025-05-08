@@ -37,7 +37,7 @@ void handler_func(void *vmsg) {
   tasksExecuted++; 
 
   int prev = globalCounter.fetch_sub(1, std::memory_order_acq_rel);
-  CmiPrintf("Current globalCounter: %d\n", prev - 1);
+  //CmiPrintf("Current globalCounter: %d\n", prev - 1);
   if (prev == 1) {
     Message* msg = new Message; 
     msg->header.handlerId = print_handlerID; 
@@ -57,7 +57,7 @@ CmiStartFn mymain(int argc, char **argv) {
             newmsg->data[0] = i; 
             newmsg->header.messageSize = sizeof(Message);
             newmsg->header.handlerId = handlerID;
-            CmiSyncTaskQSend(CmiMyRank(), sizeof(Message), newmsg);
+            CmiSyncTaskQSendAndFree(CmiMyRank(), sizeof(Message), newmsg);
         }
     }
     return 0;
