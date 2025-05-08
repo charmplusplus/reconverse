@@ -79,7 +79,7 @@ void converseRunPe(int rank) {
 #ifdef SET_CPU_AFFINITY
   CmiSetCPUAffinity(rank);
 #endif
-  Cmi_undefinedHandler = CmiRegisterHandler(CmiUndefinedHandler); //should be at index 0 which is what gets called if user doesnt define a handlerid in their message 
+  //Cmi_undefinedHandler = CmiRegisterHandler(CmiUndefinedHandler); //should be at index 0 which is what gets called if user doesnt define a handlerid in their message 
   Cmi_exitHandler = CmiRegisterHandler(CmiExitHandler);
 
   //initalize collective operations/arrays/handlers/etc
