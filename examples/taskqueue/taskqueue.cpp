@@ -57,7 +57,7 @@ CmiStartFn mymain(int argc, char **argv) {
             newmsg->data[0] = i; 
             newmsg->header.messageSize = sizeof(Message);
             newmsg->header.handlerId = handlerID;
-            CmiTaskQueueSyncSend(CmiMyRank(), sizeof(Message), newmsg);
+            CmiSyncTaskQSend(CmiMyRank(), sizeof(Message), newmsg);
         }
     }
     return 0;

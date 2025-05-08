@@ -79,7 +79,7 @@ void converseRunPe(int rank) {
 #ifdef SET_CPU_AFFINITY
   CmiSetCPUAffinity(rank);
 #endif
-  //Cmi_undefinedHandler = CmiRegisterHandler(CmiUndefinedHandler); //should be at index 0 which is what gets called if user doesnt define a handlerid in their message 
+  Cmi_undefinedHandler = CmiRegisterHandler(CmiUndefinedHandler); //should be at index 0 which is what gets called if user doesnt define a handlerid in their message 
   Cmi_exitHandler = CmiRegisterHandler(CmiExitHandler);
 
   //initalize collective operations/arrays/handlers/etc
@@ -988,7 +988,7 @@ int CmiTryLock(CmiNodeLock lock) { return pthread_mutex_trylock(lock); }
 
 
 //Task Queue Functions/Definitions 
-void CmiTaskQueueSyncSend(int destPE, int messageSize, void *msg) {
+void CmiSyncTaskQSend(int destPE, int messageSize, void *msg) {
   char *copymsg = (char *)CmiAlloc(messageSize);
   std::memcpy(copymsg, msg,
               messageSize); // optionally avoid memcpy and block instead
@@ -1001,6 +1001,10 @@ void CmiTaskQueueSyncSend(int destPE, int messageSize, void *msg) {
   }
 
   TaskQueuePush(dest_taskq, copymsg);
+}
+
+void CmiSyncTaskQSendAndFree(int destPE, int messageSize, void *msg) {
+  return;
 }
 
 
@@ -1093,10 +1097,11 @@ void StealTask() {
                               // and we are the last PE on our node
         }
     }
-
-    void* msg = TaskQueueSteal((TaskQueue*)(Cmi_taskqueues[random_rank]));
-    if (msg != NULL) {
-        TaskQueuePush((TaskQueue*)(Cmi_taskqueues[Cmi_myrank]), msg);
+    if (Cmi_taskqueues[random_rank] != NULL) {
+      void* msg = TaskQueueSteal((TaskQueue*)(Cmi_taskqueues[random_rank]));
+      if (msg != NULL && Cmi_taskqueues[Cmi_myrank] != NULL) {
+          TaskQueuePush((TaskQueue*)(Cmi_taskqueues[Cmi_myrank]), msg);
+      }
     }
 }
   
