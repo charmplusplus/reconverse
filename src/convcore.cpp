@@ -1080,7 +1080,6 @@ void* TaskQueueSteal(TaskQueue* queue) {
           continue;
       } 
       if (head < 0) {
-        CmiPrintf("corruption detected possibly?");
         return NULL; 
       }
       return queue->data[head % TASKQUEUE_SIZE];
