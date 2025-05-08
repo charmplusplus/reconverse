@@ -1061,29 +1061,34 @@ void* TaskQueuePop(TaskQueue* queue) {
 
 // Function to steal a task from another TaskQueue. Other PEs/Threads steal from the head
 void* TaskQueueSteal(TaskQueue* queue) {
-   taskq_idx head, tail; 
-   while (1) {
-       head = queue->head;
-       tail = queue->tail;
-       if (head >= tail) { 
-           // The queue is empty
-           // or the last element has been stolen by other thieves 
-           // or popped by the victim.
-           return NULL;
-       }
+  if (queue == NULL) {
+    return NULL; 
+  }
 
-       if (!__sync_bool_compare_and_swap(&(queue->head), head, head+1)) { // Check whether the task this thief is trying to steal is still in the queue and not stolen by the other thieves.
-           continue;
-       } 
-       return queue->data[head % TASKQUEUE_SIZE];
-   }
+  taskq_idx head, tail; 
+  while (1) {
+      head = queue->head;
+      tail = queue->tail;
+      if (head >= tail) { 
+          // The queue is empty
+          // or the last element has been stolen by other thieves 
+          // or popped by the victim.
+          return NULL;
+      }
+
+      if (!__sync_bool_compare_and_swap(&(queue->head), head, head+1)) { // Check whether the task this thief is trying to steal is still in the queue and not stolen by the other thieves.
+          continue;
+      } 
+      return queue->data[head % TASKQUEUE_SIZE];
+  }
 }
 
 // Function to destroy the TaskQueue and free its memory
 void TaskQueueDestroy(TaskQueue* queue) {
-   if (queue != NULL) {
-       free(queue);
-   }
+  if (queue != NULL) {
+      free(queue);
+      queue = NULL; 
+  }
 }
 
 void StealTask() {
