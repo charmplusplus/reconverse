@@ -18,7 +18,6 @@ void CsdScheduler() {
 
   //get task level queue 
   TaskQueue* taskQueue = (TaskQueue*)(Cmi_taskqueues[CmiMyRank()]);
-  //printf("scheduler %d: taskq pointer %p", __LINE__, taskQueue);
 
   void* msg = NULL;
 
@@ -104,6 +103,10 @@ void CsdSchedulePoll() {
   // get node level queue
   ConverseNodeQueue<void *> *nodeQueue = CmiGetNodeQueue();
 
+  TaskQueue* taskQueue = (TaskQueue*)(Cmi_taskqueues[CmiMyRank()]);
+
+  void* msg = NULL; 
+
   while(1){
 
     CcdCallBacks();
@@ -114,7 +117,7 @@ void CsdSchedulePoll() {
     if (!nodeQueue->empty()) {
       auto result = nodeQueue->pop();
       if (result) {
-        void *msg = result.value();
+        msg = result.value();
         // process event
         CmiHandleMessage(msg);
 
@@ -126,10 +129,23 @@ void CsdSchedulePoll() {
       }
     }
 
+    else if (taskQueue && (msg = TaskQueuePop(taskQueue))) { //taskqueue pop handles all possible queue cases arleady so we only need to check if msg exists or not
+      assert(msg != NULL);
+      //process event 
+      CmiHandleMessage(msg);
+      
+      // release idle if necessary 
+      if (CmiGetIdle()) {
+        CmiSetIdle(false);
+        CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
+      }
+
+    }
+
     // poll thread queue
     else if (!queue->empty()) {
       // get next event (guaranteed to be there because only single consumer)
-      void *msg = queue->pop().value();
+      msg = queue->pop().value();
 
       // process event
       CmiHandleMessage(msg);
