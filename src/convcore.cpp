@@ -1079,6 +1079,10 @@ void* TaskQueueSteal(TaskQueue* queue) {
       if (!__sync_bool_compare_and_swap(&(queue->head), head, head+1)) { // Check whether the task this thief is trying to steal is still in the queue and not stolen by the other thieves.
           continue;
       } 
+      if (head < 0) {
+        CmiPrintf("corruption detected possibly?");
+        return NULL; 
+      }
       return queue->data[head % TASKQUEUE_SIZE];
   }
 }
