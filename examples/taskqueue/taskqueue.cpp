@@ -3,7 +3,7 @@
 #include <stdio.h>
 #include <atomic>
 
-#define K 500
+#define K 2000 // will tend to abort if your k value is too high (higher than the max task queue size)
 #define X 10000
 
 thread_local int tasksExecuted = 0;
