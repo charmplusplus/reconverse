@@ -4,18 +4,17 @@
 #include "lci.hpp"
 #include "converse_internal.h"
 
-namespace comm_backend
-{
+namespace comm_backend {
 
-class CommBackendLCI1 : public CommBackendBase
-{
- public:
+class CommBackendLCI1 : public CommBackendBase {
+public:
   void init(int *argc, char ***argv) override;
   void exit() override;
   int getMyNodeId() override;
   int getNumNodes() override;
   AmHandler registerAmHandler(CompHandler handler) override;
-  void sendAm(int rank, void* msg, size_t size, mr_t mr, CompHandler localComp, AmHandler remoteComp) override;
+  void sendAm(int rank, void *msg, size_t size, mr_t mr, CompHandler localComp,
+              AmHandler remoteComp) override;
   bool progress(void) override;
   void barrier(void) override;
   mr_t registerMemory(void *addr, size_t size) override;
@@ -26,7 +25,8 @@ class CommBackendLCI1 : public CommBackendBase
   void *alloc_mempool_block(size_t *size, mem_handle_t *mem_hndl, int expand_flag);
   void free_mempool_block(void *ptr, mem_handle_t mem_hndl);
   void init_mempool();
- private:
+
+private:
   LCI_comp_t m_local_comp;
   LCI_comp_t m_remote_comp;
   LCI_endpoint_t m_ep;

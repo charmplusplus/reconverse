@@ -1,6 +1,6 @@
 
 /***************************************************************
-  Converse kNeighbors benchmark
+  Converse self send benchmark
  ****************************************************************/
 
 #include <converse.h>
@@ -8,7 +8,6 @@
 #include <ctime>
 #include <vector>
 
-CpvDeclare(int, k);
 CpvDeclare(int, iter);
 CpvDeclare(int, msgSize);
 
@@ -20,16 +19,14 @@ CpvDeclare(int, exitHandler);
 CpvDeclare(int, completionHandler);
 CpvDeclare(int, initiateHandler);
 CpvDeclare(int, ackMsgHandler);
-CpvDeclare(int, kNeighborMsgHandler);
+CpvDeclare(int, selfSendMsgHandler);
 
 CpvDeclare(int, compCounter);
-
-CpvDeclare(std::vector<int>, neighbors);
 
 CpvStaticDeclare(double, startTime);
 CpvStaticDeclare(double, endTime);
 
-struct kNeighborMsg {
+struct selfSendMsg {
   char core[CmiMsgHeaderSizeBytes];
   int srcPe;
 };
@@ -49,27 +46,23 @@ void initiate() {
     if (CmiMyPe() == 0)
       CmiPrintf("Running iteration %d\n", CpvAccess(iter));
 
-    // Send a message to all my kneighbors
-    int totalSize = sizeof(kNeighborMsg) + CpvAccess(msgSize);
-    kNeighborMsg *msg = (kNeighborMsg *)CmiAlloc(totalSize);
+    // Send a message to myself
+    int totalSize = sizeof(selfSendMsg) + CpvAccess(msgSize);
+    selfSendMsg *msg = (selfSendMsg *)CmiAlloc(totalSize);
     msg->srcPe = CmiMyPe();
-    CmiSetHandler(msg, CpvAccess(kNeighborMsgHandler));
+    CmiSetHandler(msg, CpvAccess(selfSendMsgHandler));
 
-    for (int i = 0; i < CpvAccess(neighbors).size(); i++) {
-      int neighborPe = CpvAccess(neighbors).at(i);
-      CmiSyncSend(neighborPe, totalSize, msg);
-    }
+    CmiSyncSend(CmiMyPe(), totalSize, msg);
     CmiFree(msg);
   }
 }
 
-// Called on all PEs (from the kNeighbor PEs)
 void handleCompletion(char *msg) {
   CpvAccess(compCounter)++;
 
   if (CpvAccess(compCounter) == CmiNumPes()) {
     CpvAccess(endTime) = CmiWallTimer();
-    CmiPrintf("[%d][%d][%d] kNeighbors all iterations completed, time taken is "
+    CmiPrintf("[%d][%d][%d] self send all iterations completed, time taken is "
               "%lf s\n",
               CmiMyPe(), CmiMyNode(), CmiMyRank(),
               (CpvAccess(endTime) - CpvAccess(startTime)));
@@ -80,22 +73,17 @@ void handleCompletion(char *msg) {
   }
 }
 
-// Called on all PEs to initiate kNeighbors
 void handleInitiate(char *initiateMsg) {
   CmiFree(initiateMsg);
   initiate();
 }
 
-// Called on all PEs to exit
 void handleExit(char *msg) {
   CmiFree(msg);
   CsdExitScheduler();
 }
 
-// Called on all kNeighbor PEs
-void handleNeighborMsg(kNeighborMsg *msg) {
-  // Send a message back to the source pe notifying that the message has been
-  // received
+void handleSelfSend(selfSendMsg *msg) {
   char *ackMsg = (char *)CmiAlloc(CmiMsgHeaderSizeBytes);
   CmiSetHandler(ackMsg, CpvAccess(ackMsgHandler));
   CmiSyncSendAndFree(msg->srcPe, CmiMsgHeaderSizeBytes, ackMsg);
@@ -104,22 +92,11 @@ void handleNeighborMsg(kNeighborMsg *msg) {
 void handleAck(char *msg) {
 
   CmiFree(msg);
-  CpvAccess(acksReported) = CpvAccess(acksReported) + 1;
-
-  if (CpvAccess(acksReported) == CpvAccess(k)) {
-
-    CpvAccess(acksReported) = 0;
-
-    // Iteration complete, start next iteration
-    initiate();
-  }
+  initiate();
 }
 
 // Converse main. Initialize variables and register handlers
 CmiStartFn mymain(int argc, char *argv[]) {
-
-  // k value
-  CpvInitialize(int, k);
 
   // iterations value
   CpvInitialize(int, iter);
@@ -135,9 +112,9 @@ CmiStartFn mymain(int argc, char *argv[]) {
   CpvAccess(completionHandler) =
       CmiRegisterHandler((CmiHandler)handleCompletion);
 
-  CpvInitialize(int, kNeighborMsgHandler);
-  CpvAccess(kNeighborMsgHandler) =
-      CmiRegisterHandler((CmiHandler)handleNeighborMsg);
+  CpvInitialize(int, selfSendMsgHandler);
+  CpvAccess(selfSendMsgHandler) =
+      CmiRegisterHandler((CmiHandler)handleSelfSend);
 
   CpvInitialize(int, ackMsgHandler);
   CpvAccess(ackMsgHandler) = CmiRegisterHandler((CmiHandler)handleAck);
@@ -149,10 +126,10 @@ CmiStartFn mymain(int argc, char *argv[]) {
   CpvInitialize(double, endTime);
 
   // Set runtime cpuaffinity
-  // CmiInitCPUAffinity(argv);
+//   CmiInitCPUAffinity(argv);
 
   // Initialize CPU topology
-  // CmiInitCPUTopology(argv);
+//   CmiInitCPUTopology(argv);
 
   // Wait for all PEs of the node to complete topology init
   CmiNodeAllBarrier();
@@ -164,42 +141,18 @@ CmiStartFn mymain(int argc, char *argv[]) {
     CmiPrintf("argc: %d\n", argc);
   }
 
-  if (argc == 4) {
-
-    CpvAccess(k) = atoi(argv[1]);
-    iterations = atoi(argv[2]);
-    CpvAccess(msgSize) = atoi(argv[3]);
+  if (argc == 3) {
+    iterations = atoi(argv[1]);
+    CpvAccess(msgSize) = atoi(argv[2]);
 
   } else if (argc == 1) {
-
-    CpvAccess(k) = CmiNumPes() / 2;
     iterations = 100;
     CpvAccess(msgSize) = 1000;
 
   } else {
 
     if (CmiMyPe() == 0)
-      CmiAbort("Usage: ./kNeighbors <k> <iter> <msgSize>\n");
-  }
-
-  if (CmiMyPe() == 0) {
-    if (CpvAccess(k) > CmiNumPes())
-      CmiAbort("k cannot be greater than the number of Pes\n");
-  }
-
-  int lowVal, highVal;
-
-  // Determine my neighbor pes
-  if (CpvAccess(k) % 2 ==
-      0) { // choose k/2 left neighbors and k/2 right neighbors
-
-    lowVal = CpvAccess(k) / 2;
-    highVal = CpvAccess(k) / 2;
-
-  } else { // choose k/2 left neighbors and k/2 + 1 right neighbors
-
-    lowVal = CpvAccess(k) / 2;
-    highVal = CpvAccess(k) / 2 + 1;
+      CmiAbort("Usage: ./self_send <iter> <msgSize>\n");
   }
 
   CpvInitialize(int, compCounter);
@@ -208,29 +161,17 @@ CmiStartFn mymain(int argc, char *argv[]) {
   CpvInitialize(int, acksReported);
   CpvAccess(acksReported) = 0;
 
-  CpvInitialize(std::vector<int>, neighbors);
-  for (int i = CmiMyPe() - lowVal; i <= CmiMyPe() + highVal; i++) {
-    if (i == CmiMyPe())
-      continue;
-    if (i < 0)
-      CpvAccess(neighbors).push_back(i + CmiNumPes());
-    else if (i > CmiNumPes() - 1)
-      CpvAccess(neighbors).push_back(i - CmiNumPes());
-    else
-      CpvAccess(neighbors).push_back(i);
-  }
-
   CpvAccess(iter) = 0;
 
   if (CmiMyPe() == 0) {
-    CmiPrintf("Launching kNeighbors with k=%d, iterations=%d, msgSize=%d\n",
-              CpvAccess(k), iterations, CpvAccess(msgSize));
+    CmiPrintf("Launching self_send with iterations=%d, msgSize=%d\n",
+              iterations, CpvAccess(msgSize));
+  }
 
     CpvAccess(startTime) = CmiWallTimer();
     char *initiateMsg = (char *)CmiAlloc(CmiMsgHeaderSizeBytes);
     CmiSetHandler(initiateMsg, CpvAccess(initiateHandler));
     CmiSyncBroadcastAllAndFree(CmiMsgHeaderSizeBytes, initiateMsg);
-  }
   return 0;
 }
 

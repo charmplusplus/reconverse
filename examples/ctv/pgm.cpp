@@ -43,32 +43,23 @@ CpvStaticDeclare(struct cthTestData, data);
 
 void runThread(void *msg) {
   (void)msg;
-  char myId = 'A' + CpvAccess(data).nThreadStart++;
-  threadStackChecker sc(myId);
-  printf("Created thread %c at %p, mype = %d\n", myId, &myId, CmiMyPe());
+  int myId = CpvAccess(data).nThreadStart++;
 
-  for (int iter = 0; iter < NITER; iter++) {
-    VERBOSE(char buf[NITER + 2];
-            for (int i = 0; i < NITER + 1; i++) buf[i] = ' '; buf[0] = myId;
-            buf[1 + iter] = '0' + (iter % 10); buf[NITER + 1] = 0;
-            printf("%s\n", buf);)
-    if ((iter % 2) == 0) { // (rand()%NITER)<5) {
-      CthYield();
-    }
-    if (iter == (NITER / 4) && myId < ('A' + NSPAWN - 1)) {
-      CthThread nTh = CthCreate((CthVoidFn)runThread, 0, 160000);
-      CthAwaken(nTh);
-      CthYield();
-    }
-    sc.advance(myId, iter);
-  }
+  // simple ctv test
+  CtvDeclare(int, cthTest);
+  CtvInitialize(int, cthTest);
 
-  const int myFinish = ++(CpvAccess(data).nThreadFinish);
-  if (myFinish == NSPAWN) { // We're the last thread: leave
+  if (!CtvInitialized(cthTest))
+    CmiAbort("CtvInitialize failed");
+
+  CtvAccess(cthTest) = myId;
+
+  if (CtvAccess(cthTest) != myId)
+    CmiAbort("CtvAccess failed");
+
+  if (myId == NSPAWN - 1) { // We're the last thread: leave
     double timeElapsed = CmiWallTimer() - CpvAccess(data).timeStart;
-    printf(" %d threads ran successfully (%.3f us per context switch)\n",
-           myFinish, 1.0e6 * timeElapsed / (NITER * NSPAWN));
-    CsdExitScheduler();
+    CmiExit(0);
   }
 }
 
@@ -79,8 +70,8 @@ void test_init(int argc, char **argv) {
   CpvInitialize(struct cthTestData, data);
 
   /* skip communication thread */
-  if (CmiMyRank() != CmiMyNodeSize()) {
-    CpvAccess(data).timeStart = CmiWallTimer();
+  CpvAccess(data).timeStart = CmiWallTimer();
+  for (int i = 0; i < NSPAWN; i++) {
     CthThread yielder = CthCreate((CthVoidFn)runThread, 0, 160000);
     CthAwaken(yielder);
   }

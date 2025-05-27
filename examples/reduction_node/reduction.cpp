@@ -27,7 +27,7 @@ void *mergeByAddition(int *size, void *data, void **remote, int n) {
 
 void ping_handler(void *vmsg) {
   // compute expected result:
-  int n = CmiNumPes() - 1;
+  int n = CmiNumNodes() - 1;
   int expected = n * (n + 1) / 2;
 
   if (expected != ((Message *)vmsg)->myReductionData) {
@@ -46,9 +46,10 @@ CmiStartFn mymain(int argc, char **argv) {
   Message *msg = new Message;
   msg->header.handlerId = handlerId;
   msg->header.messageSize = sizeof(Message);
-  msg->myReductionData = CmiMyPe();
+  msg->myReductionData = CmiMyNode();
 
-  CmiReduce(msg, sizeof(Message), mergeByAddition);
+  if (CmiMyPe() % CmiMyNodeSize() == 0)
+    CmiNodeReduce(msg, sizeof(Message), mergeByAddition);
   return 0;
 }
 

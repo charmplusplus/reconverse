@@ -41,6 +41,9 @@ set(RECONVERSE_AUTOFETCH_LCI1_TAG
     CACHE STRING "The tag to fetch for LCIv1") # master branch as of 2025-04-17
 
 option(SPANTREE "whether to enable spanning tree collectives" ON)
+option(CMK_SMP "whether to enable SMP support" ON)
+
+option(RECONVERSE_ATOMIC_QUEUE "whether to use atomic queue" ON)
 
 set(RECONVERSE_TEST_LAUNCHER
     "mpirun"
@@ -105,6 +108,13 @@ if(ENABLE_CPU_AFFINITY)
   else()
     message(FATAL_ERROR "Could not find libhwloc")
   endif()
+endif()
+
+if(RECONVERSE_ATOMIC_QUEUE)
+  add_definitions(-DATOMIC_QUEUE_ENABLED)
+  message(STATUS "Atomic queue enabled")
+else()
+  message(STATUS "Atomic queue disabled")
 endif()
 
 add_library(reconverse $<TARGET_OBJECTS:boost-context>)

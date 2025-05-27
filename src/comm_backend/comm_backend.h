@@ -12,12 +12,12 @@
 namespace comm_backend {
 
 struct Status {
-    void* msg;
-    size_t size;
+  void *msg;
+  size_t size;
 };
 using CompHandler = void (*)(Status status);
 using AmHandler = int;
-using mr_t = void*;
+using mr_t = void *;
 const mr_t MR_NULL = nullptr;
 
 /**
@@ -43,7 +43,8 @@ AmHandler registerAmHandler(CompHandler handler);
 /**
  * @brief Send an active message. Thread-safe.
  */
-void sendAm(int rank, void *msg, size_t size, mr_t mr, CompHandler localComp, AmHandler remoteComp);
+void sendAm(int rank, void *msg, size_t size, mr_t mr, CompHandler localComp,
+            AmHandler remoteComp);
 /**
  * @brief Make progress on the communication backend. Thread-safe.
  */

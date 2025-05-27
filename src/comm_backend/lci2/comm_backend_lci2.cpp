@@ -132,9 +132,11 @@ void CommBackendLCI2::init(int *argc, char ***argv) {
   m_remote_comp = lci::alloc_handler(remote_callback);
   m_rcomp = lci::register_rcomp(m_remote_comp);
   lci::set_allocator(&m_allocator);
+  lci::barrier();
 }
 
 void CommBackendLCI2::exit() {
+  lci::barrier();
   lci::free_comp(&m_local_comp);
   lci::free_comp(&m_remote_comp);
   lci::g_runtime_fina();
