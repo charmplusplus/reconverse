@@ -7,7 +7,7 @@
 #include <cstdlib>
 #include <cstdio>
 #include <pthread.h>
-#include "comm_backend/comm_backend.h"
+//#include "comm_backend/comm_backend.h"
 
 using CmiInt1 = std::int8_t;
 using CmiInt2 = std::int16_t;
@@ -131,12 +131,13 @@ static CmiStartFn Cmi_startfn;
 
 struct alignas(ALIGN_BYTES) CmiChunkHeader {
     int size;
+    void* mr;
   private:
     int ref;
   public:
-    CmiChunkHeader() = default;
+    CmiChunkHeader() : mr(nullptr) {};
     CmiChunkHeader(const CmiChunkHeader & x)
-      : size{x.size}, ref{x.getRef()} { }
+      : size{x.size}, mr{x.mr}, ref{x.ref} { }
     int getRef() const { return ref; }
     void setRef(int r) { ref = r; }
     int incRef() { return ref++; }
@@ -146,6 +147,7 @@ struct alignas(ALIGN_BYTES) CmiChunkHeader {
   /* Given a user chunk m, extract the enclosing chunk header fields: */
   #define BLKSTART(m) ((CmiChunkHeader *) (((intptr_t)m) - sizeof(CmiChunkHeader)))
   #define SIZEFIELD(m) ((BLKSTART(m))->size)
+  #define MRFIELD(m) ((BLKSTART(m))->mr)
   #define REFFIELD(m) ((BLKSTART(m))->getRef())
   #define REFFIELDSET(m, r) ((BLKSTART(m))->setRef(r))
   #define REFFIELDINC(m) ((BLKSTART(m))->incRef())
@@ -650,21 +652,3 @@ enum cmiZCMsgType {
           }\
         } while(0)
 #endif
-
-#define ALIGN_BYTES           16U
-
-struct alignas(ALIGN_BYTES) CmiChunkHeader {
-    int size;
-    void* mr;
-  public:
-    CmiChunkHeader() : mr(comm_backend::MR_NULL) {};
-    CmiChunkHeader(const CmiChunkHeader & x)
-      : size{x.size}, mr{x.mr} { }
-  };
-
-#define BLKSTART(m) ((CmiChunkHeader *) (((intptr_t)m) - sizeof(CmiChunkHeader)))
-#define SIZEFIELD(m) ((BLKSTART(m))->size)
-#define MRFIELD(m) ((BLKSTART(m))->mr)
-
-#define CMIALIGN(x,n)       (size_t)((~((size_t)n-1))&((x)+(n-1)))
-#define CMIPADDING(x, n) (CMIALIGN((x), (n)) - (size_t)(x))

@@ -1,4 +1,9 @@
-#include "converse_internal.h"
+#include "mempool.h"
+#include "lci.hpp"
+#include "comm_backend/lci2/comm_backend_lci2.h"
+#include <vector>
+
+CpvDeclare(mempool_type*, mempool);
 
 namespace comm_backend {
 
@@ -19,15 +24,15 @@ void remote_callback(lci::status_t status) {
   handler({buffer.base, buffer.size});
 }
 
-void *CommBackendLCI2::alloc_mempool_block(size_t *size, mem_handle_t *mem_hndl, int expand_flag)
+void *alloc_mempool_block(size_t *size, void **mem_hndl, int expand_flag)
 {
-    size_t alloc_size =  expand_flag ? mempool_expand_size : mempool_init_size;
+    size_t alloc_size =  expand_flag ? mempool_options.mempool_expand_size : mempool_options.mempool_init_size;
     if (*size < alloc_size) *size = alloc_size;
-    if (*size > mempool_max_size)
+    if (*size > mempool_options.mempool_max_size)
     {
         CmiPrintf("Error: there is attempt to allocate memory block with size %ld which is greater than the maximum mempool allowed %lld.\n"
                   "Please increase the maximum mempool size by using +ofi-mempool-max-size\n",
-                  *size, context.mempool_max_size);
+                  *size, mempool_options.mempool_max_size);
         CmiAbort("alloc_mempool_block");
     }
 
@@ -37,33 +42,27 @@ void *CommBackendLCI2::alloc_mempool_block(size_t *size, mem_handle_t *mem_hndl,
     return pool;
 }
 
-void CommBackendLCI2::free_mempool_block(void *ptr, mem_handle_t mem_hndl)
+void free_mempool_block(void *ptr, void* mem_hndl)
 {
     free(ptr);
     deregisterMemory((mr_t) mem_hndl);
 }
 
-void CommBackendLCI2::init_mempool()
+void init_mempool()
 {
   CpvInitialize(mempool_type*, mempool);
 
-  mempool_init_size = MEMPOOL_INIT_SIZE_MB_DEFAULT * ONE_MB;
-  mempool_expand_size = MEMPOOL_EXPAND_SIZE_MB_DEFAULT * ONE_MB;
-  mempool_max_size = MEMPOOL_MAX_SIZE_MB_DEFAULT * ONE_MB;
-  mempool_lb_size = MEMPOOL_LB_DEFAULT;
-  mempool_rb_size = MEMPOOL_RB_DEFAULT;
-
-  CpvAccess(mempool) = mempool_init(mempool_init_size,
+  CpvAccess(mempool) = mempool_init(mempool_options.mempool_init_size,
     alloc_mempool_block,
     free_mempool_block,
-    mempool_max_size);
+    mempool_options.mempool_max_size);
 }
 
-void* CommBackendLCI2::malloc(int nbytes, int header)
+void* CommBackendLCI2::malloc(int n_bytes, int header)
 {
   char *ptr = NULL;
   size_t size = n_bytes + header;
-  if (size <= mempool_lb_size)
+  if (size <= mempool_options.mempool_lb_size)
   {
     CmiAbort("OFI pool lower boundary violation");
   }
@@ -100,7 +99,8 @@ void* CommBackendLCI2::malloc(int nbytes, int header)
         mptr->block_head.mptr=(struct mempool_type*) res;
         mptr->block.block_ptr=(struct block_header *)res;
         ptr=(char *) res + (sizeof(out_of_pool_header));
-  }
+      }
+    }
 
   if (!ptr) CmiAbort("LrtsAlloc");
   return ptr;
@@ -111,7 +111,7 @@ void CommBackendLCI2::free(void *msg)
   int headersize = sizeof(CmiChunkHeader);
   char *aligned_addr = (char *)msg + headersize - ALIGNBUF;
   uint size = SIZEFIELD((char*)msg+headersize);
-  if (size <= context.mempool_lb_size)
+  if (size <= mempool_options.mempool_lb_size)
     CmiAbort("LCI: mempool lower boundary violation");
   else
     size = ALIGN64(size);

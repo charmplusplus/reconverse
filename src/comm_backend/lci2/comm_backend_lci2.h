@@ -2,6 +2,7 @@
 #define RECONVERSE_COMM_BACKEND_LCI2_H
 
 #include "lci.hpp"
+#include "comm_backend_internal.h"
 
 namespace comm_backend {
 // A breach of the comm_backend interface with direct access to CmiAlloc/CmiFree
@@ -10,6 +11,22 @@ struct AllocatorLCI2 : lci::allocator_base_t {
   void *allocate(size_t size) override { return CmiAlloc(size); }
 
   void deallocate(void *ptr) override { CmiFree(ptr); }
+};
+
+struct MempoolOptions {
+  size_t mempool_init_size;
+  size_t mempool_expand_size;
+  long long mempool_max_size;
+  size_t mempool_lb_size;
+  size_t mempool_rb_size;
+};
+
+static MempoolOptions mempool_options = {
+  MEMPOOL_INIT_SIZE_MB_DEFAULT * ONE_MB,
+  MEMPOOL_EXPAND_SIZE_MB_DEFAULT * ONE_MB,
+  MEMPOOL_MAX_SIZE_MB_DEFAULT * ONE_MB,
+  MEMPOOL_LB_DEFAULT,
+  MEMPOOL_RB_DEFAULT
 };
 
 class CommBackendLCI2 : public CommBackendBase {
@@ -26,11 +43,8 @@ public:
   mr_t registerMemory(void *addr, size_t size) override;
   void deregisterMemory(mr_t mr) override;
 
-  void *malloc(int nbytes, int header);
+  void *malloc(int n_bytes, int header);
   void free(void* msg);
-  void *alloc_mempool_block(size_t *size, mem_handle_t *mem_hndl, int expand_flag);
-  void free_mempool_block(void *ptr, mem_handle_t mem_hndl);
-  void init_mempool();
 private:
   lci::comp_t m_local_comp;
   lci::comp_t m_remote_comp;
