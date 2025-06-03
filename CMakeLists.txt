@@ -21,7 +21,7 @@ include(AddReconverse)
 # General Options
 # ##############################################################################
 
-option(BUILD_SHARED_LIBS "Build using shared libraries" ON)
+option(BUILD_SHARED_LIBS "Build using shared libraries" OFF)
 
 option(RECONVERSE_BUILD_EXAMPLES "Build examples" ON)
 option(RECONVERSE_BUILD_TESTS "Build tests" ON)
