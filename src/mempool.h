@@ -126,12 +126,12 @@ void mempool_free_thread(void* ptr_free);
 }
 #endif
 
-#define ALIGNBUF (sizeof(mempool_header)+sizeof(CmiChunkHeader))
-#define   GetMempoolBlockPtr(x)   MEMPOOL_GetBlockPtr(MEMPOOL_GetMempoolHeader(x,ALIGNBUF))
-#define   GetMempoolPtr(x)        MEMPOOL_GetMempoolPtr(MEMPOOL_GetMempoolHeader(x,ALIGNBUF))
+#define ALIGNBUF 128 //sizeof(mempool_header)
+#define   GetMempoolBlockPtr(x)   MEMPOOL_GetBlockPtr(MEMPOOL_GetMempoolHeader(x,sizeof(mempool_header)))
+#define   GetMempoolPtr(x)        MEMPOOL_GetMempoolPtr(MEMPOOL_GetMempoolHeader(x,sizeof(mempool_header)))
 
-#define   GetMempoolsize(x)       MEMPOOL_GetSize(MEMPOOL_GetMempoolHeader(x,ALIGNBUF))
-#define   GetMemHndl(x)           MEMPOOL_GetMemHndl(MEMPOOL_GetMempoolHeader(x,ALIGNBUF))
+#define   GetMempoolsize(x)       MEMPOOL_GetSize(MEMPOOL_GetMempoolHeader(x,sizeof(mempool_header)))
+#define   GetMemHndl(x)           MEMPOOL_GetMemHndl(MEMPOOL_GetMempoolHeader(x,sizeof(mempool_header)))
 
 #define   GetMemHndlFromBlockHeader(x) MEMPOOL_GetBlockMemHndl(x)
 #define   GetSizeFromBlockHeader(x)    MEMPOOL_GetBlockSize(x)

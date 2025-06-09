@@ -13,7 +13,7 @@ Generalized by Gengbin Zheng  10/5/2011
 Heavily modified by Nikhil Jain 11/28/2011
 */
 
-#define MEMPOOL_DEBUG 0
+#define MEMPOOL_DEBUG 1
 #if MEMPOOL_DEBUG
 #define DEBUG_PRINT(...) CmiPrintf(__VA_ARGS__)
 #else

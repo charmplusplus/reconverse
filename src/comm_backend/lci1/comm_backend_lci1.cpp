@@ -106,8 +106,8 @@ void* CommBackendLCI1::malloc(int nbytes, int header)
         // note CmiAlloc wrapper will move the pointer past the header
         if (res) ptr = res;
 
-        size_t offset1=GetMemOffsetFromBase(ptr+header);
-        mr_t* extractedmr  = (mr_t *) GetMemHndl(ptr+header);
+        size_t offset1=GetMemOffsetFromBase(ptr);
+        mr_t* extractedmr  = (mr_t *) GetMemHndl(ptr);
       }
     else
       {
@@ -138,14 +138,14 @@ void free(void *msg)
 {
   int headersize = sizeof(CmiChunkHeader);
   char *aligned_addr = (char *)msg + headersize - ALIGNBUF;
-  uint size = SIZEFIELD((char*)msg+headersize);
+  uint size = SIZEFIELD((char*)msg);
   if (size <= context.mempool_lb_size)
     CmiAbort("LCI: mempool lower boundary violation");
   else
     size = ALIGN64(size);
   if(size>=BIG_MSG)
   {
-    deregisterMemory( (mr_t)GetMemHndl( (char* )msg  +sizeof(CmiChunkHeader)));
+    deregisterMemory( (mr_t)GetMemHndl( (char* )msg ));
     free((char *)msg-sizeof(out_of_pool_header));
   }
   else
@@ -155,7 +155,6 @@ void free(void *msg)
 }
 
 void CommBackendLCI1::init(int *argc, char ***argv) {
-  init_mempool();
   int initialized = false;
   LCI_SAFECALL(LCI_initialized(&initialized));
   if (!initialized)

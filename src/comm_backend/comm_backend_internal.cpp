@@ -21,6 +21,13 @@ void init(int *argc, char ***argv) {
   gNumNodes = gCommBackend->getNumNodes();
 }
 
+void init_mempool() {
+  if (gCommBackend == nullptr) {
+    return;
+  }
+  gCommBackend->init_mempool();
+}
+
 void exit() {
   if (gCommBackend) {
     gCommBackend->exit();

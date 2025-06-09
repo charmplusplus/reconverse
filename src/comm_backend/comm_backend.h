@@ -3,7 +3,7 @@
 
 #include <cstddef>
 
-#define MEMPOOL_INIT_SIZE_MB_DEFAULT   64
+#define MEMPOOL_INIT_SIZE_MB_DEFAULT   32
 #define MEMPOOL_EXPAND_SIZE_MB_DEFAULT 64
 #define MEMPOOL_MAX_SIZE_MB_DEFAULT    512
 #define MEMPOOL_LB_DEFAULT             0
@@ -27,6 +27,9 @@ void init(int *argc, char ***argv);
 /**
  * @brief Finalize the communication backend. Not thread-safe.
  */
+
+void init_mempool();
+
 void exit();
 /**
  * @brief Get the node ID of the current process. Thread-safe.

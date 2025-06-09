@@ -84,6 +84,7 @@ void converseRunPe(int rank) {
   // Cmi_multicastHandler = CmiRegisterHandler(CmiMulticastHandler);
 
   // barrier to ensure all global structs are initialized
+  comm_backend::init_mempool();
   CmiNodeBarrier();
 
   CthInit(NULL);
@@ -289,9 +290,11 @@ void *CmiAlloc(int size) {
     CmiPrintf("CmiAlloc: size <= 0\n");
     return nullptr;
   }
+  CmiPrintf("Size = %zu\n", size);
   void* res = comm_backend::malloc(size, sizeof(CmiChunkHeader));
     ((CmiChunkHeader*)res)->size = size;
-    return res + sizeof(CmiChunkHeader);
+  CmiPrintf("Allocated size = %i, ptr = %p\n", size, res + sizeof(CmiChunkHeader));
+  return res + sizeof(CmiChunkHeader);
 }
 
 void CmiFree(void *msg) {

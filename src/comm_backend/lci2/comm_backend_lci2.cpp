@@ -38,6 +38,7 @@ void *alloc_mempool_block(size_t *size, void **mem_hndl, int expand_flag)
 
     void *pool;
     posix_memalign(&pool,ALIGNBUF,*size);
+    printf("LCI2: Allocated mempool block of size %zu, %zu at %p\n", *size, ALIGNBUF, pool);
     registerMemory(pool, *size);
     return pool;
 }
@@ -48,7 +49,7 @@ void free_mempool_block(void *ptr, void* mem_hndl)
     deregisterMemory((mr_t) mem_hndl);
 }
 
-void init_mempool()
+void CommBackendLCI2::init_mempool()
 {
   CpvInitialize(mempool_type*, mempool);
 
@@ -77,11 +78,12 @@ void* CommBackendLCI2::malloc(int n_bytes, int header)
         // note CmiAlloc wrapper will move the pointer past the header
         if (res) ptr = res;
 
-        size_t offset1=GetMemOffsetFromBase(ptr+header);
-        mr_t* extractedmr  = (mr_t *) GetMemHndl(ptr+header);
+        size_t offset1=GetMemOffsetFromBase(ptr);
+        mr_t* extractedmr  = (mr_t *) GetMemHndl(ptr);
       }
     else
       {
+        CmiPrintf("Allocating out of pool\n");
         n_bytes = size+ sizeof(out_of_pool_header);
         n_bytes = ALIGN64(n_bytes);
         char *res;
@@ -109,20 +111,21 @@ void* CommBackendLCI2::malloc(int n_bytes, int header)
 void CommBackendLCI2::free(void *msg)
 {
   int headersize = sizeof(CmiChunkHeader);
-  char *aligned_addr = (char *)msg + headersize - ALIGNBUF;
-  uint size = SIZEFIELD((char*)msg+headersize);
+  char *aligned_addr = (char *)msg - sizeof(mempool_header);
+  uint size = SIZEFIELD((char*)msg);
+  printf("LCI2: Freeing message %p of size %u\n", msg, size);
   if (size <= mempool_options.mempool_lb_size)
     CmiAbort("LCI: mempool lower boundary violation");
   else
     size = ALIGN64(size);
   if(size>=BIG_MSG)
   {
-    deregisterMemory( (mr_t)GetMemHndl( (char* )msg  +sizeof(CmiChunkHeader)));
+    deregisterMemory( (mr_t)GetMemHndl( (char* )msg ));
     free((char *)msg-sizeof(out_of_pool_header));
   }
   else
   {
-    mempool_free_thread(msg);
+    mempool_free_thread(msg - headersize);
   }
 }
 
