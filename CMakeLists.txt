@@ -30,20 +30,8 @@ option(RECONVERSE_TRY_ENABLE_COMM_LCI2 "whether to enable the LCIv2 backend" ON)
 option(RECONVERSE_AUTOFETCH_LCI2
         "whether to autofetch LCIv2 if LCI2 cannot be found" OFF)
 set(RECONVERSE_AUTOFETCH_LCI2_TAG
-<<<<<<< Updated upstream
     "948165225fa07eeb17a6e6e053117add7c04a3ee"
     CACHE STRING "The tag to fetch for LCIv2") # master branch as of 2025-06-10
-=======
-    "ec6af44c2819a75209893f93966e946a8c8d1970"
-    CACHE STRING "The tag to fetch for LCIv2") # master branch as of 2025-04-17
-
-option(RECONVERSE_TRY_ENABLE_COMM_LCI1 "whether to enable the LCIv1 backend" OFF)
-option(RECONVERSE_AUTOFETCH_LCI1
-       "whether to autofetch LCIv1 if LCI1 cannot be found" OFF)
-set(RECONVERSE_AUTOFETCH_LCI1_TAG
-    "ad1c43e5ff28bb2cfc8a300615f4d502b7bce31f"
-    CACHE STRING "The tag to fetch for LCIv1") # master branch as of 2025-04-17
->>>>>>> Stashed changes
 
 option(SPANTREE "whether to enable spanning tree collectives" ON)
 option(CMK_SMP "whether to enable SMP support" ON)

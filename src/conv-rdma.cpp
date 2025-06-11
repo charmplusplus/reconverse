@@ -4,6 +4,7 @@
 #include "conv-rdma.h"
 #include "converse.h"
 #include <algorithm>
+#include <cstring>
 #include <vector>
 
 bool useCMAForZC;

@@ -44,7 +44,7 @@ void startWarmUp() {
 }
 
 // the pingpong has finished, record message time
-CmiHandler ringFinished(char *msg) {
+void ringFinished(char *msg) {
   CpvAccess(cycleNum) = 0;
   CpvAccess(warmUp) = true;
   if (CmiMyPe() == 1) {
@@ -107,7 +107,7 @@ void incomingHandlerFunc(void *msg) {
   }
 }
 
-CmiHandler node1StartFunc(char *msg) {
+void node1StartFunc(char *msg) {
   ringFinished(NULL);
   char *content = (char *)(CmiAlloc(CpvAccess(minMsgSize)));
   CpvAccess(buff) = CmiNcpyBuffer(content, CpvAccess(minMsgSize));
