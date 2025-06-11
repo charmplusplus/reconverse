@@ -88,17 +88,20 @@ CmiHandler exitHandlerFunc(char *msg) {
 }
 
 void incomingHandlerFunc(void *msg) {
+  // fprintf(stderr, "incomingHandlerFunc called on PE %d\n", CmiMyPe());
   NcpyOperationInfo info = *((NcpyOperationInfo *)(msg));
   if (CpvAccess(warmUp) && CmiMyPe() == info.srcPe) {
     CpvAccess(cycleNum) += 1;
     CpvAccess(warmUp) = false;
     CpvAccess(send) = *((CmiNcpyBuffer *)(info.srcAck));
     CpvAccess(buff).rdmaGet(CpvAccess(send), 0, NULL, NULL);
+    // fprintf(stderr, "issue rdma get (size %d) on PE %d, cycle %d\n", CpvAccess(msgSize), CmiMyPe(), CpvAccess(cycleNum));
   } else {
     if (CmiMyPe() == info.srcPe) {
       CpvAccess(cycleNum) += 1;
       if (CmiMyPe() != 1 || CpvAccess(cycleNum) != CpvAccess(nCycles)) {
         CpvAccess(buff).rdmaGet(CpvAccess(send), 0, NULL, NULL);
+        // fprintf(stderr, "issue rdma get (size %d) on PE %d, cycle %d\n", CpvAccess(msgSize), CmiMyPe(), CpvAccess(cycleNum));
       }
     } else if (CmiMyPe() == 0 && CpvAccess(cycleNum) == CpvAccess(nCycles)) {
       char *startOperationMsg = (char *)CmiAlloc(CmiMsgHeaderSizeBytes);
@@ -117,6 +120,7 @@ void node1StartFunc(char *msg) {
   CpvAccess(startTime) = CmiWallTimer();
   CpvAccess(buff).rdmaGet(buffer, sizeof(CmiNcpyBuffer),
                           (char *)(&CpvAccess(buff)), NULL);
+  // fprintf(stderr, "issue rdma get (size %d) on PE %d, cycle %d\n", CpvAccess(msgSize), CmiMyPe(), CpvAccess(cycleNum));
 }
 
 // Converse handler for beginning operation
@@ -205,6 +209,12 @@ CmiStartFn mymain(int argc, char *argv[]) {
   }
 
   CpvAccess(msgSize) = CpvAccess(minMsgSize) + CmiMsgHeaderSizeBytes;
+  if (CmiMyPe() == 1) {
+    // Hack for now, as PE 1 will call ringFinished at the very beginning.
+    CpvAccess(msgSize) =
+        (CpvAccess(msgSize) - CmiMsgHeaderSizeBytes) / CpvAccess(factor) +
+        CmiMsgHeaderSizeBytes;
+  }
 
   CmiSetDirectNcpyAckHandler(incomingHandlerFunc);
 
