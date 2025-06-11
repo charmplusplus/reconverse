@@ -9,8 +9,6 @@ int gMyNodeID = 0;
 void init(int *argc, char ***argv) {
 #ifdef RECONVERSE_ENABLE_COMM_LCI2
   gCommBackend = new CommBackendLCI2();
-#elif defined(RECONVERSE_ENABLE_COMM_LCI1)
-  gCommBackend = new CommBackendLCI1();
 #endif
   if (gCommBackend == nullptr) {
     return;
@@ -40,12 +38,30 @@ AmHandler registerAmHandler(CompHandler handler) {
   return gCommBackend->registerAmHandler(handler);
 }
 
-void sendAm(int rank, void *msg, size_t size, mr_t mr, CompHandler localComp,
-            AmHandler remoteComp) {
+void issueAm(int rank, void *msg, size_t size, mr_t mr, CompHandler localComp,
+             AmHandler remoteComp) {
   if (gCommBackend == nullptr) {
     return;
   }
-  gCommBackend->sendAm(rank, msg, size, mr, localComp, remoteComp);
+  gCommBackend->issueAm(rank, msg, size, mr, localComp, remoteComp);
+}
+
+void issueRget(int rank, void *local_buf, size_t size, mr_t local_mr,
+               uintptr_t remote_disp, void *rmr, CompHandler localComp) {
+  if (gCommBackend == nullptr) {
+    return;
+  }
+  gCommBackend->issueRget(rank, local_buf, size, local_mr, remote_disp, rmr,
+                          localComp);
+}
+
+void issueRput(int rank, void *local_buf, size_t size, mr_t local_mr,
+               uintptr_t remote_disp, void *rmr, CompHandler localComp) {
+  if (gCommBackend == nullptr) {
+    return;
+  }
+  gCommBackend->issueRput(rank, local_buf, size, local_mr, remote_disp, rmr,
+                          localComp);
 }
 
 bool progress(void) {
@@ -67,6 +83,13 @@ mr_t registerMemory(void *addr, size_t size) {
     return nullptr;
   }
   return gCommBackend->registerMemory(addr, size);
+}
+
+size_t getRMR(mr_t mr, void *addr, size_t size) {
+  if (gCommBackend == nullptr) {
+    return 0;
+  }
+  return gCommBackend->getRMR(mr, addr, size);
 }
 
 void deregisterMemory(mr_t mr) {

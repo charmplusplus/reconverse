@@ -6,7 +6,7 @@
 namespace comm_backend {
 
 struct Status {
-  void *msg;
+  void *local_buf;
   size_t size;
 };
 using CompHandler = void (*)(Status status);
@@ -35,10 +35,20 @@ int getNumNodes();
  */
 AmHandler registerAmHandler(CompHandler handler);
 /**
- * @brief Send an active message. Thread-safe.
+ * @brief Issue an active message. Thread-safe.
  */
-void sendAm(int rank, void *msg, size_t size, mr_t mr, CompHandler localComp,
-            AmHandler remoteComp);
+void issueAm(int rank, void *local_buf, size_t size, mr_t mr,
+             CompHandler localComp, AmHandler remoteComp);
+/**
+ * @brief Issue a remote get operation. Thread-safe.
+ */
+void issueRget(int rank, void *local_buf, size_t size, mr_t local_mr,
+               uintptr_t remote_disp, void *rmr, CompHandler localComp);
+/**
+ * @brief Issue a remote put operation. Thread-safe.
+ */
+void issueRput(int rank, void *local_buf, size_t size, mr_t local_mr,
+               uintptr_t remote_disp, void *rmr, CompHandler localComp);
 /**
  * @brief Make progress on the communication backend. Thread-safe.
  */
@@ -51,6 +61,15 @@ void barrier(void);
  * @brief Register a memory region
  */
 mr_t registerMemory(void *addr, size_t size);
+/**
+ * @brief Serialize (the remote handle of) the memory region into memory buffer
+ * @param mr Memory region to serialize
+ * @param addr Address to write the serialized data
+ * @param size Maximum size of the buffer
+ * @return The number of bytes written to the buffer, or will be written to the
+ * buffer if the size is not enough
+ */
+size_t getRMR(mr_t mr, void *addr, size_t size);
 /**
  * @brief Deregister a memory region
  */
