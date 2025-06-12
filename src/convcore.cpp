@@ -60,20 +60,11 @@ void CommLocalHandler(comm_backend::Status status) {
 
 void CommRemoteHandlerPE(comm_backend::Status status) {
   CmiMessageHeader *header = (CmiMessageHeader *)status.local_buf;
-  if (CmiStopFlag()) {
-    CmiFree(status.local_buf);
-    return;
-  }
   int destPE = header->destPE;
   CmiPushPE(destPE, status.size, status.local_buf);
 }
 
 void CommRemoteHandlerNode(comm_backend::Status status) {
-  if (CmiStopFlag()) {
-    // CmiPrintf("WARNING: CmiNodeQueue is null, cannot handle message\n");
-    CmiFree(status.local_buf);
-    return;
-  }
   CmiNodeQueue->push(status.local_buf);
 }
 
@@ -129,6 +120,7 @@ void CmiStartThreads() {
 
   // make sure all PEs are done before we free the queues.
   comm_backend::barrier();
+  comm_backend::exit();
   delete[] Cmi_queues;
   delete CmiNodeQueue;
   delete[] CmiHandlerTable;
@@ -186,8 +178,6 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
 
   CmiStartThreads();
   free(Cmi_argv);
-
-  comm_backend::exit();
 }
 
 // CMI STATE

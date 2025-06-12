@@ -29,10 +29,9 @@ void CommBackendLCI2::init(int *argc, char ***argv) {
 }
 
 void CommBackendLCI2::exit() {
-  lci::barrier();
+  lci::g_runtime_fina();
   lci::free_comp(&m_local_comp);
   lci::free_comp(&m_remote_comp);
-  lci::g_runtime_fina();
 }
 
 int CommBackendLCI2::getMyNodeId() { return lci::get_rank_me(); }
