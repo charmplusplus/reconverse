@@ -119,6 +119,7 @@ void CmiStartThreads() {
 
   // make sure all PEs are done before we free the queues.
   comm_backend::barrier();
+  comm_backend::exit();
   delete[] Cmi_queues;
   delete CmiNodeQueue;
   delete[] CmiHandlerTable;
@@ -176,8 +177,6 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
 
   CmiStartThreads();
   free(Cmi_argv);
-
-  comm_backend::exit();
 }
 
 // CMI STATE
