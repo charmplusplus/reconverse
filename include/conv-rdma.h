@@ -2,6 +2,7 @@
 #define _CONV_RDMA_H
 
 #include "cmirdmautils.h"
+#include <functional>
 
 /*********************************** Zerocopy Direct API
  * **********************************/
@@ -282,7 +283,7 @@ public:
 
 /***************************** Other Util *********************************/
 
-// void invokeZCPupHandler(void *ref, int pe);
+void invokeZCPupHandler(void *ref, int pe);
 inline void deregisterBuffer(CmiNcpyBuffer &buffInfo) {
   CmiDeregisterMem(buffInfo.ptr,
                    buffInfo.layerInfo + CmiGetRdmaCommonInfoSize(), buffInfo.pe,
@@ -299,18 +300,18 @@ struct ncpyHandlerMsg {
   void *ref;
 };
 
-// struct zcPupSourceInfo {
-//   CmiNcpyBuffer src;
-//   std::function<void(void *)> deallocate;
-// };
+struct zcPupSourceInfo {
+  CmiNcpyBuffer src;
+  std::function<void(void *)> deallocate;
+};
 
-// void zcPupDone(void *ref);
-// void zcPupHandler(ncpyHandlerMsg *msg);
+void zcPupDone(void *ref);
+void zcPupHandler(ncpyHandlerMsg *msg);
 
-// zcPupSourceInfo *zcPupAddSource(CmiNcpyBuffer &src);
-// zcPupSourceInfo *zcPupAddSource(CmiNcpyBuffer &src,
-//                                 std::function<void(void *)> deallocate);
+zcPupSourceInfo *zcPupAddSource(CmiNcpyBuffer &src);
+zcPupSourceInfo *zcPupAddSource(CmiNcpyBuffer &src,
+                                std::function<void(void *)> deallocate);
 
-// void zcPupGet(CmiNcpyBuffer &src, CmiNcpyBuffer &dest);
+void zcPupGet(CmiNcpyBuffer &src, CmiNcpyBuffer &dest);
 
 #endif

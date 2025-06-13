@@ -33,6 +33,7 @@ CmiSpanningTreeInfo *_topoTree = NULL;
 int CharmLibInterOperate;
 void *memory_stack_top;
 CmiNodeLock _smp_mutex;
+CpvDeclare(std::vector<NcpyOperationInfo *>, newZCPupGets);
 
 void CldModuleInit(char **);
 
@@ -206,6 +207,8 @@ void CmiInitState(int rank) {
 
   // random
   CrnInit();
+  CpvInitialize(std::vector<NcpyOperationInfo *>,
+                newZCPupGets); // Check if this is necessary
   CmiOnesidedDirectInit();
   CcdModuleInit();
 }

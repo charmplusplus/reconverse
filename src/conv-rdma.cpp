@@ -8,8 +8,8 @@
 #include <vector>
 
 bool useCMAForZC;
-// CpvExtern(std::vector<NcpyOperationInfo*>, newZCPupGets);
-// static int zc_pup_handler_idx;
+CpvExtern(std::vector<NcpyOperationInfo *>, newZCPupGets);
+static int zc_pup_handler_idx;
 
 // Methods required to keep the Nocopy Direct API functional on non-LRTS layers
 #if !CMK_USE_LRTS
@@ -123,7 +123,7 @@ void CmiIssueRputCopyBased(NcpyOperationInfo *ncpyOpInfo) {
 void CmiOnesidedDirectInit(void) {
   get_request_handler_idx = CmiRegisterHandler((CmiHandler)getRequestHandler);
   put_data_handler_idx = CmiRegisterHandler((CmiHandler)putDataHandler);
-  // zc_pup_handler_idx = CmiRegisterHandler((CmiHandler)zcPupHandler);
+  zc_pup_handler_idx = CmiRegisterHandler((CmiHandler)zcPupHandler);
 }
 
 /****************************** Zerocopy Direct API
@@ -249,78 +249,69 @@ CmiNcpyMode findTransferModeWithNodes(int srcNode, int destNode) {
     return CmiNcpyMode::RDMA;
 }
 
-// zcPupSourceInfo* zcPupAddSource(CmiNcpyBuffer& src)
-// {
-//   zcPupSourceInfo* srcInfo = new zcPupSourceInfo();
-//   srcInfo->src = src;
-//   srcInfo->deallocate = free;
-//   return srcInfo;
-// }
+zcPupSourceInfo *zcPupAddSource(CmiNcpyBuffer &src) {
+  zcPupSourceInfo *srcInfo = new zcPupSourceInfo();
+  srcInfo->src = src;
+  srcInfo->deallocate = free;
+  return srcInfo;
+}
 
-// zcPupSourceInfo* zcPupAddSource(CmiNcpyBuffer& src,
-// std::function<void(void*)> deallocate)
-// {
-//   zcPupSourceInfo* srcInfo = new zcPupSourceInfo();
-//   srcInfo->src = src;
-//   srcInfo->deallocate = deallocate;
-//   return srcInfo;
-// }
+zcPupSourceInfo *zcPupAddSource(CmiNcpyBuffer &src,
+                                std::function<void(void *)> deallocate) {
+  zcPupSourceInfo *srcInfo = new zcPupSourceInfo();
+  srcInfo->src = src;
+  srcInfo->deallocate = deallocate;
+  return srcInfo;
+}
 
-// void zcPupDone(void* ref)
-// {
-//   zcPupSourceInfo* srcInfo = (zcPupSourceInfo*)(ref);
-// #if CMK_REG_REQUIRED
-//   deregisterBuffer(srcInfo->src);
-// #endif
+void zcPupDone(void *ref) {
+  zcPupSourceInfo *srcInfo = (zcPupSourceInfo *)(ref);
+#if CMK_REG_REQUIRED
+  deregisterBuffer(srcInfo->src);
+#endif
 
-//   srcInfo->deallocate((void*)srcInfo->src.ptr);
-//   delete srcInfo;
-// }
+  srcInfo->deallocate((void *)srcInfo->src.ptr);
+  delete srcInfo;
+}
 
-// void zcPupHandler(ncpyHandlerMsg* msg) { zcPupDone(msg->ref); }
+void zcPupHandler(ncpyHandlerMsg *msg) { zcPupDone(msg->ref); }
 
-// void invokeZCPupHandler(void* ref, int pe)
-// {
-//   ncpyHandlerMsg* msg = (ncpyHandlerMsg*)CmiAlloc(sizeof(ncpyHandlerMsg));
-//   msg->ref = (void*)ref;
+void invokeZCPupHandler(void *ref, int pe) {
+  ncpyHandlerMsg *msg = (ncpyHandlerMsg *)CmiAlloc(sizeof(ncpyHandlerMsg));
+  msg->ref = (void *)ref;
 
-//   CmiSetHandler(msg, zc_pup_handler_idx);
-//   CmiSyncSendAndFree(pe, sizeof(ncpyHandlerMsg), (char*)msg);
-// }
+  CmiSetHandler(msg, zc_pup_handler_idx);
+  CmiSyncSendAndFree(pe, sizeof(ncpyHandlerMsg), (char *)msg);
+}
 
-// void zcPupGet(CmiNcpyBuffer& src, CmiNcpyBuffer& dest)
-// {
-//   CmiNcpyMode transferMode = findTransferMode(src.pe, dest.pe);
-//   if (transferMode == CmiNcpyMode::MEMCPY)
-//   {
-//     CmiAbort("zcPupGet: memcpyGet should not happen\n");
-//   }
-// #if CMK_USE_CMA
-//   else if (transferMode == CmiNcpyMode::CMA)
-//   {
-//     dest.cmaGet(src);
+void zcPupGet(CmiNcpyBuffer &src, CmiNcpyBuffer &dest) {
+  CmiNcpyMode transferMode = findTransferMode(src.pe, dest.pe);
+  if (transferMode == CmiNcpyMode::MEMCPY) {
+    CmiAbort("zcPupGet: memcpyGet should not happen\n");
+  }
+#if CMK_USE_CMA
+  else if (transferMode == CmiNcpyMode::CMA) {
+    dest.cmaGet(src);
 
-// #  if CMK_REG_REQUIRED
-//     // De-register destination buffer
-//     deregisterBuffer(dest);
-// #  endif
+#if CMK_REG_REQUIRED
+    // De-register destination buffer
+    deregisterBuffer(dest);
+#endif
 
-//     if (src.ref)
-//       invokeZCPupHandler((void*)src.ref, src.pe);
-//     else
-//       CmiAbort("zcPupGet - src.ref is NULL\n");
-//   }
-// #endif
-//   else
-//   {
-//     int ackSize = 0;
-//     int rootNode = -1;  // -1 is the rootNode for p2p operations
-//     NcpyOperationInfo* ncpyOpInfo =
-//         dest.createNcpyOpInfo(src, dest, ackSize, NULL, NULL, rootNode,
-//         CMK_ZC_PUP, NULL);
-//     CpvAccess(newZCPupGets).push_back(ncpyOpInfo);
-//   }
-// }
+    if (src.ref)
+      invokeZCPupHandler((void *)src.ref, src.pe);
+    else
+      CmiAbort("zcPupGet - src.ref is NULL\n");
+  }
+#endif
+  else {
+    int ackSize = 0;
+    int rootNode = -1; // -1 is the rootNode for p2p operations
+    NcpyOperationInfo *ncpyOpInfo = dest.createNcpyOpInfo(
+        src, dest, ackSize, NULL, NULL, rootNode, CMK_ZC_PUP, NULL);
+    CpvAccess(newZCPupGets).push_back(ncpyOpInfo);
+  }
+}
 
 #if CMK_USE_LRTS
 #include "machine-rdma.h"
