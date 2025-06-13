@@ -5,6 +5,7 @@
 #include "scheduler.h"
 
 #include <cinttypes>
+#include <conv-rdma.h>
 #include <cstdarg>
 #include <pthread.h>
 #include <stdio.h>
@@ -32,6 +33,7 @@ CmiSpanningTreeInfo *_topoTree = NULL;
 int CharmLibInterOperate;
 void *memory_stack_top;
 CmiNodeLock _smp_mutex;
+CpvDeclare(std::vector<NcpyOperationInfo *>, newZCPupGets);
 
 void CldModuleInit(char **);
 
@@ -205,7 +207,9 @@ void CmiInitState(int rank) {
 
   // random
   CrnInit();
-
+  CpvInitialize(std::vector<NcpyOperationInfo *>,
+                newZCPupGets); // Check if this is necessary
+  CmiOnesidedDirectInit();
   CcdModuleInit();
 }
 
@@ -249,7 +253,7 @@ void CmiSetInfo(void *msg, int infofn) {
   header->collectiveMetaInfo = infofn;
 }
 
-void CmiNumberHandler(int n, CmiHandler h){
+void CmiNumberHandler(int n, CmiHandler h) {
   CmiHandlerInfo newEntry;
   newEntry.hdlr = h;
   newEntry.userPtr = nullptr;
@@ -300,31 +304,22 @@ void CmiFree(void *msg) {
   free(msg);
 }
 
-//header ref count methods
+// header ref count methods
 
 static void *CmiAllocFindEnclosing(void *blk) {
   int refCount = REFFIELD(blk);
   while (refCount < 0) {
-    blk = (void *)((char*)blk+refCount); /* Jump to enclosing block */
+    blk = (void *)((char *)blk + refCount); /* Jump to enclosing block */
     refCount = REFFIELD(blk);
   }
   return blk;
 }
 
-int CmiGetReference(void *blk)
-{
-  return REFFIELD(CmiAllocFindEnclosing(blk));
-}
+int CmiGetReference(void *blk) { return REFFIELD(CmiAllocFindEnclosing(blk)); }
 
-void CmiReference(void *blk)
-{
-  REFFIELDINC(CmiAllocFindEnclosing(blk));
-}
+void CmiReference(void *blk) { REFFIELDINC(CmiAllocFindEnclosing(blk)); }
 
-int CmiSize(void *blk)
-{
-  return SIZEFIELD(blk);
-}
+int CmiSize(void *blk) { return SIZEFIELD(blk); }
 
 void CmiMemoryMarkBlock(void *blk) {}
 
@@ -353,8 +348,6 @@ void CmiSyncSendAndFree(int destPE, int messageSize, void *msg) {
                           AmHandlerPE); // Commlocalhandler will free msg
   }
 }
-
-
 
 // EXIT TOOLS
 
@@ -401,8 +394,10 @@ void CmiNodeAllBarrier() {
   nodeBarrier.wait();
 }
 
-void CmiAssignOnce(int* variable, int value) {
-  if (CmiMyRank() == 0) { *variable = value; }
+void CmiAssignOnce(int *variable, int value) {
+  if (CmiMyRank() == 0) {
+    *variable = value;
+  }
   CmiNodeAllBarrier();
 }
 
@@ -529,9 +524,7 @@ double getCurrentTime() {
 // TODO: implement timer
 double CmiWallTimer() { return getCurrentTime() - Cmi_startTime; }
 
-double CmiStartTimer() {
-  return 0.0;
-}
+double CmiStartTimer() { return 0.0; }
 
 void CmiAbortHelper(const char *source, const char *message,
                     const char *suggestion, int tellDebugger,
