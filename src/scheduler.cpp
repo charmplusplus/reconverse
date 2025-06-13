@@ -4,15 +4,22 @@
 #include "queue.h"
 #include <thread>
 
+
 /**
  * The main scheduler loop for the Charm++ runtime.
  */
 void CsdScheduler() {
+  //printf("my rank: %d\n", CmiMyRank());
   // get pthread level queue
   ConverseQueue<void *> *queue = CmiGetQueue(CmiMyRank());
 
   // get node level queue
   ConverseNodeQueue<void *> *nodeQueue = CmiGetNodeQueue();
+
+  //get task level queue 
+  TaskQueue* taskQueue = (TaskQueue*)(Cmi_taskqueues[CmiMyRank()]);
+
+  void* msg = NULL;
 
   while (CmiStopFlag() == 0) {
 
@@ -22,7 +29,7 @@ void CsdScheduler() {
     if (!nodeQueue->empty()) {
       auto result = nodeQueue->pop();
       if (result) {
-        void *msg = result.value();
+        msg = result.value();
         // process event
         CmiHandleMessage(msg);
 
@@ -32,12 +39,20 @@ void CsdScheduler() {
           CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
         }
       }
-    }
+    } else if (taskQueue && (msg = TaskQueuePop(taskQueue))) { //taskqueue pop handles all possible queue cases arleady so we only need to check if it exists or not
+      assert(msg != NULL);
+      //process event 
+      CmiHandleMessage(msg);
+      
+      // release idle if necessary 
+      if (CmiGetIdle()) {
+        CmiSetIdle(false);
+        CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
+      }
 
-    // poll thread queue
-    else if (!queue->empty()) {
+    } else if (!queue->empty()) {  // poll thread queue
       // get next event (guaranteed to be there because only single consumer)
-      void *msg = queue->pop().value();
+      msg = queue->pop().value();
 
       // process event
       CmiHandleMessage(msg);
@@ -48,7 +63,6 @@ void CsdScheduler() {
         CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
       }
     }
-
     // the processor is idle
     else {
       // if not already idle, set idle and raise condition
@@ -57,6 +71,8 @@ void CsdScheduler() {
         CmiSetIdleTime(CmiWallTimer());
         CcdRaiseCondition(CcdPROCESSOR_BEGIN_IDLE);
       }
+      // at this point the condition should be raised and the pe should be called. 
+
       // if already idle, call still idle and (maybe) long idle
       else {
         CcdRaiseCondition(CcdPROCESSOR_STILL_IDLE);
@@ -64,6 +80,8 @@ void CsdScheduler() {
           CcdRaiseCondition(CcdPROCESSOR_LONG_IDLE);
         }
       }
+      // at this point the condition should be raised and the pe should be called. 
+
       // poll the communication layer
       comm_backend::progress();
     }
@@ -85,6 +103,10 @@ void CsdSchedulePoll() {
   // get node level queue
   ConverseNodeQueue<void *> *nodeQueue = CmiGetNodeQueue();
 
+  TaskQueue* taskQueue = (TaskQueue*)(Cmi_taskqueues[CmiMyRank()]);
+
+  void* msg = NULL; 
+
   while(1){
 
     CcdCallBacks();
@@ -95,7 +117,7 @@ void CsdSchedulePoll() {
     if (!nodeQueue->empty()) {
       auto result = nodeQueue->pop();
       if (result) {
-        void *msg = result.value();
+        msg = result.value();
         // process event
         CmiHandleMessage(msg);
 
@@ -107,10 +129,23 @@ void CsdSchedulePoll() {
       }
     }
 
+    else if (taskQueue && (msg = TaskQueuePop(taskQueue))) { //taskqueue pop handles all possible queue cases arleady so we only need to check if msg exists or not
+      assert(msg != NULL);
+      //process event 
+      CmiHandleMessage(msg);
+      
+      // release idle if necessary 
+      if (CmiGetIdle()) {
+        CmiSetIdle(false);
+        CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
+      }
+
+    }
+
     // poll thread queue
     else if (!queue->empty()) {
       // get next event (guaranteed to be there because only single consumer)
-      void *msg = queue->pop().value();
+      msg = queue->pop().value();
 
       // process event
       CmiHandleMessage(msg);

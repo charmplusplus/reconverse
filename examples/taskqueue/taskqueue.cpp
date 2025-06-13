@@ -1,0 +1,69 @@
+#include "converse.h"
+#include <pthread.h>
+#include <stdio.h>
+#include <atomic>
+
+#define K 2000 // will tend to abort if your k value is too high (higher than the max task queue size)
+#define X 10000
+
+thread_local int tasksExecuted = 0;
+static std::atomic<int> globalCounter{K};
+
+int handlerID;
+int print_handlerID;
+
+struct Message {
+  CmiMessageHeader header;
+  int data[1];
+};
+
+void print_results_handler_func(void* vmsg) {
+    printf("PE %d executed %d tasks.\n", CmiMyRank(), tasksExecuted);
+    CmiNodeBarrier();
+    if (CmiMyRank() == 0) {
+        CmiExit(0);
+    }
+}
+
+void handler_func(void *vmsg) {
+  Message* incoming_msg = (Message*)vmsg;  
+  //printf("PE %d pinged this function with data index: %d.\n", CmiMyRank(), incoming_msg->data[0]);
+  
+  // do dummy work 
+  for (int i = 0; i < X; i++) {
+    CmiWallTimer();
+  }
+
+  tasksExecuted++; 
+
+  int prev = globalCounter.fetch_sub(1, std::memory_order_acq_rel);
+  //CmiPrintf("Current globalCounter: %d\n", prev - 1);
+  if (prev == 1) {
+    Message* msg = new Message; 
+    msg->header.handlerId = print_handlerID; 
+    msg->header.messageSize = sizeof(Message);
+    printf("All tasks have been executed.\n");
+    CmiSyncBroadcastAllAndFree(sizeof(Message), msg);
+  }
+}
+
+CmiStartFn mymain(int argc, char **argv) { 
+    handlerID = CmiRegisterHandler(handler_func);
+    print_handlerID = CmiRegisterHandler(print_results_handler_func);
+
+    if (CmiMyPe() == 0) {
+        for (int i = 0; i < K; i++) {
+            Message* newmsg = new Message; 
+            newmsg->data[0] = i; 
+            newmsg->header.messageSize = sizeof(Message);
+            newmsg->header.handlerId = handlerID;
+            CmiSyncTaskQSendAndFree(CmiMyRank(), sizeof(Message), newmsg);
+        }
+    }
+    return 0;
+}
+
+int main(int argc, char **argv) {
+  ConverseInit(argc, argv, (CmiStartFn)mymain);
+  return 0;
+}
