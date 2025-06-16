@@ -296,6 +296,7 @@ int CmiMyRank();
 int CmiNumPes();
 int CmiNumNodes();
 #define CmiNumPhysicalNodes() CmiNumNodes()
+#define CmiPhysicalNodeID(node) (node)
 int CmiNodeOf(int pe);
 int CmiRankOf(int pe);
 int CmiStopFlag();
