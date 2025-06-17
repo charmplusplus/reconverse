@@ -16,6 +16,7 @@
 // GLOBALS
 int Cmi_argc;
 static char **Cmi_argv;
+char **Cmi_argvcopy;
 int Cmi_npes;   // total number of PE's across the entire system
 int Cmi_nranks; // TODO: this isnt used in old converse, but we need to know how
                 // many PEs are on our node?
@@ -31,6 +32,8 @@ ConverseNodeQueue<void *> *CmiNodeQueue;
 double Cmi_startTime;
 CmiSpanningTreeInfo *_topoTree = NULL;
 int CharmLibInterOperate;
+int _immediateLock = 0;
+std::atomic<int> _cleanUp = 0;
 void *memory_stack_top;
 CmiNodeLock _smp_mutex;
 CpvDeclare(std::vector<NcpyOperationInfo *>, newZCPupGets);
@@ -147,6 +150,7 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
   for (i = 2; i <= argc; i++)
     Cmi_argv[i - 2] = argv[i];
 
+  Cmi_argvcopy = CmiCopyArgs(argv);
   comm_backend::init(&argc, &Cmi_argv);
   Cmi_mynode = comm_backend::getMyNodeId();
   Cmi_numnodes = comm_backend::getNumNodes();
