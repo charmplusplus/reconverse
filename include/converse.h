@@ -656,6 +656,7 @@ void CldEnqueueGroup(CmiGroup grp, void *msg, int infofn);
 // CldEnqueueWithinNode enqueues a message for each PE on the node.
 void CldNodeEnqueue(int node, void *msg, int infofn);
 void CldEnqueueWithinNode(void *msg, int infofn);
+void CldEnqueueGroup(CmiGroup grp, void *msg, int infofn);
 
 #define CmiImmIsRunning() (0)
 #define CMI_MSG_NOKEEP(msg) ((CmiMessageHeader *)msg)->nokeep
