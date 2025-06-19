@@ -37,6 +37,7 @@ std::atomic<int> _cleanUp = 0;
 void *memory_stack_top;
 CmiNodeLock _smp_mutex;
 CpvDeclare(std::vector<NcpyOperationInfo *>, newZCPupGets);
+CpvDeclare(int,interopExitFlag);
 
 void CldModuleInit(char **);
 
@@ -213,6 +214,8 @@ void CmiInitState(int rank) {
   CrnInit();
   CpvInitialize(std::vector<NcpyOperationInfo *>,
                 newZCPupGets); // Check if this is necessary
+  CpvInitialize(int, interopExitFlag);
+  CpvAccess(interopExitFlag) = 0;
   CmiOnesidedDirectInit();
   CcdModuleInit();
 }
@@ -949,3 +952,19 @@ void CmiLock(CmiNodeLock lock) { pthread_mutex_lock(lock); }
 void CmiUnlock(CmiNodeLock lock) { pthread_mutex_unlock(lock); }
 
 int CmiTryLock(CmiNodeLock lock) { return pthread_mutex_trylock(lock); }
+
+//empty function to satisfy charm
+void CommunicationServerThread(int sleepTime) { }
+
+//start and stop interop schedulers
+
+void StartInteropScheduler()
+{
+  CsdScheduler(-1);
+  CmiNodeAllBarrier();
+}
+
+void StopInteropScheduler()
+{
+  CpvAccess(interopExitFlag) = 1;
+}
