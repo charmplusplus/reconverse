@@ -16,6 +16,7 @@
 // GLOBALS
 int Cmi_argc;
 static char **Cmi_argv;
+char **Cmi_argvcopy;
 int Cmi_npes;   // total number of PE's across the entire system
 int Cmi_nranks; // TODO: this isnt used in old converse, but we need to know how
                 // many PEs are on our node?
@@ -31,9 +32,17 @@ ConverseNodeQueue<void *> *CmiNodeQueue;
 double Cmi_startTime;
 CmiSpanningTreeInfo *_topoTree = NULL;
 int CharmLibInterOperate;
+int _immediateLock = 0;
+std::atomic<int> _cleanUp = 0;
 void *memory_stack_top;
 CmiNodeLock _smp_mutex;
 CpvDeclare(std::vector<NcpyOperationInfo *>, newZCPupGets);
+CpvDeclare(int,interopExitFlag);
+std::atomic<int> ckExitComplete {0};
+int quietMode;
+int quietModeRequested;
+int userDrivenMode;
+int _replaySystem = 0;
 
 void CldModuleInit(char **);
 
@@ -147,6 +156,7 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
   for (i = 2; i <= argc; i++)
     Cmi_argv[i - 2] = argv[i];
 
+  Cmi_argvcopy = CmiCopyArgs(argv);
   comm_backend::init(&argc, &Cmi_argv);
   Cmi_mynode = comm_backend::getMyNodeId();
   Cmi_numnodes = comm_backend::getNumNodes();
@@ -209,6 +219,8 @@ void CmiInitState(int rank) {
   CrnInit();
   CpvInitialize(std::vector<NcpyOperationInfo *>,
                 newZCPupGets); // Check if this is necessary
+  CpvInitialize(int, interopExitFlag);
+  CpvAccess(interopExitFlag) = 0;
   CmiOnesidedDirectInit();
   CcdModuleInit();
 }
@@ -945,3 +957,19 @@ void CmiLock(CmiNodeLock lock) { pthread_mutex_lock(lock); }
 void CmiUnlock(CmiNodeLock lock) { pthread_mutex_unlock(lock); }
 
 int CmiTryLock(CmiNodeLock lock) { return pthread_mutex_trylock(lock); }
+
+//empty function to satisfy charm
+void CommunicationServerThread(int sleepTime) { }
+
+//start and stop interop schedulers
+
+void StartInteropScheduler()
+{
+  CsdScheduler(-1);
+  CmiNodeAllBarrier();
+}
+
+void StopInteropScheduler()
+{
+  CpvAccess(interopExitFlag) = 1;
+}
