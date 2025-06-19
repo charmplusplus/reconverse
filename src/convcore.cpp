@@ -38,6 +38,11 @@ void *memory_stack_top;
 CmiNodeLock _smp_mutex;
 CpvDeclare(std::vector<NcpyOperationInfo *>, newZCPupGets);
 CpvDeclare(int,interopExitFlag);
+std::atomic<int> ckExitComplete {0};
+int quietMode;
+int quietModeRequested;
+int userDrivenMode;
+int _replaySystem = 0;
 
 void CldModuleInit(char **);
 
