@@ -6,8 +6,9 @@
 namespace comm_backend {
 
 struct Status {
-  void *local_buf;
+  const void *local_buf;
   size_t size;
+  void *user_context;
 };
 using CompHandler = void (*)(Status status);
 using AmHandler = int;
@@ -37,18 +38,18 @@ AmHandler registerAmHandler(CompHandler handler);
 /**
  * @brief Issue an active message. Thread-safe.
  */
-void issueAm(int rank, void *local_buf, size_t size, mr_t mr,
-             CompHandler localComp, AmHandler remoteComp);
+void issueAm(int rank, const void *local_buf, size_t size, mr_t mr,
+             CompHandler localComp, AmHandler remoteComp, void *user_context);
 /**
  * @brief Issue a remote get operation. Thread-safe.
  */
-void issueRget(int rank, void *local_buf, size_t size, mr_t local_mr,
-               uintptr_t remote_disp, void *rmr, CompHandler localComp);
+void issueRget(int rank, const void *local_buf, size_t size, mr_t local_mr,
+               uintptr_t remote_disp, void *rmr, CompHandler localComp, void *user_context);
 /**
  * @brief Issue a remote put operation. Thread-safe.
  */
-void issueRput(int rank, void *local_buf, size_t size, mr_t local_mr,
-               uintptr_t remote_disp, void *rmr, CompHandler localComp);
+void issueRput(int rank, const void *local_buf, size_t size, mr_t local_mr,
+               uintptr_t remote_disp, void *rmr, CompHandler localComp, void *user_context);
 /**
  * @brief Make progress on the communication backend. Thread-safe.
  */

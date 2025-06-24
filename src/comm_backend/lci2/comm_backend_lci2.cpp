@@ -4,25 +4,31 @@ namespace comm_backend {
 
 std::vector<CompHandler> g_handlers;
 
-void local_callback(lci::status_t status) {
-  auto handler = reinterpret_cast<CompHandler>(status.user_context);
-  void *address;
-  size_t size;
+struct localCallbackArgs {
+  CompHandler handler;
+  void *user_context;
+};
+
+void localCallback(lci::status_t status) {
+  auto args = reinterpret_cast<localCallbackArgs *>(status.user_context);
+  auto handler = args->handler;
+  auto user_context = args->user_context;
+  delete args;
   lci::buffer_t buffer = status.data.get_buffer();
-  handler({buffer.base, buffer.size});
+  handler({buffer.base, buffer.size, user_context});
 }
 
-void remote_callback(lci::status_t status) {
+void remoteCallback(lci::status_t status) {
   auto am_handler = static_cast<AmHandler>(status.tag);
   auto handler = g_handlers[am_handler];
   lci::buffer_t buffer = status.data.get_buffer();
-  handler({buffer.base, buffer.size});
+  handler({buffer.base, buffer.size, nullptr});
 }
 
 void CommBackendLCI2::init(int *argc, char ***argv) {
   lci::g_runtime_init();
-  m_local_comp = lci::alloc_handler(local_callback);
-  m_remote_comp = lci::alloc_handler(remote_callback);
+  m_local_comp = lci::alloc_handler(localCallback);
+  m_remote_comp = lci::alloc_handler(remoteCallback);
   m_rcomp = lci::register_rcomp(m_remote_comp);
   lci::set_allocator(&m_allocator);
   lci::barrier();
@@ -43,51 +49,57 @@ AmHandler CommBackendLCI2::registerAmHandler(CompHandler handler) {
   return g_handlers.size() - 1;
 }
 
-void CommBackendLCI2::issueAm(int rank, void *local_buf, size_t size, mr_t mr,
-                              CompHandler localComp, AmHandler remoteComp) {
+void CommBackendLCI2::issueAm(int rank, const void *local_buf, size_t size, mr_t mr,
+                              CompHandler localComp, AmHandler remoteComp, void *user_context) {
   // we use LCI tag to pass the remoteComp
+  auto args = new localCallbackArgs{localComp, user_context};
   lci::status_t status;
   do {
-    status = lci::post_am_x(rank, local_buf, size, m_local_comp, m_rcomp)
+    status = lci::post_am_x(rank, const_cast<void *>(local_buf), size, m_local_comp, m_rcomp)
                  .mr(mr)
                  .tag(remoteComp)
-                 .user_context(reinterpret_cast<void *>(localComp))();
+                 .user_context(args)();
     lci::progress();
   } while (status.error.is_retry());
   if (status.error.is_done()) {
-    localComp({local_buf, size});
+    localComp({local_buf, size, user_context});
+    delete args;
   }
 }
 
-void CommBackendLCI2::issueRget(int rank, void *local_buf, size_t size,
+void CommBackendLCI2::issueRget(int rank, const void *local_buf, size_t size,
                                 mr_t local_mr, uintptr_t remote_disp, void *rmr,
-                                CompHandler localComp) {
+                                CompHandler localComp, void *user_context) {
+  auto args = new localCallbackArgs{localComp, user_context};
   lci::status_t status;
   do {
-    status = lci::post_get_x(rank, local_buf, size, m_local_comp, remote_disp,
+    status = lci::post_get_x(rank, const_cast<void *>(local_buf), size, m_local_comp, remote_disp,
                              *static_cast<lci::rmr_t *>(rmr))
                  .mr(local_mr)
-                 .user_context(reinterpret_cast<void *>(localComp))();
+                 .user_context(args)();
     lci::progress();
   } while (status.error.is_retry());
   if (status.error.is_done()) {
-    localComp({local_buf, size});
+    localComp({local_buf, size, user_context});
+    delete args;
   }
 }
 
-void CommBackendLCI2::issueRput(int rank, void *local_buf, size_t size,
+void CommBackendLCI2::issueRput(int rank, const void *local_buf, size_t size,
                                 mr_t local_mr, uintptr_t remote_disp, void *rmr,
-                                CompHandler localComp) {
+                                CompHandler localComp, void *user_context) {
+  auto args = new localCallbackArgs{localComp, user_context};
   lci::status_t status;
   do {
-    status = lci::post_put_x(rank, local_buf, size, m_local_comp, remote_disp,
+    status = lci::post_put_x(rank, const_cast<void *>(local_buf), size, m_local_comp, remote_disp,
                              *static_cast<lci::rmr_t *>(rmr))
                  .mr(local_mr)
-                 .user_context(reinterpret_cast<void *>(localComp))();
+                 .user_context(args)();
     lci::progress();
   } while (status.error.is_retry());
   if (status.error.is_done()) {
-    localComp({local_buf, size});
+    localComp({local_buf, size, user_context});
+    delete args;
   }
 }
 
