@@ -20,6 +20,8 @@ CpvDeclare(int, cycleNum);
 CpvDeclare(int, warmUpDoneHandler);
 CpvDeclare(int, exitHandler);
 CpvDeclare(int, node1start);
+CpvDeclare(int, node0start);
+CpvDeclare(int, doNext);
 CpvDeclare(int, startOperationHandler);
 CpvDeclare(int, finishHandler);
 CpvDeclare(CmiNcpyBuffer, buff);
@@ -88,40 +90,52 @@ void ringFinished(char *msg) {
 void incomingHandlerFunc(void *msg) {
   // fprintf(stderr, "incomingHandlerFunc called on PE %d\n", CmiMyPe());
   NcpyOperationInfo info = *((NcpyOperationInfo *)(msg));
-  if (CpvAccess(warmUp) && CmiMyPe() == info.srcPe) {
-    CpvAccess(cycleNum) += 1;
-    CpvAccess(warmUp) = false;
-    CpvAccess(send) = *((CmiNcpyBuffer *)(info.srcAck));
-    CpvAccess(buff).rdmaGet(CpvAccess(send), 0, NULL, NULL);
-    // fprintf(stderr, "issue rdma get (size %d) on PE %d, cycle %d\n",
-    // CpvAccess(msgSize), CmiMyPe(), CpvAccess(cycleNum));
-  } else {
-    if (CmiMyPe() == info.srcPe) {
+  if (CmiMyPe() == info.destPe) {
+    if (CpvAccess(warmUp)) {
+      CpvAccess(warmUp) = false;
+      char *msg =
+          (char *)CmiAlloc(CmiMsgHeaderSizeBytes + sizeof(CmiNcpyBuffer));
+      *((CmiNcpyBuffer *)(msg + CmiMsgHeaderSizeBytes)) = CpvAccess(buff);
+      CmiSetHandler(msg, CpvAccess(node0start));
+      CmiSyncSendAndFree(0, CmiMsgHeaderSizeBytes + sizeof(CmiNcpyBuffer), msg);
+    } else {
       CpvAccess(cycleNum) += 1;
-      if (CmiMyPe() != 1 || CpvAccess(cycleNum) != CpvAccess(nCycles)) {
-        CpvAccess(buff).rdmaGet(CpvAccess(send), 0, NULL, NULL);
-        // fprintf(stderr, "issue rdma get (size %d) on PE %d, cycle %d\n",
-        // CpvAccess(msgSize), CmiMyPe(), CpvAccess(cycleNum));
-      } else {
+      if (CmiMyPe() == 0 && CpvAccess(cycleNum) == CpvAccess(nCycles)) {
         ringFinished(NULL);
+      } else {
+        char *msg = (char *)CmiAlloc(CmiMsgHeaderSizeBytes);
+        CmiSetHandler(msg, CpvAccess(doNext));
+        CmiSyncSendAndFree((CmiMyPe() + 1) % 2,
+                           CmiMsgHeaderSizeBytes + sizeof(CmiNcpyBuffer), msg);
       }
-    } else if (CmiMyPe() == 0 && CpvAccess(cycleNum) == CpvAccess(nCycles)) {
-      char *startOperationMsg = (char *)CmiAlloc(CmiMsgHeaderSizeBytes);
-      ringFinished(NULL);
     }
   }
 }
 
 void node1StartFunc(char *msg) {
   ringFinished(NULL);
+  CpvAccess(warmUp) = true;
   char *content =
       (char *)(CmiAlloc(CpvAccess(msgSize) - CmiMsgHeaderSizeBytes));
   CpvAccess(buff) =
       CmiNcpyBuffer(content, CpvAccess(msgSize) - CmiMsgHeaderSizeBytes);
   CmiNcpyBuffer buffer = *((CmiNcpyBuffer *)(msg + CmiMsgHeaderSizeBytes));
   CpvAccess(send) = buffer;
-  CpvAccess(warmUp) = false;
   CpvAccess(startTime) = CmiWallTimer();
+  CpvAccess(buff).rdmaGet(buffer, 0, NULL, NULL);
+  // fprintf(stderr, "issue rdma get (size %d) on PE %d, cycle %d\n",
+  // CpvAccess(msgSize), CmiMyPe(), CpvAccess(cycleNum));
+}
+
+void doNextFunc(char *msg) {
+  CpvAccess(buff).rdmaGet(CpvAccess(send), sizeof(CmiNcpyBuffer),
+                          (char *)(&CpvAccess(buff)), NULL);
+}
+
+void node0StartFunc(char *msg) {
+  CmiNcpyBuffer buffer = *((CmiNcpyBuffer *)(msg + CmiMsgHeaderSizeBytes));
+  CpvAccess(send) = buffer;
+  CpvAccess(warmUp) = false;
   CpvAccess(buff).rdmaGet(buffer, sizeof(CmiNcpyBuffer),
                           (char *)(&CpvAccess(buff)), NULL);
   // fprintf(stderr, "issue rdma get (size %d) on PE %d, cycle %d\n",
@@ -160,6 +174,10 @@ CmiStartFn mymain(int argc, char *argv[]) {
       CmiRegisterHandler((CmiHandler)startOperationHandlerFunc);
   CpvInitialize(int, node1start);
   CpvAccess(node1start) = CmiRegisterHandler((CmiHandler)node1StartFunc);
+  CpvInitialize(int, node0start);
+  CpvAccess(node0start) = CmiRegisterHandler((CmiHandler)node0StartFunc);
+  CpvInitialize(int, doNext);
+  CpvAccess(doNext) = CmiRegisterHandler((CmiHandler)doNextFunc);
   // set warmup run
   CpvAccess(warmUp) = true;
   CpvInitialize(int, finishHandler);
