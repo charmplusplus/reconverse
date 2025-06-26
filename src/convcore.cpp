@@ -37,6 +37,7 @@ std::atomic<int> _cleanUp = 0;
 void *memory_stack_top;
 CmiNodeLock _smp_mutex;
 CpvDeclare(std::vector<NcpyOperationInfo *>, newZCPupGets);
+CpvCExtern(int,interopExitFlag);
 CpvDeclare(int,interopExitFlag);
 std::atomic<int> ckExitComplete {0};
 int quietMode;

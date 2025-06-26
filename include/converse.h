@@ -64,11 +64,7 @@ typedef __uint128_t CmiUInt16;
 #define CpvExtern(t, v) extern t *CMK_TAG(Cpv_, v)
 #define CpvInitialized(v) (0 != CMK_TAG(Cpv_, v))
 
-#define CMK_THREADLOCAL __thread
-#define CpvCExtern(t, v)                                                       \
-  extern "C" CMK_THREADLOCAL t *CMK_TAG(Cpv_, v);                              \
-  extern "C" int CMK_TAG(Cpv_inited_, v);                                      \
-  extern "C" t **CMK_TAG(Cpv_addr_, v)
+#define CpvCExtern(t,v)    extern "C" t* CMK_TAG(Cpv_,v)
 
 #define CsvDeclare(t, v) t v
 #define CsvStaticDeclare(t, v) static t v
