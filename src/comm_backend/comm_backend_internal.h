@@ -16,14 +16,14 @@ public:
   virtual int getMyNodeId() = 0;
   virtual int getNumNodes() = 0;
   virtual AmHandler registerAmHandler(CompHandler handler) = 0;
-  virtual void issueAm(int rank, void *local_buf, size_t size, mr_t mr,
-                       CompHandler localComp, AmHandler remoteComp) = 0;
-  virtual void issueRget(int rank, void *local_buf, size_t size, mr_t local_mr,
+  virtual void issueAm(int rank, const void *local_buf, size_t size, mr_t mr,
+                       CompHandler localComp, AmHandler remoteComp, void *user_context) = 0;
+  virtual void issueRget(int rank, const void *local_buf, size_t size, mr_t local_mr,
                          uintptr_t remote_disp, void *rmr,
-                         CompHandler localComp) = 0;
-  virtual void issueRput(int rank, void *local_buf, size_t size, mr_t local_mr,
+                         CompHandler localComp, void *user_context) = 0;
+  virtual void issueRput(int rank, const void *local_buf, size_t size, mr_t local_mr,
                          uintptr_t remote_disp, void *rmr,
-                         CompHandler localComp) = 0;
+                         CompHandler localComp, void *user_context) = 0;
   // return true if there is more work to do
   virtual bool progress(void) = 0;
   virtual void barrier(void) = 0;

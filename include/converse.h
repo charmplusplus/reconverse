@@ -887,4 +887,7 @@ enum ncpyFreeNcpyOpInfoMode {
     }                                                                          \
   } while (0)
 
-#endif
+#include "cmirdmautils.h"
+#include "conv-rdma.h"
+
+#endif // CONVERSE_H
