@@ -5,6 +5,7 @@
 #include "scheduler.h"
 
 #include <cinttypes>
+#include <conv-rdma.h>
 #include <cstdarg>
 #include <pthread.h>
 #include <stdio.h>
@@ -15,6 +16,7 @@
 // GLOBALS
 int Cmi_argc;
 static char **Cmi_argv;
+char **Cmi_argvcopy;
 int Cmi_npes;   // total number of PE's across the entire system
 int Cmi_nranks; // TODO: this isnt used in old converse, but we need to know how
                 // many PEs are on our node?
@@ -30,8 +32,18 @@ ConverseNodeQueue<void *> *CmiNodeQueue;
 double Cmi_startTime;
 CmiSpanningTreeInfo *_topoTree = NULL;
 int CharmLibInterOperate;
+int _immediateLock = 0;
+std::atomic<int> _cleanUp = 0;
 void *memory_stack_top;
 CmiNodeLock _smp_mutex;
+CpvDeclare(std::vector<NcpyOperationInfo *>, newZCPupGets);
+CpvCExtern(int,interopExitFlag);
+CpvDeclare(int,interopExitFlag);
+std::atomic<int> ckExitComplete {0};
+int quietMode;
+int quietModeRequested;
+int userDrivenMode;
+int _replaySystem = 0;
 
 void CldModuleInit(char **);
 
@@ -55,16 +67,18 @@ int Cmi_exitHandler;
 comm_backend::AmHandler AmHandlerPE;
 comm_backend::AmHandler AmHandlerNode;
 
-void CommLocalHandler(comm_backend::Status status) { CmiFree(status.msg); }
+void CommLocalHandler(comm_backend::Status status) {
+  CmiFree(status.local_buf);
+}
 
 void CommRemoteHandlerPE(comm_backend::Status status) {
-  CmiMessageHeader *header = (CmiMessageHeader *)status.msg;
+  CmiMessageHeader *header = (CmiMessageHeader *)status.local_buf;
   int destPE = header->destPE;
-  CmiPushPE(destPE, status.size, status.msg);
+  CmiPushPE(destPE, status.size, status.local_buf);
 }
 
 void CommRemoteHandlerNode(comm_backend::Status status) {
-  CmiNodeQueue->push(status.msg);
+  CmiNodeQueue->push(status.local_buf);
 }
 
 void CmiCallHandler(int handler, void *msg) {
@@ -131,6 +145,7 @@ void CmiStartThreads() {
 
   // make sure all PEs are done before we free the queues.
   comm_backend::barrier();
+  comm_backend::exit();
   delete[] Cmi_queues;
   delete CmiNodeQueue;
   delete[] CmiHandlerTable;
@@ -159,6 +174,7 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
   for (i = 2; i <= argc; i++)
     Cmi_argv[i - 2] = argv[i];
 
+  Cmi_argvcopy = CmiCopyArgs(argv);
   comm_backend::init(&argc, &Cmi_argv);
   Cmi_mynode = comm_backend::getMyNodeId();
   Cmi_numnodes = comm_backend::getNumNodes();
@@ -191,8 +207,6 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
 
   CmiStartThreads();
   free(Cmi_argv);
-
-  comm_backend::exit();
 }
 
 // CMI STATE
@@ -227,7 +241,11 @@ void CmiInitState(int rank) {
 
   // random
   CrnInit();
-
+  CpvInitialize(std::vector<NcpyOperationInfo *>,
+                newZCPupGets); // Check if this is necessary
+  CpvInitialize(int, interopExitFlag);
+  CpvAccess(interopExitFlag) = 0;
+  CmiOnesidedDirectInit();
   CcdModuleInit();
 }
 
@@ -271,7 +289,7 @@ void CmiSetInfo(void *msg, int infofn) {
   header->collectiveMetaInfo = infofn;
 }
 
-void CmiNumberHandler(int n, CmiHandler h){
+void CmiNumberHandler(int n, CmiHandler h) {
   CmiHandlerInfo newEntry;
   newEntry.hdlr = h;
   newEntry.userPtr = nullptr;
@@ -324,31 +342,22 @@ void CmiFree(void *msg) {
   free(msg);
 }
 
-//header ref count methods
+// header ref count methods
 
 static void *CmiAllocFindEnclosing(void *blk) {
   int refCount = REFFIELD(blk);
   while (refCount < 0) {
-    blk = (void *)((char*)blk+refCount); /* Jump to enclosing block */
+    blk = (void *)((char *)blk + refCount); /* Jump to enclosing block */
     refCount = REFFIELD(blk);
   }
   return blk;
 }
 
-int CmiGetReference(void *blk)
-{
-  return REFFIELD(CmiAllocFindEnclosing(blk));
-}
+int CmiGetReference(void *blk) { return REFFIELD(CmiAllocFindEnclosing(blk)); }
 
-void CmiReference(void *blk)
-{
-  REFFIELDINC(CmiAllocFindEnclosing(blk));
-}
+void CmiReference(void *blk) { REFFIELDINC(CmiAllocFindEnclosing(blk)); }
 
-int CmiSize(void *blk)
-{
-  return SIZEFIELD(blk);
-}
+int CmiSize(void *blk) { return SIZEFIELD(blk); }
 
 void CmiMemoryMarkBlock(void *blk) {}
 
@@ -373,13 +382,11 @@ void CmiSyncSendAndFree(int destPE, int messageSize, void *msg) {
 
     CmiPushPE(destPE, messageSize, msg);
   } else {
-    comm_backend::sendAm(destNode, msg, messageSize, comm_backend::MR_NULL,
-                         CommLocalHandler,
-                         AmHandlerPE); // Commlocalhandler will free msg
+    comm_backend::issueAm(destNode, msg, messageSize, comm_backend::MR_NULL,
+                          CommLocalHandler,
+                          AmHandlerPE); // Commlocalhandler will free msg
   }
 }
-
-
 
 // EXIT TOOLS
 
@@ -426,8 +433,10 @@ void CmiNodeAllBarrier() {
   nodeBarrier.wait();
 }
 
-void CmiAssignOnce(int* variable, int value) {
-  if (CmiMyRank() == 0) { *variable = value; }
+void CmiAssignOnce(int *variable, int value) {
+  if (CmiMyRank() == 0) {
+    *variable = value;
+  }
   CmiNodeAllBarrier();
 }
 
@@ -464,8 +473,8 @@ void CmiSyncNodeSendAndFree(unsigned int destNode, unsigned int size,
   if (CmiMyNode() == destNode) {
     CmiNodeQueue->push(msg);
   } else {
-    comm_backend::sendAm(destNode, msg, size, comm_backend::MR_NULL,
-                         CommLocalHandler, AmHandlerNode);
+    comm_backend::issueAm(destNode, msg, size, comm_backend::MR_NULL,
+                          CommLocalHandler, AmHandlerNode);
   }
 }
 
@@ -562,9 +571,7 @@ double getCurrentTime() {
 // TODO: implement timer
 double CmiWallTimer() { return getCurrentTime() - Cmi_startTime; }
 
-double CmiStartTimer() {
-  return 0.0;
-}
+double CmiStartTimer() { return 0.0; }
 
 void CmiAbortHelper(const char *source, const char *message,
                     const char *suggestion, int tellDebugger,
@@ -986,6 +993,21 @@ void CmiUnlock(CmiNodeLock lock) { pthread_mutex_unlock(lock); }
 
 int CmiTryLock(CmiNodeLock lock) { return pthread_mutex_trylock(lock); }
 
+//empty function to satisfy charm
+void CommunicationServerThread(int sleepTime) { }
+
+//start and stop interop schedulers
+
+void StartInteropScheduler()
+{
+  CsdScheduler(-1);
+  CmiNodeAllBarrier();
+}
+
+void StopInteropScheduler()
+{
+  CpvAccess(interopExitFlag) = 1;
+}
 
 //Task Queue Functions/Definitions 
 void CmiSyncTaskQSend(int destPE, int messageSize, void *msg) {
@@ -1122,24 +1144,3 @@ void StealTask() {
       }
   }
   
-  // // each pe will call this function because each pe has its own task queue 
-  // void CmiTaskQueueInit() {
-  //     // makes sure that the node has more than one PE, because we can only steal
-  //     // from other PE's that share the same node
-  
-  //     //initlialize the task queue for this PE 
-  //     CsvInitialize(TaskQueue**, task_q);
-  //     auto taskqueues = (TaskQueue** )malloc(Cmi_mynodesize * sizeof(TaskQueue* ));
-  //     for (int i = 0; i < Cmi_mynodesize; ++i)
-  //       taskqueues[i] = TaskQueueCreate();
-      
-  //     CsvAccess(task_q) = taskqueues;
-  //     for (int i = 0; i < Cmi_mynodesize; i++) {
-  //       printf("task queue created at pointer: %p\n", (void*)CsvAccess(task_q)[i]);
-  //     }
-  
-  //     if(CmiMyNodeSize() > 1) { 
-  //         CcdCallOnConditionKeep(CcdPROCESSOR_BEGIN_IDLE, (CcdCondFn) TaskStealBeginIdle, NULL);
-  //         CcdCallOnConditionKeep(CcdPROCESSOR_STILL_IDLE, (CcdCondFn) TaskStealBeginIdle, NULL);
-  //     }
-  // }

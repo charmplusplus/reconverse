@@ -64,11 +64,7 @@ typedef __uint128_t CmiUInt16;
 #define CpvExtern(t, v) extern t *CMK_TAG(Cpv_, v)
 #define CpvInitialized(v) (0 != CMK_TAG(Cpv_, v))
 
-#define CMK_THREADLOCAL __thread
-#define CpvCExtern(t, v)                                                       \
-  extern "C" CMK_THREADLOCAL t *CMK_TAG(Cpv_, v);                              \
-  extern "C" int CMK_TAG(Cpv_inited_, v);                                      \
-  extern "C" t **CMK_TAG(Cpv_addr_, v)
+#define CpvCExtern(t,v)    extern "C" t* CMK_TAG(Cpv_,v)
 
 #define CsvDeclare(t, v) t v
 #define CsvStaticDeclare(t, v) static t v
@@ -296,6 +292,7 @@ int CmiMyRank();
 int CmiNumPes();
 int CmiNumNodes();
 #define CmiNumPhysicalNodes() CmiNumNodes()
+#define CmiPhysicalNodeID(node) (node)
 int CmiNodeOf(int pe);
 int CmiRankOf(int pe);
 int CmiStopFlag();
@@ -658,6 +655,7 @@ void CldEnqueueGroup(CmiGroup grp, void *msg, int infofn);
 // CldEnqueueWithinNode enqueues a message for each PE on the node.
 void CldNodeEnqueue(int node, void *msg, int infofn);
 void CldEnqueueWithinNode(void *msg, int infofn);
+void CldEnqueueGroup(CmiGroup grp, void *msg, int infofn);
 
 #define CmiImmIsRunning() (0)
 #define CMI_MSG_NOKEEP(msg) ((CmiMessageHeader *)msg)->nokeep

@@ -29,10 +29,9 @@ void CommBackendLCI2::init(int *argc, char ***argv) {
 }
 
 void CommBackendLCI2::exit() {
-  lci::barrier();
+  lci::g_runtime_fina();
   lci::free_comp(&m_local_comp);
   lci::free_comp(&m_remote_comp);
-  lci::g_runtime_fina();
 }
 
 int CommBackendLCI2::getMyNodeId() { return lci::get_rank_me(); }
@@ -44,19 +43,51 @@ AmHandler CommBackendLCI2::registerAmHandler(CompHandler handler) {
   return g_handlers.size() - 1;
 }
 
-void CommBackendLCI2::sendAm(int rank, void *msg, size_t size, mr_t mr,
-                             CompHandler localComp, AmHandler remoteComp) {
+void CommBackendLCI2::issueAm(int rank, void *local_buf, size_t size, mr_t mr,
+                              CompHandler localComp, AmHandler remoteComp) {
   // we use LCI tag to pass the remoteComp
   lci::status_t status;
   do {
-    status = lci::post_am_x(rank, msg, size, m_local_comp, m_rcomp)
+    status = lci::post_am_x(rank, local_buf, size, m_local_comp, m_rcomp)
                  .mr(mr)
                  .tag(remoteComp)
                  .user_context(reinterpret_cast<void *>(localComp))();
     lci::progress();
   } while (status.error.is_retry());
   if (status.error.is_done()) {
-    localComp({msg, size});
+    localComp({local_buf, size});
+  }
+}
+
+void CommBackendLCI2::issueRget(int rank, void *local_buf, size_t size,
+                                mr_t local_mr, uintptr_t remote_disp, void *rmr,
+                                CompHandler localComp) {
+  lci::status_t status;
+  do {
+    status = lci::post_get_x(rank, local_buf, size, m_local_comp, remote_disp,
+                             *static_cast<lci::rmr_t *>(rmr))
+                 .mr(local_mr)
+                 .user_context(reinterpret_cast<void *>(localComp))();
+    lci::progress();
+  } while (status.error.is_retry());
+  if (status.error.is_done()) {
+    localComp({local_buf, size});
+  }
+}
+
+void CommBackendLCI2::issueRput(int rank, void *local_buf, size_t size,
+                                mr_t local_mr, uintptr_t remote_disp, void *rmr,
+                                CompHandler localComp) {
+  lci::status_t status;
+  do {
+    status = lci::post_put_x(rank, local_buf, size, m_local_comp, remote_disp,
+                             *static_cast<lci::rmr_t *>(rmr))
+                 .mr(local_mr)
+                 .user_context(reinterpret_cast<void *>(localComp))();
+    lci::progress();
+  } while (status.error.is_retry());
+  if (status.error.is_done()) {
+    localComp({local_buf, size});
   }
 }
 
@@ -72,8 +103,16 @@ mr_t CommBackendLCI2::registerMemory(void *addr, size_t size) {
   return mr.get_impl();
 }
 
+size_t CommBackendLCI2::getRMR(mr_t mr, void *addr, size_t size) {
+  if (addr && size >= sizeof(lci::rmr_t)) {
+    lci::rmr_t rkey = lci::get_rmr(mr);
+    std::memcpy(addr, &rkey, sizeof(lci::rmr_t));
+  }
+  return sizeof(lci::rmr_t);
+}
+
 void CommBackendLCI2::deregisterMemory(mr_t mr_) {
-  lci::mr_t mr(mr);
+  lci::mr_t mr(mr_);
   lci::deregister_memory(&mr);
 }
 
