@@ -38,30 +38,30 @@ AmHandler registerAmHandler(CompHandler handler) {
   return gCommBackend->registerAmHandler(handler);
 }
 
-void issueAm(int rank, void *msg, size_t size, mr_t mr, CompHandler localComp,
-             AmHandler remoteComp) {
+void issueAm(int rank, const void *msg, size_t size, mr_t mr, CompHandler localComp,
+             AmHandler remoteComp, void *user_context) {
   if (gCommBackend == nullptr) {
     return;
   }
-  gCommBackend->issueAm(rank, msg, size, mr, localComp, remoteComp);
+  gCommBackend->issueAm(rank, msg, size, mr, localComp, remoteComp, user_context);
 }
 
-void issueRget(int rank, void *local_buf, size_t size, mr_t local_mr,
-               uintptr_t remote_disp, void *rmr, CompHandler localComp) {
+void issueRget(int rank, const void *local_buf, size_t size, mr_t local_mr,
+               uintptr_t remote_disp, void *rmr, CompHandler localComp, void *user_context) {
   if (gCommBackend == nullptr) {
     return;
   }
   gCommBackend->issueRget(rank, local_buf, size, local_mr, remote_disp, rmr,
-                          localComp);
+                          localComp, user_context);
 }
 
-void issueRput(int rank, void *local_buf, size_t size, mr_t local_mr,
-               uintptr_t remote_disp, void *rmr, CompHandler localComp) {
+void issueRput(int rank, const void *local_buf, size_t size, mr_t local_mr,
+               uintptr_t remote_disp, void *rmr, CompHandler localComp, void *user_context) {
   if (gCommBackend == nullptr) {
     return;
   }
   gCommBackend->issueRput(rank, local_buf, size, local_mr, remote_disp, rmr,
-                          localComp);
+                          localComp, user_context);
 }
 
 bool progress(void) {

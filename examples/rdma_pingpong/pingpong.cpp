@@ -1,11 +1,3 @@
-
-/***************************************************************
-  Converse Ping-pong to test the message latency and bandwidth
-  Modified from Milind's ping-pong
-
-  Sameer Kumar 02/07/05
- ****************************************************************/
-
 #include "conv-rdma.h"
 #include <converse.h>
 #include <stdlib.h>
@@ -16,177 +8,165 @@ CpvDeclare(int, maxMsgSize);
 CpvDeclare(int, factor);
 CpvDeclare(bool, warmUp);
 CpvDeclare(int, msgSize);
-CpvDeclare(int, cycleNum);
-CpvDeclare(int, warmUpDoneHandler);
-CpvDeclare(int, exitHandler);
-CpvDeclare(int, node1start);
-CpvDeclare(int, node0start);
-CpvDeclare(int, doNext);
-CpvDeclare(int, startOperationHandler);
-CpvDeclare(int, finishHandler);
-CpvDeclare(CmiNcpyBuffer, buff);
-CpvDeclare(CmiNcpyBuffer, send);
+CpvDeclare(int, currentCycle);
+
+CpvDeclare(CmiNcpyBuffer, localBuf);
+CpvDeclare(CmiNcpyBuffer, remoteBuf);
 CpvStaticDeclare(double, startTime);
 CpvStaticDeclare(double, endTime);
+CpvDeclare(int, setRemoteBufHIdx);
+CpvDeclare(int, rmaGetSignalHIdx);
+CpvDeclare(int, exitBenchmarkHIdx);
 
-#define USE_PERSISTENT 0
 
-#if USE_PERSISTENT
-PersistentHandle h;
-#endif
+void setupRMABuf();
+
+void startRing() {
+  CmiAssert(CmiMyPe() == 0);
+  setupRMABuf();
+}
+
+void setupRMABuf() {
+  // If there is a previous buffer, clean it up
+  if (CpvAccess(localBuf).ptr != nullptr) {
+    CpvAccess(localBuf).deregisterMem();
+    CmiFree((void *)CpvAccess(localBuf).ptr);
+  }
+  // setup a new localBuf
+  char *content = (char *)(CmiAlloc(CpvAccess(msgSize)));
+  CpvAccess(localBuf) = CmiNcpyBuffer(content, CpvAccess(msgSize));
+  // send the localBuf back
+  char *msg = (char *)CmiAlloc(CmiMsgHeaderSizeBytes + sizeof(CmiNcpyBuffer));
+  *((CmiNcpyBuffer *)(msg + CmiMsgHeaderSizeBytes)) = CpvAccess(localBuf);
+  CmiSetHandler(msg, CpvAccess(setRemoteBufHIdx));
+  CmiSyncSendAndFree(1 - CmiMyPe(), CmiMsgHeaderSizeBytes + sizeof(CmiNcpyBuffer), msg);
+}
+
+void startWarmUp();
+
+void setRemoteBufHandler(char *msg) {
+  CpvAccess(remoteBuf) = *((CmiNcpyBuffer *)(msg + CmiMsgHeaderSizeBytes));
+  if (CmiMyPe() == 1) {
+    CpvAccess(msgSize) = CpvAccess(remoteBuf).cnt;
+    setupRMABuf();
+  } else {
+    startWarmUp();
+  }
+}
+
+void doRMA();
 
 void startWarmUp() {
-  // Small pingpong message to ensure that setup is completed
-  if (CmiMyPe() == 0) {
-    char *msg = (char *)CmiAlloc(CmiMsgHeaderSizeBytes + sizeof(CmiNcpyBuffer));
-    *((CmiNcpyBuffer *)(msg + CmiMsgHeaderSizeBytes)) = CpvAccess(buff);
-    CmiSetHandler(msg, CpvAccess(node1start));
-    CmiSyncSendAndFree(1, CmiMsgHeaderSizeBytes + sizeof(CmiNcpyBuffer), msg);
-  }
-}
-
-// We finished for all message sizes. Exit now
-CmiHandler exitHandlerFunc(char *msg) {
-  // CmiFree(msg);
-  CmiExit(0);
-  return 0;
-}
-
-// the pingpong has finished, record message time
-void ringFinished(char *msg) {
-  CpvAccess(cycleNum) = 0;
+  CmiAssert(CmiMyPe() == 0);
   CpvAccess(warmUp) = true;
-  if (CmiMyPe() == 1) {
-    CpvAccess(endTime) = CmiWallTimer();
-    size_t msgSizeDiff = CpvAccess(msgSize) - CmiMsgHeaderSizeBytes;
+  doRMA();
+}
 
-    // Print the time for that message size
-    CmiPrintf("Size=%zu bytes, time=%lf microseconds one-way\n", msgSizeDiff,
-              (1e6 * (CpvAccess(endTime) - CpvAccess(startTime))) /
-                  (2. * CpvAccess(nCycles)));
+void doRMA() {
+  CpvAccess(localBuf).rdmaGet(CpvAccess(remoteBuf), 0,
+                          nullptr, nullptr);
+}
+
+void rmaGetLocalComp(void *context) {
+  // fprintf(stderr, "rmaGetLocalComp called on PE %d\n", CmiMyPe());
+  NcpyOperationInfo info = *((NcpyOperationInfo *)(context));
+  if (CmiMyPe() == info.srcPe) {
+    // We assume no remote completion notification
+    return;
   }
+  // send remote completion signal
+  char *msg = (char *)CmiAlloc(CmiMsgHeaderSizeBytes);
+  CmiSetHandler(msg, CpvAccess(rmaGetSignalHIdx));
+  CmiSyncSendAndFree(1 - CmiMyPe(),
+                     CmiMsgHeaderSizeBytes, msg);
+}
+
+void endRing();
+
+void rmaGetSignalHandler(char*) {
+  if (CmiMyPe() == 1) {
+    // PE 1 just do a "pong" get back
+    doRMA();
+    return;
+  }
+  // PE 0
+  if (CpvAccess(warmUp)) {
+    CpvAccess(warmUp) = false;
+    // record start time
+    CpvAccess(startTime) = CmiWallTimer();
+    CpvAccess(currentCycle) = 0;
+    doRMA();
+  } else {
+    CpvAccess(currentCycle) += 1;
+    if (CpvAccess(currentCycle) < CpvAccess(nCycles)) {
+      doRMA();
+    } else {
+      endRing();
+    }
+  }
+}
+
+void exitBenchmark();
+
+void endRing() {
+  CmiAssert(CmiMyPe() == 0);
+  CpvAccess(endTime) = CmiWallTimer();
+
+  // Print the time for that message size
+  CmiPrintf("Size=%zu bytes, time=%lf microseconds one-way\n", CpvAccess(msgSize),
+            (1e6 * (CpvAccess(endTime) - CpvAccess(startTime))) /
+                (2. * CpvAccess(nCycles)));
 
   // Have we finished all message sizes?
-  if ((CpvAccess(msgSize) - CmiMsgHeaderSizeBytes) < CpvAccess(maxMsgSize)) {
+  if (CpvAccess(msgSize) < CpvAccess(maxMsgSize)) {
     // Increase message in powers of factor. Also add a converse header to that
-    CpvAccess(msgSize) =
-        (CpvAccess(msgSize) - CmiMsgHeaderSizeBytes) * CpvAccess(factor) +
-        CmiMsgHeaderSizeBytes;
-    // CmiFree((void*)CpvAccess(buff).ptr);
-    // start the ring again
-    if (CmiMyPe() == 0) {
-      char *content =
-          (char *)(CmiAlloc(CpvAccess(msgSize) - CmiMsgHeaderSizeBytes));
-      CpvAccess(buff) =
-          CmiNcpyBuffer(content, CpvAccess(msgSize) - CmiMsgHeaderSizeBytes);
-      startWarmUp();
-    }
+    CpvAccess(msgSize) = CpvAccess(msgSize) * CpvAccess(factor);
+    startRing();
   } else {
-    // exit
-    exitHandlerFunc(NULL);
+    exitBenchmark();
   }
 }
+void exitBenchmarkHandler(char*);
 
-void incomingHandlerFunc(void *msg) {
-  // fprintf(stderr, "incomingHandlerFunc called on PE %d\n", CmiMyPe());
-  NcpyOperationInfo info = *((NcpyOperationInfo *)(msg));
-  if (CmiMyPe() == info.destPe) {
-    if (CpvAccess(warmUp)) {
-      CpvAccess(warmUp) = false;
-      char *msg =
-          (char *)CmiAlloc(CmiMsgHeaderSizeBytes + sizeof(CmiNcpyBuffer));
-      *((CmiNcpyBuffer *)(msg + CmiMsgHeaderSizeBytes)) = CpvAccess(buff);
-      CmiSetHandler(msg, CpvAccess(node0start));
-      CmiSyncSendAndFree(0, CmiMsgHeaderSizeBytes + sizeof(CmiNcpyBuffer), msg);
-    } else {
-      CpvAccess(cycleNum) += 1;
-      if (CmiMyPe() == 0 && CpvAccess(cycleNum) == CpvAccess(nCycles)) {
-        ringFinished(NULL);
-      } else {
-        char *msg = (char *)CmiAlloc(CmiMsgHeaderSizeBytes);
-        CmiSetHandler(msg, CpvAccess(doNext));
-        CmiSyncSendAndFree((CmiMyPe() + 1) % 2,
-                           CmiMsgHeaderSizeBytes + sizeof(CmiNcpyBuffer), msg);
-      }
-    }
+void exitBenchmark() {
+  char *msg = (char *)CmiAlloc(CmiMsgHeaderSizeBytes);
+  CmiSetHandler(msg, CpvAccess(exitBenchmarkHIdx));
+  CmiSyncBroadcastAllAndFree(CmiMsgHeaderSizeBytes, msg);
+}
+
+void exitBenchmarkHandler(char*) {
+  // clean up resources
+  if (CpvAccess(localBuf).ptr != nullptr) {
+    CpvAccess(localBuf).deregisterMem();
+    CmiFree((void *)CpvAccess(localBuf).ptr);
   }
-}
-
-void node1StartFunc(char *msg) {
-  ringFinished(NULL);
-  CpvAccess(warmUp) = true;
-  char *content =
-      (char *)(CmiAlloc(CpvAccess(msgSize) - CmiMsgHeaderSizeBytes));
-  CpvAccess(buff) =
-      CmiNcpyBuffer(content, CpvAccess(msgSize) - CmiMsgHeaderSizeBytes);
-  CmiNcpyBuffer buffer = *((CmiNcpyBuffer *)(msg + CmiMsgHeaderSizeBytes));
-  CpvAccess(send) = buffer;
-  CpvAccess(startTime) = CmiWallTimer();
-  CpvAccess(buff).rdmaGet(buffer, 0, NULL, NULL);
-  // fprintf(stderr, "issue rdma get (size %d) on PE %d, cycle %d\n",
-  // CpvAccess(msgSize), CmiMyPe(), CpvAccess(cycleNum));
-}
-
-void doNextFunc(char *msg) {
-  CpvAccess(buff).rdmaGet(CpvAccess(send), sizeof(CmiNcpyBuffer),
-                          (char *)(&CpvAccess(buff)), NULL);
-}
-
-void node0StartFunc(char *msg) {
-  CmiNcpyBuffer buffer = *((CmiNcpyBuffer *)(msg + CmiMsgHeaderSizeBytes));
-  CpvAccess(send) = buffer;
-  CpvAccess(warmUp) = false;
-  CpvAccess(buff).rdmaGet(buffer, sizeof(CmiNcpyBuffer),
-                          (char *)(&CpvAccess(buff)), NULL);
-  // fprintf(stderr, "issue rdma get (size %d) on PE %d, cycle %d\n",
-  // CpvAccess(msgSize), CmiMyPe(), CpvAccess(cycleNum));
-}
-
-// Converse handler for beginning operation
-CmiHandler startOperationHandlerFunc(char *msg) {
-#if USE_PERSISTENT
-  if (CmiMyPe() < CmiNumPes())
-    h = CmiCreateCompressPersistent(otherPe, CpvAccess(maxMsgSize) + 1024, 200,
-                                    CMI_FLOATING);
-#endif
-  startWarmUp();
-  return 0;
+  fprintf(stderr, "exitBenchmarkHandler called on PE %d\n", CmiMyPe());
+  CsdExitScheduler();
 }
 
 // Converse main. Initialize variables and register handlers
 CmiStartFn mymain(int argc, char *argv[]) {
   CpvInitialize(int, msgSize);
-  CpvInitialize(int, cycleNum);
+  CpvInitialize(int, currentCycle);
 
   CpvInitialize(int, nCycles);
   CpvInitialize(int, minMsgSize);
   CpvInitialize(int, maxMsgSize);
   CpvInitialize(int, factor);
   CpvInitialize(bool, warmUp);
-  CpvInitialize(CmiNcpyBuffer, buff);
-  CpvInitialize(CmiNcpyBuffer, send);
+  CpvInitialize(CmiNcpyBuffer, localBuf);
+  CpvInitialize(CmiNcpyBuffer, remoteBuf);
 
   // Register Handlers
-  CpvInitialize(int, exitHandler);
-  CpvAccess(exitHandler) = CmiRegisterHandler((CmiHandler)exitHandlerFunc);
-  CpvInitialize(int, startOperationHandler);
-  CpvAccess(startOperationHandler) =
-      CmiRegisterHandler((CmiHandler)startOperationHandlerFunc);
-  CpvInitialize(int, node1start);
-  CpvAccess(node1start) = CmiRegisterHandler((CmiHandler)node1StartFunc);
-  CpvInitialize(int, node0start);
-  CpvAccess(node0start) = CmiRegisterHandler((CmiHandler)node0StartFunc);
-  CpvInitialize(int, doNext);
-  CpvAccess(doNext) = CmiRegisterHandler((CmiHandler)doNextFunc);
-  // set warmup run
-  CpvAccess(warmUp) = true;
-  CpvInitialize(int, finishHandler);
-  CpvAccess(finishHandler) = CmiRegisterHandler((CmiHandler)ringFinished);
+  CpvInitialize(int, setRemoteBufHIdx);
+  CpvAccess(setRemoteBufHIdx) = CmiRegisterHandler((CmiHandler)setRemoteBufHandler);
+  CpvInitialize(int, rmaGetSignalHIdx);
+  CpvAccess(rmaGetSignalHIdx) = CmiRegisterHandler((CmiHandler)rmaGetSignalHandler);
+  CpvInitialize(int, exitBenchmarkHIdx);
+  CpvAccess(exitBenchmarkHIdx) = CmiRegisterHandler((CmiHandler)exitBenchmarkHandler);
 
   CpvInitialize(double, startTime);
   CpvInitialize(double, endTime);
-
-  int otherPe = CmiMyPe() ^ 1;
 
   // Set runtime cpuaffinity
   CmiInitCPUAffinity(argv);
@@ -225,34 +205,20 @@ CmiStartFn mymain(int argc, char *argv[]) {
               CpvAccess(factor));
   }
 
-  if (CmiNumPes() != 2 && CmiMyPe() == 0) {
+  if (CmiNumNodes() != 2 && CmiNumPes() != 2 && CmiMyPe() == 0) {
     CmiAbort(
-        "This test is designed for only 2 pes and cannot be run on %d pe(s)!\n",
-        CmiNumPes());
+        "This test is designed for only 2 nodes and with 1 PE per node\n");
   }
 
-  CpvAccess(msgSize) = CpvAccess(minMsgSize) + CmiMsgHeaderSizeBytes;
-  if (CmiMyPe() == 1) {
-    // Hack for now, as PE 1 will call ringFinished at the very beginning.
-    CpvAccess(msgSize) =
-        (CpvAccess(msgSize) - CmiMsgHeaderSizeBytes) / CpvAccess(factor) +
-        CmiMsgHeaderSizeBytes;
-  }
+  CpvAccess(msgSize) = CpvAccess(minMsgSize);
 
-  CmiSetDirectNcpyAckHandler(incomingHandlerFunc);
+  CmiSetDirectNcpyAckHandler(rmaGetLocalComp);
 
   // Node 0 waits till all processors finish their topology processing
+  CmiNodeBarrier();
+
   if (CmiMyPe() == 0) {
-    // Signal all PEs to begin computing
-    char *content =
-        (char *)(CmiAlloc(CpvAccess(minMsgSize) - CmiMsgHeaderSizeBytes));
-    CpvAccess(buff) =
-        CmiNcpyBuffer(content, CpvAccess(minMsgSize) - CmiMsgHeaderSizeBytes);
-    char *startOperationMsg = (char *)CmiAlloc(CmiMsgHeaderSizeBytes);
-    CmiSetHandler((char *)startOperationMsg, CpvAccess(startOperationHandler));
-    CmiSyncBroadcastAndFree(CmiMsgHeaderSizeBytes, startOperationMsg);
-    // start operation locally on PE 0
-    startOperationHandlerFunc(NULL);
+    startRing();
   }
   return 0;
 }

@@ -4,6 +4,16 @@
 #include "cmirdmautils.h"
 #include <functional>
 
+// User specified configuration
+// TODO: move to a better location
+extern bool CmiUseCopyBasedRDMA;
+
+// LCI layer definition
+#define CMK_REG_REQUIRED 1
+// 8-byte for mr, 16-byte for rmr
+// TODO: better to use dynamic allocation and PUP
+#define CMK_NOCOPY_DIRECT_BYTES 24
+
 /*********************************** Zerocopy Direct API
  * **********************************/
 typedef void (*RdmaAckCallerFn)(void *token);
