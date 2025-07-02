@@ -7,10 +7,12 @@
 #include <cinttypes>
 #include <conv-rdma.h>
 #include <cstdarg>
+#include <netdb.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <thread>
+#include <unistd.h>
 #include <vector>
 
 // GLOBALS
@@ -37,9 +39,9 @@ std::atomic<int> _cleanUp = 0;
 void *memory_stack_top;
 CmiNodeLock _smp_mutex;
 CpvDeclare(std::vector<NcpyOperationInfo *>, newZCPupGets);
-CpvCExtern(int,interopExitFlag);
-CpvDeclare(int,interopExitFlag);
-std::atomic<int> ckExitComplete {0};
+CpvCExtern(int, interopExitFlag);
+CpvDeclare(int, interopExitFlag);
+std::atomic<int> ckExitComplete{0};
 int quietMode;
 int quietModeRequested;
 int userDrivenMode;
@@ -64,6 +66,11 @@ int Cmi_exitHandler;
 
 comm_backend::AmHandler AmHandlerPE;
 comm_backend::AmHandler AmHandlerNode;
+
+#include <sys/stat.h> /* from "mkdir" man page */
+#include <sys/types.h>
+
+void CmiMkdir(const char *dirName) { mkdir(dirName, 0777); }
 
 void CommLocalHandler(comm_backend::Status status) {
   CmiFree(const_cast<void *>(status.local_buf));
@@ -301,6 +308,31 @@ void CmiPushPE(int destPE, void *msg) {
   CmiPushPE(destPE, messageSize, msg);
 }
 
+void CmiForwardMsgToPeers(int size, char *msg) {
+  /* FIXME: now it's just a flat p2p send!! When node size is large,
+   * it should also be sent in a tree
+   */
+
+  int exceptRank = CmiMyRank();
+  if (CMI_MSG_NOKEEP(msg)) {
+    for (int i = 0; i < exceptRank; i++) {
+      CmiReference(msg);
+      CmiPushPE(i, msg);
+    }
+    for (int i = exceptRank + 1; i < CmiMyNodeSize(); i++) {
+      CmiReference(msg);
+      CmiPushPE(i, msg);
+    }
+  } else {
+    for (int i = 0; i < exceptRank; i++) {
+      CmiPushPE(i, CopyMsg(msg, size));
+    }
+    for (int i = exceptRank + 1; i < CmiMyNodeSize(); i++) {
+      CmiPushPE(i, CopyMsg(msg, size));
+    }
+  }
+}
+
 void *CmiAlloc(int size) {
   if (size <= 0) {
     CmiPrintf("CmiAlloc: size <= 0\n");
@@ -357,8 +389,8 @@ void CmiSyncSendAndFree(int destPE, int messageSize, void *msg) {
     CmiPushPE(destPE, messageSize, msg);
   } else {
     comm_backend::issueAm(destNode, msg, messageSize, comm_backend::MR_NULL,
-                          CommLocalHandler,
-                          AmHandlerPE, nullptr); // Commlocalhandler will free msg
+                          CommLocalHandler, AmHandlerPE,
+                          nullptr); // Commlocalhandler will free msg
   }
 }
 
@@ -959,18 +991,112 @@ void CmiUnlock(CmiNodeLock lock) { pthread_mutex_unlock(lock); }
 
 int CmiTryLock(CmiNodeLock lock) { return pthread_mutex_trylock(lock); }
 
-//empty function to satisfy charm
-void CommunicationServerThread(int sleepTime) { }
+static char *CopyMsg(char *msg, int len) {
+  char *copy = (char *)CmiAlloc(len);
+#if CMK_ERROR_CHECKING
+  if (!copy) {
+    CmiAbort("Error: out of memory in machine layer\n");
+  }
+#endif
+  memcpy(copy, msg, len);
+  return copy;
+}
 
-//start and stop interop schedulers
+// empty functions to satisfy charm
+void CommunicationServerThread(int sleepTime) {}
 
-void StartInteropScheduler()
-{
+// Since we are not implementing converse level seed balancers
+void LBTopoInit() {}
+
+// start and stop interop schedulers
+
+void StartInteropScheduler() {
   CsdScheduler(-1);
   CmiNodeAllBarrier();
 }
 
-void StopInteropScheduler()
-{
-  CpvAccess(interopExitFlag) = 1;
+void StopInteropScheduler() { CpvAccess(interopExitFlag) = 1; }
+
+// IN PROGRESS
+
+// skt_ip_t _skt_invalid_ip = {{0}};
+
+// skt_ip_t skt_my_ip(void) {
+//   char hostname[1000];
+//   skt_ip_t ip = _skt_invalid_ip;
+//   int ifcount = 0;
+// #if CMK_HAS_GETIFADDRS
+//   /* Code snippet from  Jens Alfke
+//    * http://lists.apple.com/archives/macnetworkprog/2008/May/msg00013.html
+//    */
+//   struct ifaddrs *ifaces = 0;
+//   if (getifaddrs(&ifaces) == 0) {
+//     struct ifaddrs *iface;
+//     for (iface = ifaces; iface; iface = iface->ifa_next) {
+//       if ((iface->ifa_flags & IFF_UP) && !(iface->ifa_flags & IFF_LOOPBACK))
+//       {
+//         const struct sockaddr_in *addr =
+//             (const struct sockaddr_in *)iface->ifa_addr;
+//         if (addr && addr->sin_family == AF_INET) {
+//           ifcount++;
+//           if (ifcount == 1)
+//             memcpy(&ip, &addr->sin_addr, sizeof(ip));
+//         }
+//       }
+//     }
+//     freeifaddrs(ifaces);
+//   }
+//   /* fprintf(stderr, "My IP is %d.%d.%d.%d\n",
+//    * ip.data[0],ip.data[1],ip.data[2],ip.data[3]); */
+//   if (ifcount == 1)
+//     return ip;
+// #endif
+
+//   if (gethostname(hostname, 999) == 0) {
+//     skt_ip_t ip2 = skt_lookup_ip(hostname);
+//     if (ip2.data[0] != 127)
+//       return ip2;
+//     else if (ifcount != 0)
+//       return ip;
+//   }
+
+//   return _skt_invalid_ip;
+// }
+
+// static int skt_parse_dotted(const char *str, skt_ip_t *ret) {
+//   int i, v;
+//   *ret = _skt_invalid_ip;
+//   for (i = 0; i < sizeof(skt_ip_t); i++) {
+//     if (1 != sscanf(str, "%d", &v))
+//       return 0;
+//     if (v < 0 || v > 255)
+//       return 0;
+//     while (isdigit(*str))
+//       str++;                         /* Advance over number */
+//     if (i != sizeof(skt_ip_t) - 1) { /*Not last time:*/
+//       if (*str != '.')
+//         return 0; /*Check for dot*/
+//     } else {      /*Last time:*/
+//       if (*str != 0)
+//         return 0; /*Check for end-of-string*/
+//     }
+//     str++;
+//     ret->data[i] = (unsigned char)v;
+//   }
+//   return 1;
+// }
+
+// /* this is NOT thread safe ! */
+// skt_ip_t skt_lookup_ip(const char *name) {
+//   skt_ip_t ret = _skt_invalid_ip;
+//   /*First try to parse the name as dotted decimal*/
+//   if (skt_parse_dotted(name, &ret))
+//     return ret;
+//   else {                                     /*Try a DNS lookup*/
+//     struct hostent *h = gethostbyname(name); /* not thread safe */
+//     if (h == 0)
+//       return _skt_invalid_ip;
+//     memcpy(&ret, h->h_addr_list[0], h->h_length);
+//     return ret;
+//   }
 }

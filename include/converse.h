@@ -64,7 +64,7 @@ typedef __uint128_t CmiUInt16;
 #define CpvExtern(t, v) extern t *CMK_TAG(Cpv_, v)
 #define CpvInitialized(v) (0 != CMK_TAG(Cpv_, v))
 
-#define CpvCExtern(t,v)    extern "C" t* CMK_TAG(Cpv_,v)
+#define CpvCExtern(t, v) extern "C" t *CMK_TAG(Cpv_, v)
 
 #define CsvDeclare(t, v) t v
 #define CsvStaticDeclare(t, v) static t v
@@ -292,7 +292,6 @@ int CmiMyRank();
 int CmiNumPes();
 int CmiNumNodes();
 #define CmiNumPhysicalNodes() CmiNumNodes()
-#define CmiPhysicalNodeID(node) (node)
 int CmiNodeOf(int pe);
 int CmiRankOf(int pe);
 int CmiStopFlag();
@@ -328,6 +327,8 @@ void CmiSyncSendAndFree(int destPE, int messageSize, void *msg);
 void CmiSyncListSend(int npes, const int *pes, int len, void *msg);
 void CmiSyncListSendAndFree(int npes, const int *pes, int len, void *msg);
 void CmiPushPE(int destPE, void *msg);
+static char *CopyMsg(char *msg, int len);
+void CmiForwardMsgToPeers(int size, char *msg);
 
 void CmiSyncSendFn(int destPE, int messageSize, char *msg);
 void CmiFreeSendFn(int destPE, int messageSize, char *msg);
@@ -887,7 +888,27 @@ enum ncpyFreeNcpyOpInfoMode {
     }                                                                          \
   } while (0)
 
-#include "cmirdmautils.h"
-#include "conv-rdma.h"
+// #include "cmirdmautils.h"
+// #include "conv-rdma.h"
+
+// Topology section
+
+extern int CmiPhysicalNodeID(int pe);
+extern int CmiNumPesOnPhysicalNode(int node);
+extern int CmiPhysicalRank(int pe);
+extern void CsdSchedulePoll(void);
+
+// IN PROGRESS
+
+// typedef struct { /*IPv4 IP address*/
+//   unsigned char data[4];
+// } skt_ip_t;
+// extern skt_ip_t _skt_invalid_ip;
+// skt_ip_t skt_my_ip(void);
+// /* this is NOT thread safe ! */
+// skt_ip_t skt_lookup_ip(const char *name);
+// static int skt_parse_dotted(const char *str, skt_ip_t *ret);
+
+// End section
 
 #endif // CONVERSE_H
