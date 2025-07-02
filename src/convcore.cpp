@@ -48,7 +48,8 @@ int _replaySystem = 0;
 void CldModuleInit(char **);
 
 // PE LOCALS that need global access sometimes
-static ConverseQueue<void *> **Cmi_queues; // array of queue pointers
+ConverseQueue<void *> **Cmi_queues = nullptr; // array of queue pointers
+TaskQueue** Cmi_taskqueues = nullptr; 
 
 // PE LOCALS
 thread_local int Cmi_myrank;
@@ -58,6 +59,7 @@ thread_local double idle_time;
 
 // Special operation handlers (TODO: should these be special values instead like
 // the exit handler)
+int Cmi_undefinedHandler; 
 int Cmi_exitHandler;
 
 // TODO: padding for all these thread_locals and cmistates?
@@ -87,15 +89,20 @@ void converseRunPe(int rank) {
   // init state
   CmiInitState(rank);
 
-  // init things like cld module, ccs, etc
-  CldModuleInit(Cmi_argv);
+  
 #ifdef SET_CPU_AFFINITY
   CmiSetCPUAffinity(rank);
 #endif
-
+  Cmi_undefinedHandler = CmiRegisterHandler(CmiUndefinedHandler); //should be at index 0 which is what gets called if user doesnt define a handlerid in their message 
   Cmi_exitHandler = CmiRegisterHandler(CmiExitHandler);
+
+  //initalize collective operations/arrays/handlers/etc
   collectiveInit();
-  // Cmi_multicastHandler = CmiRegisterHandler(CmiMulticastHandler);
+
+  // init things like cld module, ccs, etc
+  // moved this after Cmi_Exithandler so exithandler will theoretically be 
+  //registered at index 0, so if user forgets to specify handlerid, it will exit 
+  CldModuleInit(Cmi_argv); 
 
   // barrier to ensure all global structs are initialized
   CmiNodeBarrier();
@@ -105,7 +112,13 @@ void converseRunPe(int rank) {
 
   // call initial function and start scheduler
   Cmi_startfn(Cmi_argc, Cmi_argv);
+
+  //printf("%d: taskqueue pointer: %p\n", __LINE__, CsvAccess(task_q)[Cmi_myrank]);
   CsdScheduler();
+
+  // cleanup of threads? : destroy each threads task queue and reduction table struct(not the struct itself)
+  TaskQueueDestroy(Cmi_taskqueues[Cmi_myrank]);  
+  //free(CpvAccess(_reduction_info));
 }
 
 void CmiStartThreads() {
@@ -113,9 +126,10 @@ void CmiStartThreads() {
   Cmi_queues = new ConverseQueue<void *> *[Cmi_mynodesize];
   CmiHandlerTable = new std::vector<CmiHandlerInfo> *[Cmi_mynodesize];
   CmiNodeQueue = new ConverseNodeQueue<void *>();
+  Cmi_taskqueues = new TaskQueue*[Cmi_mynodesize];
 
   _smp_mutex = CmiCreateLock();
-
+  
   // make sure the queues are allocated before PEs start sending messages around
   comm_backend::barrier();
 
@@ -135,9 +149,12 @@ void CmiStartThreads() {
   delete[] Cmi_queues;
   delete CmiNodeQueue;
   delete[] CmiHandlerTable;
+  delete [] Cmi_taskqueues;
+
   Cmi_queues = nullptr;
   CmiNodeQueue = nullptr;
   CmiHandlerTable = nullptr;
+  Cmi_taskqueues = nullptr;
 }
 
 // argument form: ./prog +pe <N>
@@ -212,9 +229,15 @@ void CmiInitState(int rank) {
   // allocate global entries
   ConverseQueue<void *> *queue = new ConverseQueue<void *>();
   std::vector<CmiHandlerInfo> *handlerTable = new std::vector<CmiHandlerInfo>();
-
   Cmi_queues[Cmi_myrank] = queue;
   CmiHandlerTable[Cmi_myrank] = handlerTable;
+
+  //task queue stuff
+  Cmi_taskqueues[Cmi_myrank] = TaskQueueCreate();
+  if(CmiMyNodeSize() > 1) { 
+      CcdCallOnConditionKeep(CcdPROCESSOR_BEGIN_IDLE, (CcdCondFn) TaskStealBeginIdle, NULL);
+      CcdCallOnConditionKeep(CcdPROCESSOR_STILL_IDLE, (CcdCondFn) TaskStealBeginIdle, NULL);
+  }
 
   // random
   CrnInit();
@@ -288,6 +311,8 @@ void CmiNumberHandlerEx(int n, CmiHandlerEx h, void *userPtr) {
 
 void CmiPushPE(int destPE, int messageSize, void *msg) {
   int rank = CmiRankOf(destPE);
+  // printf("in cmipushpe: myPe: %d, destPe: %d, nodeSize: %d\n", CmiMyPe(), destPE,
+  //       Cmi_mynodesize);
   CmiAssertMsg(
       rank >= 0 && rank < Cmi_mynodesize,
       "CmiPushPE(myPe: %d, destPe: %d, nodeSize: %d): rank out of range",
@@ -354,6 +379,7 @@ void CmiSyncSendAndFree(int destPE, int messageSize, void *msg) {
   }
 
   if (CmiMyNode() == destNode) {
+
     CmiPushPE(destPE, messageSize, msg);
   } else {
     comm_backend::issueAm(destNode, msg, messageSize, comm_backend::MR_NULL,
@@ -424,6 +450,14 @@ void CmiExitHandler(void *msg) {
   if (status == 1)
     abort();
 
+  CsdExitScheduler();
+}
+
+// this will only stop the program on pe1, so it will exit the program if its +pe 1 and hang if it is +pe > 1
+void CmiUndefinedHandler(void* msg) {
+  (void)msg;
+
+  CmiPrintf("Possible undefined handler called. Please check to see if you've populated the handlerId field of your message.\n");
   CsdExitScheduler();
 }
 
@@ -974,3 +1008,139 @@ void StopInteropScheduler()
 {
   CpvAccess(interopExitFlag) = 1;
 }
+
+//Task Queue Functions/Definitions 
+void CmiSyncTaskQSend(int destPE, int messageSize, void *msg) {
+  char *copymsg = (char *)CmiAlloc(messageSize);
+  std::memcpy(copymsg, msg,
+              messageSize); // optionally avoid memcpy and block instead
+  
+  CmiSyncTaskQSendAndFree(destPE, messageSize, copymsg);
+}
+
+void CmiSyncTaskQSendAndFree(int destPE, int messageSize, void *msg) {
+  int destindex = CmiRankOf(destPE);
+  TaskQueue* dest_taskq = (TaskQueue*)(Cmi_taskqueues[destindex]);
+  if (dest_taskq == NULL) {
+      CmiFree(msg);
+      return;
+  }
+
+  TaskQueuePush(dest_taskq, msg);
+  return;
+}
+
+// Function to create a new TaskQueue and initialize its members
+TaskQueue* TaskQueueCreate() {
+  TaskQueue* taskqueue = (TaskQueue*)malloc(sizeof(TaskQueue));
+  taskqueue->head = 0; 
+  taskqueue->tail = 0; 
+  for (int i = 0; i < TASKQUEUE_SIZE; i++) {
+      taskqueue->data[i] = NULL;
+  }
+  return taskqueue; 
+}
+
+// Function to push a task onto the TaskQueue
+void TaskQueuePush(TaskQueue* queue, void* data) {
+   // compute estimated size 
+   //probably not thread safe, so that's why its estimated size?
+   taskq_idx head = queue->head; 
+   taskq_idx tail = queue->tail; 
+   size_t estimated_size = std::abs(tail - head);
+   if (estimated_size > TASKQUEUE_SIZE - (2 * CmiMyNodeSize())) {
+    CmiPrintf("tail: %lu, head: %lu\n", tail, head);
+    CmiAbort("TaskQueuePush: TaskQueue is approaching full. Estimated size: %lu, threshold: %lu \n", estimated_size, TASKQUEUE_SIZE - (2 * CmiMyNodeSize()));
+   }
+
+   queue->data[queue->tail % TASKQUEUE_SIZE] = data; 
+   CmiMemoryWriteFence(); //makes sure the data is fully written before updating the tail pointer
+   queue->tail++; 
+}
+
+// Function to pop a task from the TaskQueue. Victims pop from the tail 
+void* TaskQueuePop(TaskQueue* queue) {
+   queue->tail = queue->tail - 1; 
+   CmiMemoryWriteFence();
+   taskq_idx head = queue->head;
+   taskq_idx tail = queue->tail; 
+   if (tail > head) { // there are more than two tasks in the queue, so it is safe to pop a task from the queue.
+      return queue->data[tail % TASKQUEUE_SIZE];
+   }
+
+   if (tail < head) { // The taskqueue is empty and the last task has been stolen by a thief.
+       queue->tail = head; // reset the tail pointer to the head pointer
+       return NULL;
+   }
+
+   // head==tail case: there is only one task so thieves and victim can try to obtain this task simultaneously.
+   queue->tail = head + 1;
+   if (!__sync_bool_compare_and_swap(&(queue->head), head, head+1)) { // Check whether the last task has already stolen.
+       return NULL;
+   }
+   return queue->data[tail % TASKQUEUE_SIZE];
+}
+
+// Function to steal a task from another TaskQueue. Other PEs/Threads steal from the head
+void* TaskQueueSteal(TaskQueue* queue) {
+  if (queue == NULL) {
+    return NULL; 
+  }
+
+  taskq_idx head, tail; 
+  while (1) {
+      head = queue->head;
+      tail = queue->tail;
+      if (head >= tail) { 
+          // The queue is empty
+          // or the last element has been stolen by other thieves 
+          // or popped by the victim.
+          return NULL;
+      }
+
+      if (!__sync_bool_compare_and_swap(&(queue->head), head, head+1)) { // Check whether the task this thief is trying to steal is still in the queue and not stolen by the other thieves.
+          continue;
+      } 
+      if (head < 0) {
+        return NULL; 
+      }
+      return queue->data[head % TASKQUEUE_SIZE];
+  }
+}
+
+// Function to destroy the TaskQueue and free its memory
+void TaskQueueDestroy(TaskQueue* queue) {
+  if (queue != NULL) {
+      free(queue);
+      queue = NULL; 
+  }
+}
+
+void StealTask() {
+    // start up timer if trace is enabled 
+    //steal from a random PE on the same node
+    int random_rank = CrnRand() % (CmiMyNodeSize()-1);
+    if (random_rank == CmiMyRank()) {
+        random_rank++; 
+        if (random_rank >= CmiMyNodeSize()) {
+            random_rank = 0; // wrap around if our random_selected node is the same as our own 
+                              // and we are the last PE on our node
+        }
+    }
+    if (Cmi_taskqueues[random_rank] != NULL) {
+      void* msg = TaskQueueSteal((TaskQueue*)(Cmi_taskqueues[random_rank]));
+      if (msg != NULL && Cmi_taskqueues[Cmi_myrank] != NULL) {
+          TaskQueuePush((TaskQueue*)(Cmi_taskqueues[Cmi_myrank]), msg);
+      }
+    }
+}
+  
+  // this function is passed into CcdCallOnConditionKeep 
+  void TaskStealBeginIdle() {
+      // can discuss whether we need to add the isHelper csv variable that is in old converse. 
+      // not going to add it for now, because it's turned/left on by default in old converse 
+      if (CmiMyNodeSize() > 1) {
+          StealTask();
+      }
+  }
+  

@@ -35,6 +35,7 @@ void CmiNodeBcastHandler(void *msg);
 void CmiExitHandler(void *msg);
 void CmiGroupHandler(void *msg);
 void CmiReduceHandler(void *msg);
+void CmiUndefinedHandler(void *msg);
 
 typedef struct HandlerInfo {
   union{
@@ -87,9 +88,6 @@ extern void CmiInitHwlocTopology(void);
 extern int CmiSetCPUAffinity(int);
 
 // REDUCTION RELATED FUNCTIONS/DEFINITIONS
-
-#define CMI_REDUCTION_ID_MULTIPLIER 4
-
 using CmiReductionID =
     decltype(CmiMessageHeader::collectiveMetaInfo); // needs to match header
 using CmiBroadcastSource =
@@ -171,5 +169,61 @@ void CmiSetRedID(void *msg, CmiReductionID redID);
 // helpers for broadcast
 void CmiSetBcastSource(void *msg, CmiBroadcastSource source);
 CmiBroadcastSource CmiGetBcastSource(void *msg);
+
+
+// TASK QUEUE RELATED FUNCTIONS/DEFINITIONS
+/**
+ * I think we should just abort if we see estimated queue size is more than (say) half of the max size. 
+ * I say half because thats a power of 2. But may be a small number will do. 
+ * Like estimatedSize > Maxsize - 2*numPEs.  (here estimated size is something like tail-head (or vice versa?). 
+ * And note not to use atomic etc. for accessing tail and head for this estimated size
+ */
+
+/**
+ * I suggest we increase the taskq size, document it (and maybe provide a build option or just instructions 
+ * for where to change it in the doc), and see if a warning (if not abort) is possible. 
+ * Note that the head and tail roll over (as 32 bit ints.. It probably should be unsigned int) 
+ * (and the actual index is calculated as (head % qsize). So the difference will be negative briefly 
+ * when the tail rolls over after going above MAXINT but head hasn’t yet.. but thats ok. 
+ * The purpose of the warning (or abort) is still reasonably served
+ */
+
+/**
+ * For later, we should consider unbounded queue. But it won’t be as efficient as this. 
+ * (one change I suggest in the current code is that queuesize be specified as a power of two 
+ * (by specifying the exponent), so there is no chance of someone changing it to a non power of 2, 
+ * and then changing the modulo operator to a bitmas
+ */
+#define TASKQUEUE_SIZE 2048 // in old converse it is 1024
+
+#ifdef CMK_SMP
+#define CmiMemoryWriteFence() __sync_synchronize() // Memory fence for SMP mode
+#else
+#define CmiMemoryWriteFence() // No-op if not in SMP mode
+#endif
+
+typedef int taskq_idx;
+
+typedef struct TaskQueueStruct {
+  taskq_idx head; // This pointer indicates the first task in the queue
+  taskq_idx tail; // The tail indicates the array element next to the last available task in the queue. So, if head == tail, the queue is empty
+  void *data[TASKQUEUE_SIZE];
+} TaskQueue;
+
+//CsvStaticDeclare(TaskQueue**, task_q);
+
+TaskQueue* TaskQueueCreate();
+void TaskQueuePush(TaskQueue* queue, void* data);
+void* TaskQueuePop(TaskQueue* queue);
+void* TaskQueueSteal(TaskQueue* queue);
+void TaskQueueDestroy(TaskQueue* queue);
+void TaskStealBeginIdle(void);
+
+void StealTask(void);
+// void CmiTaskQueueInit(void);
+
+
+extern ConverseQueue<void *> **Cmi_queues; // array of queue pointers
+extern TaskQueue** Cmi_taskqueues; 
 
 #endif
