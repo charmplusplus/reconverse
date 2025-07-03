@@ -888,8 +888,6 @@ enum ncpyFreeNcpyOpInfoMode {
     }                                                                          \
   } while (0)
 
-//#include "cmirdmautils.h"
-//#include "conv-rdma.h"
 
 extern void CsdSchedulePoll(void);
 
