@@ -909,5 +909,9 @@ extern int CmiOnCore(void);
 int CmiNumPhysicalNodes();
 int CmiGetFirstPeOnPhysicalNode(int node);
 
+static char *CopyMsg(char *msg, int len);
+void CmiForwardMsgToPeers(int size, char *msg);
+
+void LBTopoInit();
 
 #endif // CONVERSE_H
