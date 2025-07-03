@@ -210,6 +210,8 @@ void CthYield(void);
 
 void CthTraceResume(CthThread t);
 
+void CthSetEventInfo(CthThread t, int event, int srcPE);
+
 // Ctv functions
 
 CthCpvExtern(char *, CthData);
@@ -887,7 +889,7 @@ enum ncpyFreeNcpyOpInfoMode {
     }                                                                          \
   } while (0)
 
-#include "cmirdmautils.h"
-#include "conv-rdma.h"
+//#include "cmirdmautils.h"
+//#include "conv-rdma.h"
 
 #endif // CONVERSE_H
