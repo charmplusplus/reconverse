@@ -293,6 +293,7 @@ int CmiMyNodeSize();
 int CmiMyRank();
 int CmiNumPes();
 int CmiNumNodes();
+// FIXME
 #define CmiNumPhysicalNodes() CmiNumNodes()
 #define CmiPhysicalNodeID(node) (node)
 int CmiNodeOf(int pe);
@@ -891,5 +892,21 @@ enum ncpyFreeNcpyOpInfoMode {
 
 //#include "cmirdmautils.h"
 //#include "conv-rdma.h"
+
+extern void CsdSchedulePoll(void);
+
+// topology
+extern int CmiNumCores(void);
+extern int CmiCpuTopologyEnabled(void);
+extern int CmiPeOnSamePhysicalNode(int pe1, int pe2);
+extern int CmiNumPesOnPhysicalNode(int node);
+extern void CmiGetPesOnPhysicalNode(int node, int **pelist, int *num);
+extern int CmiPhysicalRank(int pe);
+extern void CmiInitCPUAffinity(char **argv);
+extern int CmiPrintCPUAffinity(void);
+extern int CmiSetCPUAffinity(int core);
+extern int CmiSetCPUAffinityLogical(int core);
+extern void CmiInitCPUTopology(char **argv);
+extern int CmiOnCore(void);
 
 #endif // CONVERSE_H
