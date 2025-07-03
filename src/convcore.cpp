@@ -593,9 +593,6 @@ void __CmiEnforceMsgHelper(const char *expr, const char *fileName, int lineNum,
 }
 
 // TODO: implememt
-void CmiInitCPUTopology(char **argv) {}
-
-// TODO: implememt
 void CmiInitCPUAffinity(char **argv) {}
 
 bool CmiGetIdle() { return idle_condition; }

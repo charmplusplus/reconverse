@@ -56,6 +56,8 @@ void CmiInitMemAffinity(char **argv) {
     CmiGetArgStringDesc(argv, "+mempol", &tmpstr, "define memory policy {bind, preferred or interleave} ");
 }
 
+skt_ip_t _skt_invalid_ip={{0}};
+
 skt_ip_t skt_my_ip(void)
 {
   char hostname[1000];

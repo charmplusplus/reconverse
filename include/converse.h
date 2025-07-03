@@ -294,14 +294,12 @@ int CmiMyRank();
 int CmiNumPes();
 int CmiNumNodes();
 // FIXME
-#define CmiNumPhysicalNodes() CmiNumNodes()
 #define CmiPhysicalNodeID(node) (node)
 int CmiNodeOf(int pe);
 int CmiRankOf(int pe);
 int CmiStopFlag();
 #define CmiNodeSize(n) (CmiMyNodeSize())
 int CmiNodeFirst(int node);
-#define CmiGetFirstPeOnPhysicalNode(i) CmiNodeFirst(i)
 
 // partitions (still needs to implement)
 #define CmiMyPartition() 0
@@ -906,7 +904,10 @@ extern void CmiInitCPUAffinity(char **argv);
 extern int CmiPrintCPUAffinity(void);
 extern int CmiSetCPUAffinity(int core);
 extern int CmiSetCPUAffinityLogical(int core);
-extern void CmiInitCPUTopology(char **argv);
 extern int CmiOnCore(void);
+
+int CmiNumPhysicalNodes();
+int CmiGetFirstPeOnPhysicalNode(int node);
+
 
 #endif // CONVERSE_H
