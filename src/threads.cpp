@@ -36,6 +36,9 @@ typedef struct CthThreadBase {
   int magic;     /* magic number for checking corruption */
   struct CthThreadListener *listener;
 
+  int eventID;
+  int srcPE;
+
 } CthThreadBase;
 
 struct CthThreadStruct {
@@ -476,3 +479,9 @@ void CthRegistered(size_t maxOffset) {
 
 /* possible hack? CW */
 char *CthGetData(CthThread t) { return B(t)->data; }
+
+void CthSetEventInfo(CthThread t, int event, int srcPE) 
+{
+  B(t)->eventID = event;
+  B(t)->srcPE = srcPE;
+}

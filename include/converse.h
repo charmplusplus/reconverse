@@ -210,6 +210,8 @@ void CthYield(void);
 
 void CthTraceResume(CthThread t);
 
+void CthSetEventInfo(CthThread t, int event, int srcPE);
+
 // Ctv functions
 
 CthCpvExtern(char *, CthData);
@@ -291,14 +293,14 @@ int CmiMyNodeSize();
 int CmiMyRank();
 int CmiNumPes();
 int CmiNumNodes();
-#define CmiNumPhysicalNodes() CmiNumNodes()
-#define CmiPhysicalNodeID(node) (node)
+// FIXME
+//#define CmiPhysicalNodeID(node) (node)
+extern int CmiPhysicalNodeID(int pe);
 int CmiNodeOf(int pe);
 int CmiRankOf(int pe);
 int CmiStopFlag();
 #define CmiNodeSize(n) (CmiMyNodeSize())
 int CmiNodeFirst(int node);
-#define CmiGetFirstPeOnPhysicalNode(i) CmiNodeFirst(i)
 
 // partitions (still needs to implement)
 #define CmiMyPartition() 0
@@ -887,5 +889,28 @@ enum ncpyFreeNcpyOpInfoMode {
     }                                                                          \
   } while (0)
 
+
+extern void CsdSchedulePoll(void);
+
+// topology
+extern int CmiNumCores(void);
+extern int CmiCpuTopologyEnabled(void);
+extern int CmiPeOnSamePhysicalNode(int pe1, int pe2);
+extern int CmiNumPesOnPhysicalNode(int node);
+extern void CmiGetPesOnPhysicalNode(int node, int **pelist, int *num);
+extern int CmiPhysicalRank(int pe);
+extern void CmiInitCPUAffinity(char **argv);
+extern int CmiPrintCPUAffinity(void);
+extern int CmiSetCPUAffinity(int core);
+extern int CmiSetCPUAffinityLogical(int core);
+extern int CmiOnCore(void);
+
+int CmiNumPhysicalNodes();
+int CmiGetFirstPeOnPhysicalNode(int node);
+
+static char *CopyMsg(char *msg, int len);
+void CmiForwardMsgToPeers(int size, char *msg);
+
+void LBTopoInit();
 
 #endif // CONVERSE_H

@@ -248,6 +248,10 @@ int CmiRankOf(int pe) { return pe % Cmi_mynodesize; }
 
 int CmiNodeFirst(int node) { return node * Cmi_mynodesize; }
 
+int CmiPhysicalNodeID(int pe) {
+  return CmiNodeOf(pe);
+}
+
 std::vector<CmiHandlerInfo> *CmiGetHandlerTable() {
   return CmiHandlerTable[CmiMyRank()];
 }
@@ -591,12 +595,6 @@ void __CmiEnforceMsgHelper(const char *expr, const char *fileName, int lineNum,
   CmiAbort("[%d] Assertion \"%s\" failed in file %s line %d.\n", CmiMyPe(),
            expr, fileName, lineNum);
 }
-
-// TODO: implememt
-void CmiInitCPUTopology(char **argv) {}
-
-// TODO: implememt
-void CmiInitCPUAffinity(char **argv) {}
 
 bool CmiGetIdle() { return idle_condition; }
 
@@ -974,3 +972,42 @@ void StopInteropScheduler()
 {
   CpvAccess(interopExitFlag) = 1;
 }
+
+static char *CopyMsg(char *msg, int len) {
+  char *copy = (char *)CmiAlloc(len);
+#if CMK_ERROR_CHECKING
+  if (!copy) {
+    CmiAbort("Error: out of memory in machine layer\n");
+  }
+#endif
+  memcpy(copy, msg, len);
+  return copy;
+}
+
+void CmiForwardMsgToPeers(int size, char *msg) {
+  /* FIXME: now it's just a flat p2p send!! When node size is large,
+   * it should also be sent in a tree
+   */
+
+  int exceptRank = CmiMyRank();
+  if (CMI_MSG_NOKEEP(msg)) {
+    for (int i = 0; i < exceptRank; i++) {
+      CmiReference(msg);
+      CmiPushPE(i, msg);
+    }
+    for (int i = exceptRank + 1; i < CmiMyNodeSize(); i++) {
+      CmiReference(msg);
+      CmiPushPE(i, msg);
+    }
+  } else {
+    for (int i = 0; i < exceptRank; i++) {
+      CmiPushPE(i, CopyMsg(msg, size));
+    }
+    for (int i = exceptRank + 1; i < CmiMyNodeSize(); i++) {
+      CmiPushPE(i, CopyMsg(msg, size));
+    }
+  }
+}
+
+// Since we are not implementing converse level seed balancers yet
+void LBTopoInit() {}
