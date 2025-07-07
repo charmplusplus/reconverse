@@ -294,7 +294,8 @@ int CmiMyRank();
 int CmiNumPes();
 int CmiNumNodes();
 // FIXME
-#define CmiPhysicalNodeID(node) (node)
+//#define CmiPhysicalNodeID(node) (node)
+extern int CmiPhysicalNodeID(int pe);
 int CmiNodeOf(int pe);
 int CmiRankOf(int pe);
 int CmiStopFlag();
