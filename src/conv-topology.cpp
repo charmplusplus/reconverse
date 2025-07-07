@@ -1,5 +1,9 @@
 #include "conv-topology.h"
 #include <sys/socket.h>
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
+#include <sched.h>
 #include <netinet/in.h> /* for sockaddr_in */
 #include <ifaddrs.h> /* for getifaddrs */
 #include <net/if.h> /* for IFF_RUNNING */
@@ -45,7 +49,9 @@
 // }
 
 static int affMsgsRecvd = 1;  // number of affinity messages received at PE0
+#if defined(CPU_OR)
 static cpu_set_t core_usage;  // used to record union of CPUs used by every PE in physical node
+#endif
 static int aff_is_set = 0;
 
 static std::atomic<bool> cpuPhyAffCheckDone{};
@@ -53,7 +59,9 @@ static int cpuPhyNodeAffinityRecvHandlerIdx;
 
 struct affMsg {
   char core[CmiMsgHeaderSizeBytes];
+  #if defined(CPU_OR)
   cpu_set_t affinity;
+  #endif
 };
 
 static void cpuPhyNodeAffinityRecvHandler(void *msg)
@@ -97,6 +105,7 @@ void CmiInitMemAffinity(char **argv) {
     CmiGetArgStringDesc(argv, "+mempol", &tmpstr, "define memory policy {bind, preferred or interleave} ");
 }
 
+#if defined(CPU_OR)
 int get_thread_affinity(cpu_set_t *cpuset) {
   CPU_ZERO(cpuset);
   if ((errno = pthread_getaffinity_np(pthread_self(), sizeof(cpu_set_t), cpuset))) {
@@ -105,13 +114,18 @@ int get_thread_affinity(cpu_set_t *cpuset) {
   }
   return 0;
 }
+#endif
 
+
+#if defined(CPU_OR)
 int get_affinity(cpu_set_t *cpuset) {
   return get_thread_affinity(cpuset);
 }
+#endif
 
 void CmiCheckAffinity(void)
 {
+  #if defined(CPU_OR)
   if (!CmiCpuTopologyEnabled()) return;  // only works if cpu topology enabled
 
   if (CmiNumPes() == 1)
@@ -161,6 +175,7 @@ void CmiCheckAffinity(void)
       }
     }
   }
+  #endif
 }
 
 skt_ip_t _skt_invalid_ip={{0}};
