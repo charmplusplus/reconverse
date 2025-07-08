@@ -549,7 +549,7 @@ double CmiInitTime(void)
 }
 
 int CmiTimerAbsolute() {
-  // Reconverse FIXME: THe purpose of this function is unclear
+  // Reconverse FIXME: The purpose of this function is unclear
   return 0;
 }
 
