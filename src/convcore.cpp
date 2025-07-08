@@ -543,6 +543,15 @@ double CmiWallTimer() { return getCurrentTime() - Cmi_startTime; }
 
 double CmiStartTimer() { return 0.0; }
 
+double CmiInitTime(void)
+{
+  return Cmi_startTime;
+}
+
+int CmiTimerAbsolute() {
+  return 0;
+}
+
 void CmiAbortHelper(const char *source, const char *message,
                     const char *suggestion, int tellDebugger,
                     int framesToSkip) {

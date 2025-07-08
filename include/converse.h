@@ -417,6 +417,8 @@ double getCurrentTime(void);
 double CmiWallTimer(void);
 #define CmiCpuTimer() CmiWallTimer()
 double CmiStartTimer(void);
+double CmiInitTime(void);
+int CmiTimerAbsolute(void);
 
 // rand functions that charm uses
 void CrnSrand(unsigned int);
@@ -912,5 +914,15 @@ static char *CopyMsg(char *msg, int len);
 void CmiForwardMsgToPeers(int size, char *msg);
 
 void LBTopoInit();
+
+extern "C" {
+
+  size_t CmiFwrite(const void *ptr, size_t size, size_t nmemb, FILE *f);
+  CmiInt8 CmiPwrite(int fd, const char *buf, size_t bytes, size_t offset);
+  int CmiOpen(const char *pathname, int flags, int mode);
+  FILE *CmiFopen(const char *path, const char *mode);
+  int CmiFclose(FILE *fp);
+
+}
 
 #endif // CONVERSE_H
