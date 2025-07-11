@@ -16,9 +16,8 @@ FetchContent_MakeAvailable(reconverse)
 # Temporary solution
 add_executable(standalone_broadcast broadcast.cpp)
 target_link_libraries(standalone_broadcast PRIVATE reconverse)
-# Eventually, we should be able to do the following
+# Switch to this once the first PR is merged into main
 # add_executable(broadcast broadcast.cpp)
 # target_link_libraries(broadcast PRIVATE reconverse::reconverse)
-
 # Optionally, add a test
-add_test(NAME standalone-broadcast COMMAND broadcast +pe 4)
+# add_test(NAME standalone-broadcast COMMAND broadcast +pe 4)
