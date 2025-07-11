@@ -16,3 +16,8 @@ add_subdirectory(reduction_node)
 add_subdirectory(cth)
 add_subdirectory(self_send)
 add_subdirectory(ctv)
+
+# Add a test that configures, builds, and runs standalone_project
+add_test(NAME standalone_project_build_and_test
+  COMMAND ${CMAKE_COMMAND} -P ${CMAKE_CURRENT_SOURCE_DIR}/run_standalone_test.cmake
+)
