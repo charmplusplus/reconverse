@@ -125,6 +125,8 @@ add_subdirectory(src)
 target_link_libraries(reconverse PUBLIC Threads::Threads ${HWLOC})
 
 if(NOT RECONVERSE_ROOT_PROJECT)
+  # This project is being fetched as a subproject by another CMake project.
+  # Define an alias to mimic find_package behavior and ensure consistent usage.
   add_library(reconverse::reconverse ALIAS reconverse)
 endif()
 

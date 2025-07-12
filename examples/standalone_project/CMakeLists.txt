@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.12)
-project(reconverse_project LANGUAGES CXX)
+project(reconverse_standalone_example LANGUAGES CXX)
  
 # Fetch Reconverse from GitHub
 # This is a CMake feature that allows you to download and build reconverse as part of your project.
