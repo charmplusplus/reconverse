@@ -27,11 +27,10 @@ if(NOT result EQUAL 0)
 endif()
 
 # Run tests in the standalone project
-# Enable this once the first PR is merged into main
-# execute_process(
-#   COMMAND ${CMAKE_CTEST_COMMAND} --test-dir "${STANDALONE_BINARY_DIR}" --output-on-failure --verbose
-#   RESULT_VARIABLE result
-# )
-# if(NOT result EQUAL 0)
-#   message(FATAL_ERROR "Tests failed in standalone_project")
-# endif()
+execute_process(
+  COMMAND ${CMAKE_CTEST_COMMAND} --test-dir "${STANDALONE_BINARY_DIR}" --output-on-failure --verbose
+  RESULT_VARIABLE result
+)
+if(NOT result EQUAL 0)
+  message(FATAL_ERROR "Tests failed in standalone_project")
+endif()
