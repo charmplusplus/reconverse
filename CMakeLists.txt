@@ -23,8 +23,16 @@ include(AddReconverse)
 
 option(BUILD_SHARED_LIBS "Build using shared libraries" OFF)
 
-option(RECONVERSE_BUILD_EXAMPLES "Build examples" ON)
-option(RECONVERSE_BUILD_TESTS "Build tests" ON)
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+  # This is the root project
+  set(RECONVERSE_ROOT_PROJECT ON)
+else()
+  # This is a subproject
+  set(RECONVERSE_ROOT_PROJECT OFF)
+endif()
+
+option(RECONVERSE_BUILD_EXAMPLES "Build examples" ${RECONVERSE_ROOT_PROJECT})
+option(RECONVERSE_BUILD_TESTS "Build tests" ${RECONVERSE_ROOT_PROJECT})
 
 option(RECONVERSE_TRY_ENABLE_COMM_LCI2 "whether to enable the LCIv2 backend" ON)
 option(RECONVERSE_AUTOFETCH_LCI2
@@ -115,6 +123,12 @@ set_target_properties(reconverse PROPERTIES CXX_STANDARD 17)
 add_subdirectory(include)
 add_subdirectory(src)
 target_link_libraries(reconverse PUBLIC Threads::Threads ${HWLOC})
+
+if(NOT RECONVERSE_ROOT_PROJECT)
+  # This project is being fetched as a subproject by another CMake project.
+  # Define an alias to mimic find_package behavior and ensure consistent usage.
+  add_library(reconverse::reconverse ALIAS reconverse)
+endif()
 
 # ##############################################################################
 # Add Subdirectories
