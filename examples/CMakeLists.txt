@@ -20,6 +20,5 @@ add_subdirectory(ctv)
 # Add a test that configures, builds, and runs standalone_project
 add_test(NAME standalone_project_build_and_test
   COMMAND ${CMAKE_COMMAND}
-    -DPROJECT_CURRENT_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
     -P ${CMAKE_CURRENT_SOURCE_DIR}/run_standalone_test.cmake
 )
