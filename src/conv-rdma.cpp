@@ -15,14 +15,11 @@ bool useCMAForZC;
 CpvExtern(std::vector<NcpyOperationInfo *>, newZCPupGets);
 static int zc_pup_handler_idx;
 
-// Methods required to keep the Nocopy Direct API functional on non-LRTS layers
-#if !CMK_USE_LRTS
 void CmiSetNcpyAckSize(int ackSize) {}
 
 void CmiForwardNodeBcastMsg(int size, char *msg) {}
 
 void CmiForwardProcBcastMsg(int size, char *msg) {}
-#endif
 
 /****************************** Zerocopy Direct API For non-RDMA layers
  * *****************************/
