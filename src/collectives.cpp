@@ -27,6 +27,7 @@ void collectiveInit(void) {
 
 /* Broadcast to everyone but the source pe. Source does not free. */
 void CmiSyncBroadcast(int size, void *msg) {
+    printf("[%d] CmiSyncBroadcast\n", CmiMyPe());
     int pe = CmiMyPe();
   
     CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
@@ -34,10 +35,17 @@ void CmiSyncBroadcast(int size, void *msg) {
   
   #ifdef SPANTREE
   #if SPANTREE ON
+    printf("[%d] Spanning tree option\n", CmiMyPe());
     CmiSetBcastSource(msg, pe); // used to skip the source
     header->swapHandlerId = header->handlerId;
     header->handlerId = Cmi_bcastHandler;
     CmiSyncSend(0, size, msg);
+  #else
+    for (int i = pe + 1; i < CmiNumPes(); i++)
+        CmiSyncSend(i, size, msg);
+  
+    for (int i = 0; i < pe; i++)
+      CmiSyncSend(i, size, msg);
   #endif
   #else
   
@@ -65,6 +73,9 @@ void CmiSyncBroadcast(int size, void *msg) {
   
     header->handlerId = Cmi_bcastHandler;
     CmiSyncSend(0, size, msg);
+  #else
+    for (int i = 0; i < CmiNumPes(); i++)
+      CmiSyncSend(i, size, msg);
   #endif
   #else
     for (int i = 0; i < CmiNumPes(); i++)
@@ -85,6 +96,7 @@ void CmiSyncBroadcast(int size, void *msg) {
   }
   
   void CmiSyncNodeBroadcast(unsigned int size, void *msg) {
+
     int node = CmiMyNode();
   
     CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
@@ -96,6 +108,13 @@ void CmiSyncBroadcast(int size, void *msg) {
     header->swapHandlerId = header->handlerId;
     header->handlerId = Cmi_nodeBcastHandler;
     CmiSyncNodeSend(0, size, msg);
+  #else
+  
+    for (int i = node + 1; i < CmiNumNodes(); i++)
+      CmiSyncNodeSend(i, size, msg);
+  
+    for (int i = 0; i < node; i++)
+      CmiSyncNodeSend(i, size, msg);
   #endif
   #else
   
@@ -122,6 +141,10 @@ void CmiSyncBroadcast(int size, void *msg) {
     header->swapHandlerId = header->handlerId;
     header->handlerId = Cmi_nodeBcastHandler;
     CmiSyncNodeSend(0, size, msg);
+  #else
+  
+    for (int i = 0; i < CmiNumNodes(); i++)
+      CmiSyncNodeSend(i, size, msg);
   #endif
   #else
   
