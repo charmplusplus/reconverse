@@ -38,6 +38,7 @@ void CmiSyncBroadcast(int size, void *msg) {
     header->swapHandlerId = header->handlerId;
     header->handlerId = Cmi_bcastHandler;
     CmiSyncSend(0, size, msg);
+  #endif
   #else
   
     for (int i = pe + 1; i < CmiNumPes(); i++)
@@ -45,7 +46,6 @@ void CmiSyncBroadcast(int size, void *msg) {
   
     for (int i = 0; i < pe; i++)
       CmiSyncSend(i, size, msg);
-  #endif
   #endif
   }
   
@@ -65,10 +65,10 @@ void CmiSyncBroadcast(int size, void *msg) {
   
     header->handlerId = Cmi_bcastHandler;
     CmiSyncSend(0, size, msg);
+  #endif
   #else
     for (int i = 0; i < CmiNumPes(); i++)
       CmiSyncSend(i, size, msg);
-  #endif
   #endif
   }
   
@@ -96,6 +96,7 @@ void CmiSyncBroadcast(int size, void *msg) {
     header->swapHandlerId = header->handlerId;
     header->handlerId = Cmi_nodeBcastHandler;
     CmiSyncNodeSend(0, size, msg);
+  #endif
   #else
   
     for (int i = node + 1; i < CmiNumNodes(); i++)
@@ -103,7 +104,6 @@ void CmiSyncBroadcast(int size, void *msg) {
   
     for (int i = 0; i < node; i++)
       CmiSyncNodeSend(i, size, msg);
-  #endif
   #endif
   }
   
@@ -122,11 +122,11 @@ void CmiSyncBroadcast(int size, void *msg) {
     header->swapHandlerId = header->handlerId;
     header->handlerId = Cmi_nodeBcastHandler;
     CmiSyncNodeSend(0, size, msg);
+  #endif
   #else
   
     for (int i = 0; i < CmiNumNodes(); i++)
       CmiSyncNodeSend(i, size, msg);
-  #endif
   #endif
   }
   
