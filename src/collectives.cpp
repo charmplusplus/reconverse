@@ -32,6 +32,7 @@ void CmiSyncBroadcast(int size, void *msg) {
     CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
     header->messageSize = size;
   
+  #ifdef SPANTREE
   #if SPANTREE ON
     CmiSetBcastSource(msg, pe); // used to skip the source
     header->swapHandlerId = header->handlerId;
@@ -45,6 +46,7 @@ void CmiSyncBroadcast(int size, void *msg) {
     for (int i = 0; i < pe; i++)
       CmiSyncSend(i, size, msg);
   #endif
+  #endif
   }
   
   void CmiSyncBroadcastAndFree(int size, void *msg) {
@@ -56,6 +58,7 @@ void CmiSyncBroadcast(int size, void *msg) {
     CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
     header->messageSize = size;
   
+  #ifdef SPANTREE
   #if SPANTREE ON
     CmiSetBcastSource(msg, -1); // don't skip the source
     header->swapHandlerId = header->handlerId;
@@ -65,6 +68,7 @@ void CmiSyncBroadcast(int size, void *msg) {
   #else
     for (int i = 0; i < CmiNumPes(); i++)
       CmiSyncSend(i, size, msg);
+  #endif
   #endif
   }
   
@@ -86,6 +90,7 @@ void CmiSyncBroadcast(int size, void *msg) {
     CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
     header->messageSize = size;
   
+  #ifdef SPANTREE
   #if SPANTREE ON
     CmiSetBcastSource(msg, node); // used to skip the source
     header->swapHandlerId = header->handlerId;
@@ -99,6 +104,7 @@ void CmiSyncBroadcast(int size, void *msg) {
     for (int i = 0; i < node; i++)
       CmiSyncNodeSend(i, size, msg);
   #endif
+  #endif
   }
   
   void CmiSyncNodeBroadcastAndFree(unsigned int size, void *msg) {
@@ -110,6 +116,7 @@ void CmiSyncBroadcast(int size, void *msg) {
     CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
     header->messageSize = size;
   
+  #ifdef SPANTREE
   #if SPANTREE ON
     CmiSetBcastSource(msg, -1); // don't skip the source
     header->swapHandlerId = header->handlerId;
@@ -119,6 +126,7 @@ void CmiSyncBroadcast(int size, void *msg) {
   
     for (int i = 0; i < CmiNumNodes(); i++)
       CmiSyncNodeSend(i, size, msg);
+  #endif
   #endif
   }
   
