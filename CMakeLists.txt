@@ -41,7 +41,7 @@ set(RECONVERSE_AUTOFETCH_LCI2_TAG
     "9022682556e03a240566ea9f0b66587e455fe675"
     CACHE STRING "The tag to fetch for LCIv2") # master branch as of 2025-06-13
 
-option(SPANTREE "whether to enable spanning tree collectives" ON)
+option(SPANTREE "whether to enable spanning tree collectives" OFF) #should turn this on once charm issues fixed
 option(CMK_SMP "whether to enable SMP support" ON)
 
 option(RECONVERSE_ATOMIC_QUEUE "whether to use atomic queue" ON)
