@@ -37,9 +37,9 @@ std::atomic<int> _cleanUp = 0;
 void *memory_stack_top;
 CmiNodeLock _smp_mutex;
 CpvDeclare(std::vector<NcpyOperationInfo *>, newZCPupGets);
-CpvCExtern(int,interopExitFlag);
-CpvDeclare(int,interopExitFlag);
-std::atomic<int> ckExitComplete {0};
+CpvCExtern(int, interopExitFlag);
+CpvDeclare(int, interopExitFlag);
+std::atomic<int> ckExitComplete{0};
 int quietMode;
 int quietModeRequested;
 int userDrivenMode;
@@ -80,7 +80,12 @@ void CommRemoteHandlerNode(comm_backend::Status status) {
 }
 
 void CmiCallHandler(int handler, void *msg) {
-  CmiGetHandlerTable()->at(handler).hdlr(msg);
+  CmiHandlerInfo h = CmiGetHandlerTable()->at(handler);
+  if (h.userPtr) {
+    h.exhdlr(msg, h.userPtr);
+  } else {
+    h.hdlr(msg);
+  }
 }
 
 void converseRunPe(int rank) {
@@ -105,6 +110,7 @@ void converseRunPe(int rank) {
 
   // call initial function and start scheduler
   Cmi_startfn(Cmi_argc, Cmi_argv);
+  CmiPrintf("[%d] Run Pe Starting Again\n", rank);
   CsdScheduler();
 }
 
@@ -248,9 +254,7 @@ int CmiRankOf(int pe) { return pe % Cmi_mynodesize; }
 
 int CmiNodeFirst(int node) { return node * Cmi_mynodesize; }
 
-int CmiPhysicalNodeID(int pe) {
-  return CmiNodeOf(pe);
-}
+int CmiPhysicalNodeID(int pe) { return CmiNodeOf(pe); }
 
 std::vector<CmiHandlerInfo> *CmiGetHandlerTable() {
   return CmiHandlerTable[CmiMyRank()];
@@ -292,6 +296,8 @@ void CmiNumberHandlerEx(int n, CmiHandlerEx h, void *userPtr) {
 
 void CmiPushPE(int destPE, int messageSize, void *msg) {
   int rank = CmiRankOf(destPE);
+  CmiPrintf("[%d] Sending to pe %d with message size %d\n", CmiMyPe(), destPE,
+            messageSize);
   CmiAssertMsg(
       rank >= 0 && rank < Cmi_mynodesize,
       "CmiPushPE(myPe: %d, destPe: %d, nodeSize: %d): rank out of range",
@@ -361,8 +367,8 @@ void CmiSyncSendAndFree(int destPE, int messageSize, void *msg) {
     CmiPushPE(destPE, messageSize, msg);
   } else {
     comm_backend::issueAm(destNode, msg, messageSize, comm_backend::MR_NULL,
-                          CommLocalHandler,
-                          AmHandlerPE, nullptr); // Commlocalhandler will free msg
+                          CommLocalHandler, AmHandlerPE,
+                          nullptr); // Commlocalhandler will free msg
   }
 }
 
@@ -516,6 +522,9 @@ void CmiHandleMessage(void *msg) {
   int handler = header->handlerId;
   int size = header->messageSize;
 
+  CmiPrintf("[%d]: Handling message handler:%d with size:%d\n", CmiMyPe(),
+            handler, size);
+
   // call handler (takes in pointer to whole message)
 
   CmiCallHandler(handler, msg);
@@ -543,10 +552,7 @@ double CmiWallTimer() { return getCurrentTime() - Cmi_startTime; }
 
 double CmiStartTimer() { return 0.0; }
 
-double CmiInitTime(void)
-{
-  return Cmi_startTime;
-}
+double CmiInitTime(void) { return Cmi_startTime; }
 
 int CmiTimerAbsolute() {
   // Reconverse FIXME: The purpose of this function is unclear
@@ -967,21 +973,17 @@ void CmiUnlock(CmiNodeLock lock) { pthread_mutex_unlock(lock); }
 
 int CmiTryLock(CmiNodeLock lock) { return pthread_mutex_trylock(lock); }
 
-//empty function to satisfy charm
-void CommunicationServerThread(int sleepTime) { }
+// empty function to satisfy charm
+void CommunicationServerThread(int sleepTime) {}
 
-//start and stop interop schedulers
+// start and stop interop schedulers
 
-void StartInteropScheduler()
-{
+void StartInteropScheduler() {
   CsdScheduler(-1);
   CmiNodeAllBarrier();
 }
 
-void StopInteropScheduler()
-{
-  CpvAccess(interopExitFlag) = 1;
-}
+void StopInteropScheduler() { CpvAccess(interopExitFlag) = 1; }
 
 static char *CopyMsg(char *msg, int len) {
   char *copy = (char *)CmiAlloc(len);
@@ -1000,6 +1002,7 @@ void CmiForwardMsgToPeers(int size, char *msg) {
    */
 
   int exceptRank = CmiMyRank();
+  CmiPrintf("[%d] Rank is %d\n", CmiMyPe(), exceptRank);
   if (CMI_MSG_NOKEEP(msg)) {
     for (int i = 0; i < exceptRank; i++) {
       CmiReference(msg);
