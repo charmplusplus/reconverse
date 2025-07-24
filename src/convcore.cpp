@@ -110,7 +110,6 @@ void converseRunPe(int rank) {
 
   // call initial function and start scheduler
   Cmi_startfn(Cmi_argc, Cmi_argv);
-  CmiPrintf("[%d] Run Pe Starting Again\n", rank);
   CsdScheduler();
 }
 
@@ -296,8 +295,6 @@ void CmiNumberHandlerEx(int n, CmiHandlerEx h, void *userPtr) {
 
 void CmiPushPE(int destPE, int messageSize, void *msg) {
   int rank = CmiRankOf(destPE);
-  CmiPrintf("[%d] Sending to pe %d with message size %d\n", CmiMyPe(), destPE,
-            messageSize);
   CmiAssertMsg(
       rank >= 0 && rank < Cmi_mynodesize,
       "CmiPushPE(myPe: %d, destPe: %d, nodeSize: %d): rank out of range",
@@ -521,9 +518,6 @@ void CmiHandleMessage(void *msg) {
   CmiMessageHeader *header = (CmiMessageHeader *)msg;
   int handler = header->handlerId;
   int size = header->messageSize;
-
-  CmiPrintf("[%d]: Handling message handler:%d with size:%d\n", CmiMyPe(),
-            handler, size);
 
   // call handler (takes in pointer to whole message)
 
@@ -1002,7 +996,6 @@ void CmiForwardMsgToPeers(int size, char *msg) {
    */
 
   int exceptRank = CmiMyRank();
-  CmiPrintf("[%d] Rank is %d\n", CmiMyPe(), exceptRank);
   if (CMI_MSG_NOKEEP(msg)) {
     for (int i = 0; i < exceptRank; i++) {
       CmiReference(msg);
