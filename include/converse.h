@@ -374,6 +374,7 @@ void CmiNodeAllBarrier();
 void CsdExitScheduler();
 int CsdScheduler(int maxmsgs);
 void CsdEnqueueGeneral(void *Message, int strategy, int priobits, int *prioptr);
+void CsdNodeEnqueueGeneral(void *Message, int strategy, int priobits, unsigned int *prioptr);
 
 void CmiAssignOnce(int *variable, int value);
 
