@@ -144,4 +144,8 @@ void CsdEnqueueGeneral(void *Message, int strategy, int priobits, int *prioptr){
   CmiPushPE(CmiMyPe(), sizeof(Message), Message);
 }
 
+void CsdNodeEnqueueGeneral(void *Message, int strategy, int priobits, unsigned int *prioptr){
+  CmiGetNodeQueue()->push(Message);
+}
+
 // TODO: implement CsdEnqueue/Dequeue (why are these necessary?)
