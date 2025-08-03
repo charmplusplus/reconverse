@@ -10,19 +10,17 @@ struct localCallbackArgs {
 };
 
 void localCallback(lci::status_t status) {
-  auto args = reinterpret_cast<localCallbackArgs *>(status.user_context);
+  auto args = reinterpret_cast<localCallbackArgs *>(status.get_user_context());
   auto handler = args->handler;
   auto user_context = args->user_context;
   delete args;
-  lci::buffer_t buffer = status.data.get_buffer();
-  handler({buffer.base, buffer.size, user_context});
+  handler({status.get_buffer(), status.get_size(), user_context});
 }
 
 void remoteCallback(lci::status_t status) {
-  auto am_handler = static_cast<AmHandler>(status.tag);
+  auto am_handler = static_cast<AmHandler>(status.get_tag());
   auto handler = g_handlers[am_handler];
-  lci::buffer_t buffer = status.data.get_buffer();
-  handler({buffer.base, buffer.size, nullptr});
+  handler({status.get_buffer(), status.get_size(), nullptr});
 }
 
 void CommBackendLCI2::init(int *argc, char ***argv) {
@@ -60,8 +58,8 @@ void CommBackendLCI2::issueAm(int rank, const void *local_buf, size_t size, mr_t
                  .tag(remoteComp)
                  .user_context(args)();
     lci::progress();
-  } while (status.error.is_retry());
-  if (status.error.is_done()) {
+  } while (status.is_retry());
+  if (status.is_done()) {
     localComp({local_buf, size, user_context});
     delete args;
   }
@@ -78,8 +76,8 @@ void CommBackendLCI2::issueRget(int rank, const void *local_buf, size_t size,
                  .mr(local_mr)
                  .user_context(args)();
     lci::progress();
-  } while (status.error.is_retry());
-  if (status.error.is_done()) {
+  } while (status.is_retry());
+  if (status.is_done()) {
     localComp({local_buf, size, user_context});
     delete args;
   }
@@ -96,8 +94,8 @@ void CommBackendLCI2::issueRput(int rank, const void *local_buf, size_t size,
                  .mr(local_mr)
                  .user_context(args)();
     lci::progress();
-  } while (status.error.is_retry());
-  if (status.error.is_done()) {
+  } while (status.is_retry());
+  if (status.is_done()) {
     localComp({local_buf, size, user_context});
     delete args;
   }
