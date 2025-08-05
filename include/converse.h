@@ -562,6 +562,7 @@ int CmiGetArgFlagDesc(char **argv, const char *arg, const char *desc);
 void CmiDeleteArgs(char **argv, int k);
 int CmiGetArgc(char **argv);
 char **CmiCopyArgs(char **argv);
+void CmiFreeArgs(char **argv);
 int CmiArgGivingUsage(void);
 void CmiDeprecateArgInt(char **argv, const char *arg, const char *desc,
                         const char *warning);

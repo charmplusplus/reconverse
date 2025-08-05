@@ -6,7 +6,7 @@ CommBackendBase *gCommBackend = nullptr;
 int gNumNodes = 1;
 int gMyNodeID = 0;
 
-void init(int *argc, char ***argv) {
+void init(char **argv) {
 #ifdef RECONVERSE_ENABLE_COMM_LCI2
   gCommBackend = new CommBackendLCI2();
 #endif
@@ -14,7 +14,7 @@ void init(int *argc, char ***argv) {
     return;
   }
 
-  gCommBackend->init(argc, argv);
+  gCommBackend->init(argv);
   gMyNodeID = gCommBackend->getMyNodeId();
   gNumNodes = gCommBackend->getNumNodes();
 }

@@ -11,7 +11,7 @@ namespace comm_backend {
 
 class CommBackendBase {
 public:
-  virtual void init(int *argc, char ***argv) = 0;
+  virtual void init(char **argv) = 0;
   virtual void exit() = 0;
   virtual int getMyNodeId() = 0;
   virtual int getNumNodes() = 0;

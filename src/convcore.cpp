@@ -14,9 +14,7 @@
 #include <vector>
 
 // GLOBALS
-int Cmi_argc;
 static char **Cmi_argv;
-char **Cmi_argvcopy;
 int Cmi_npes;   // total number of PE's across the entire system
 int Cmi_nranks; // TODO: this isnt used in old converse, but we need to know how
                 // many PEs are on our node?
@@ -52,7 +50,7 @@ static ConverseQueue<void *> **Cmi_queues; // array of queue pointers
 
 // PE LOCALS
 thread_local int Cmi_myrank;
-thread_local CmiState *Cmi_state;
+thread_local CmiState Cmi_state;
 thread_local bool idle_condition;
 thread_local double idle_time;
 
@@ -89,11 +87,14 @@ void CmiCallHandler(int handler, void *msg) {
 }
 
 void converseRunPe(int rank) {
+  char **CmiMyArgv;
+  CmiMyArgv = CmiCopyArgs(Cmi_argv);
+
   // init state
   CmiInitState(rank);
 
   // init things like cld module, ccs, etc
-  CldModuleInit(Cmi_argv);
+  CldModuleInit(CmiMyArgv);
 #ifdef SET_CPU_AFFINITY
   CmiSetCPUAffinity(rank);
 #endif
@@ -109,8 +110,11 @@ void converseRunPe(int rank) {
   CthSchedInit();
 
   // call initial function and start scheduler
-  Cmi_startfn(Cmi_argc, Cmi_argv);
+  Cmi_startfn(CmiGetArgc(CmiMyArgv), CmiMyArgv);
   CsdScheduler();
+
+  // free args
+  CmiFreeArgs(CmiMyArgv);
 }
 
 void CmiStartThreads() {
@@ -153,17 +157,10 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
 
   Cmi_startTime = getCurrentTime();
 
-  Cmi_npes = atoi(argv[2]);
-  // int plusPSet = CmiGetArgInt(argv,"+pe",&Cmi_npes);
+  Cmi_npes = 1; // default to 1
+  CmiGetArgInt(argv, "+pe", &Cmi_npes);
 
-  Cmi_argc = argc - 2; // TODO: Cmi_argc doesn't include runtime args?
-  Cmi_argv = (char **)malloc(sizeof(char *) * (argc + 1));
-  int i;
-  for (i = 2; i <= argc; i++)
-    Cmi_argv[i - 2] = argv[i];
-
-  Cmi_argvcopy = CmiCopyArgs(argv);
-  comm_backend::init(&argc, &Cmi_argv);
+  comm_backend::init(argv);
   Cmi_mynode = comm_backend::getMyNodeId();
   Cmi_numnodes = comm_backend::getNumNodes();
   if (Cmi_mynode == 0)
@@ -190,23 +187,21 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
   CmiInitHwlocTopology();
 #endif
 
+  Cmi_argv = argv;
   Cmi_startfn = fn;
   CharmLibInterOperate = 0;
 
   CmiStartThreads();
-  free(Cmi_argv);
 }
 
 // CMI STATE
-CmiState *CmiGetState(void) { return Cmi_state; };
+CmiState *CmiGetState(void) { return &Cmi_state; };
 
 void CmiInitState(int rank) {
   // allocate state
-  Cmi_state = new CmiState;
-  Cmi_state->pe = Cmi_nodestart + rank;
-  Cmi_state->rank = rank;
-  Cmi_state->node = Cmi_mynode;
-  Cmi_state->stopFlag = 0;
+  Cmi_state.pe = Cmi_nodestart + rank;
+  Cmi_state.rank = rank;
+  Cmi_state.node = Cmi_mynode;
 
   Cmi_myrank = rank;
 
@@ -737,6 +732,11 @@ char **CmiCopyArgs(char **argv) {
   for (i = 0; i <= argc; i++)
     ret[i] = argv[i];
   return ret;
+}
+
+/** Free the copied argv array*/
+void CmiFreeArgs(char **argv) {
+	free(argv);
 }
 
 /** Delete the first k argument from the given list, shifting

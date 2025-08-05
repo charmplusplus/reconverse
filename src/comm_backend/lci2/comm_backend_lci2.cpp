@@ -25,7 +25,7 @@ void remoteCallback(lci::status_t status) {
   handler({buffer.base, buffer.size, nullptr});
 }
 
-void CommBackendLCI2::init(int *argc, char ***argv) {
+void CommBackendLCI2::init(char **argv) {
   lci::g_runtime_init();
   m_local_comp = lci::alloc_handler(localCallback);
   m_remote_comp = lci::alloc_handler(remoteCallback);
