@@ -927,4 +927,6 @@ extern "C" {
 
 }
 
+void registerTraceInit(void (*fn)(char **argv));
+
 #endif // CONVERSE_H

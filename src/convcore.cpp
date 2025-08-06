@@ -43,6 +43,8 @@ int quietModeRequested;
 int userDrivenMode;
 int _replaySystem = 0;
 
+void (*CmiTraceFn)(char **argv) = nullptr;
+
 void CldModuleInit(char **);
 
 // PE LOCALS that need global access sometimes
@@ -62,6 +64,10 @@ int Cmi_exitHandler;
 
 comm_backend::AmHandler AmHandlerPE;
 comm_backend::AmHandler AmHandlerNode;
+
+void registerTraceInit(void (*fn)(char **argv)) {
+  CmiTraceFn = fn;
+}
 
 void CommLocalHandler(comm_backend::Status status) {
   CmiFree(const_cast<void *>(status.local_buf));
@@ -108,6 +114,9 @@ void converseRunPe(int rank) {
 
   CthInit(NULL);
   CthSchedInit();
+
+  if (CmiTraceFn)
+    CmiTraceFn(Cmi_argv);
 
   // call initial function and start scheduler
   Cmi_startfn(CmiGetArgc(CmiMyArgv), CmiMyArgv);

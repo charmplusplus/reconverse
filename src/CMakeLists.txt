@@ -6,7 +6,7 @@ target_sources(reconverse PRIVATE conv-conds.cpp convcore.cpp random.cpp
 target_include_directories(
   reconverse PRIVATE $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}>
                      $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
-
+                     
 add_subdirectory(comm_backend)
 
 # configure needs to be called after add_subdirectory(comm_backend)
