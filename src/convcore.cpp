@@ -124,6 +124,9 @@ void converseRunPe(int rank) {
   Cmi_startfn(CmiGetArgc(CmiMyArgv), CmiMyArgv);
   CsdScheduler();
 
+  // Wait for all PEs on this node to finish
+  CmiNodeBarrier();
+
   // Finalize comm_backend
   comm_backend::exitThread();
   // free args
@@ -412,14 +415,17 @@ int CmiRegisterHandlerEx(CmiHandlerEx h, void *userPtr) {
 
 void CmiNodeBarrier(void) {
   static Barrier nodeBarrier(CmiMyNodeSize());
-  nodeBarrier.wait(); // TODO: this may be broken...
+  // nodeBarrier.wait(); // TODO: this may be broken...
+  int64_t ticket = nodeBarrier.arrive();
+  while (!nodeBarrier.test_ticket(ticket)) {
+    comm_backend::progress();
+  }
 }
 
 // TODO: in the original converse, this variant blocks comm thread as well.
 // CmiNodeBarrier does not.
 void CmiNodeAllBarrier() {
-  static Barrier nodeBarrier(CmiMyNodeSize());
-  nodeBarrier.wait();
+  CmiNodeBarrier();
 }
 
 void CmiAssignOnce(int *variable, int value) {

@@ -65,8 +65,10 @@ void CommBackendLCI2::initThread(int thread_id, int num_threads) {
     return;
   }
   detail::g_thread_context.thread_id = thread_id;
-  int ndevices_per_thread = (m_devices.size() + num_threads - 1) / num_threads;
-  int device_id = thread_id / ndevices_per_thread;
+  int nthreads_per_device =
+      (num_threads + m_devices.size() - 1) / m_devices.size();
+  int device_id = thread_id / nthreads_per_device;
+  CmiAssert(device_id < m_devices.size());
   detail::g_thread_context.tls_device = m_devices[device_id];
 }
 
@@ -144,18 +146,34 @@ void CommBackendLCI2::issueRput(int rank, const void *local_buf, size_t size,
 }
 
 bool CommBackendLCI2::progress(void) {
-  // First make progress on the thread-local device
   if (!detail::g_thread_context.tls_device.is_empty()) {
+    // If we are assigned a thread-local device, make progress on it.
     auto ret = lci::progress_x().device(detail::g_thread_context.tls_device)();
     if (ret.is_done())
       return true;
+  } else if (!m_devices.empty()) {
+    // There are thread-local devices but we are not assigned one.
+    // We are the main thread. Make progress on all devices.
+    for (auto &device : m_devices) {
+      auto ret = lci::progress_x().device(device)();
+      if (ret.is_done())
+        return true;
+    }
   }
   // Then make progress on the global default device
   auto ret = lci::progress();
   return ret.is_done();
 }
 
-void CommBackendLCI2::barrier(void) { lci::barrier(); }
+void CommBackendLCI2::barrier(void) {
+  // nonblocking barrier
+  lci::comp_t comp = lci::alloc_sync();
+  lci::barrier_x().comp(comp)();
+  while (!lci::sync_test(comp, nullptr)) {
+    progress();
+  }
+  lci::free_comp(&comp);
+}
 
 mr_t CommBackendLCI2::registerMemory(void *addr, size_t size) {
   auto mr = lci::register_memory(addr, size);
