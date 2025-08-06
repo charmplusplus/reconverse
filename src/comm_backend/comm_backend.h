@@ -24,6 +24,15 @@ void init(char **argv);
  */
 void exit();
 /**
+ * @brief Initialize the communication backend for a new thread. Not
+ * thread-safe.
+ */
+void initThread(int thread_id, int num_threads);
+/**
+ * @brief Finalize the communication backend for a thread. Not thread-safe.
+ */
+void exitThread();
+/**
  * @brief Get the node ID of the current process. Thread-safe.
  */
 int getMyNodeId();

@@ -16,6 +16,8 @@ class CommBackendLCI2 : public CommBackendBase {
 public:
   void init(char **argv) override;
   void exit() override;
+  void initThread(int thread_id, int num_threads) override;
+  void exitThread() override;
   int getMyNodeId() override;
   int getNumNodes() override;
   AmHandler registerAmHandler(CompHandler handler) override;
@@ -34,6 +36,12 @@ public:
   void deregisterMemory(mr_t mr) override;
 
 private:
+  struct threadContext {
+    int thread_id;
+    lci::device_t device;
+  };
+
+  std::vector<lci::device_t> m_devices;
   lci::comp_t m_local_comp;
   lci::comp_t m_remote_comp;
   lci::rcomp_t m_rcomp;

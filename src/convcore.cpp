@@ -98,6 +98,8 @@ void converseRunPe(int rank) {
 
   // init state
   CmiInitState(rank);
+  // init comm_backend
+  comm_backend::initThread(rank, CmiMyNodeSize());
 
   // init things like cld module, ccs, etc
   CldModuleInit(CmiMyArgv);
@@ -122,6 +124,8 @@ void converseRunPe(int rank) {
   Cmi_startfn(CmiGetArgc(CmiMyArgv), CmiMyArgv);
   CsdScheduler();
 
+  // Finalize comm_backend
+  comm_backend::exitThread();
   // free args
   CmiFreeArgs(CmiMyArgv);
 }
