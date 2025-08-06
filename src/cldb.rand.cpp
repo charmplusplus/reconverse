@@ -90,15 +90,12 @@ void CldEnqueue(int pe, void *msg, int infofn) {
   CldPackFn pfn;
   if (pe == CLD_ANYWHERE) {
     pe = (((CrnRand() + CmiMyPe()) & 0x7FFFFFFF) % CmiNumPes());
-    /* optimizationfor SMP */
-#if CMK_NODE_QUEUE_AVAILABLE
     if (CmiNodeOf(pe) == CmiMyNode()) {
       CldNodeEnqueue(CmiMyNode(), msg, infofn);
       return;
     }
-#endif
     if (pe != CmiMyPe())
-      CpvAccess(CldRelocatedMessages)++;
+      CldRelocatedMessages++;
   }
   ifn = (CldInfoFn)CmiHandlerToFunction(infofn);
   if (pe == CmiMyPe() && !CmiImmIsRunning()) {
@@ -106,14 +103,16 @@ void CldEnqueue(int pe, void *msg, int infofn) {
     /* CsdEnqueueGeneral is not thread or SIGIO safe */
     // CmiPrintf("   myself processor %d ==> %d, length=%d Timer:%f , priori=%d
     // \n", CmiMyPe(), pe, len, CmiWallTimer(), *prioptr);
-    CsdEnqueueGeneral(msg, queueing, priobits, prioptr);
+    //CsdEnqueueGeneral(msg, queueing, priobits, prioptr);
+    CmiPushPE(CmiMyPe(), len,
+              msg);
   } else {
     ifn(msg, &pfn, &len, &queueing, &priobits, &prioptr);
     if (pfn && CmiNodeOf(pe) != CmiMyNode()) {
       pfn(&msg);
       ifn(msg, &pfn, &len, &queueing, &priobits, &prioptr);
     }
-    CldSwitchHandler((char *)msg, CpvAccess(CldHandlerIndex));
+    CldSwitchHandler((char *)msg, CldHandlerIndex);
     CmiSetInfo(msg, infofn);
     if (pe == CLD_BROADCAST) {
       CmiSyncBroadcastAndFree(len, msg);
@@ -135,7 +134,7 @@ void CldNodeEnqueue(int node, void *msg, int infofn) {
   if (node == CLD_ANYWHERE) {
     node = (((CrnRand() + CmiMyNode()) & 0x7FFFFFFF) % CmiNumNodes());
     if (node != CmiMyNode())
-      CpvAccess(CldRelocatedMessages)++;
+      CldRelocatedMessages++;
   }
   if (node == CmiMyNode() && !CmiImmIsRunning()) {
     ifn(msg, &pfn, &len, &queueing, &priobits, &prioptr);
@@ -146,7 +145,7 @@ void CldNodeEnqueue(int node, void *msg, int infofn) {
       pfn(&msg);
       ifn(msg, &pfn, &len, &queueing, &priobits, &prioptr);
     }
-    CldSwitchHandler((char *)msg, CpvAccess(CldNodeHandlerIndex));
+    CldSwitchHandler((char *)msg, CldNodeHandlerIndex);
     CmiSetInfo(msg, infofn);
     if (node == CLD_BROADCAST) {
       CmiSyncNodeBroadcastAndFree(len, msg);
@@ -158,16 +157,11 @@ void CldNodeEnqueue(int node, void *msg, int infofn) {
 }
 
 void CldModuleInit(char **argv) {
-  CpvInitialize(int, CldHandlerIndex);
-  CpvAccess(CldHandlerIndex) = CmiRegisterHandler((CmiHandler)CldHandler);
-  CpvInitialize(int, CldNodeHandlerIndex);
-  CpvAccess(CldNodeHandlerIndex) =
-      CmiRegisterHandler((CmiHandler)CldNodeHandler);
-  CpvInitialize(int, CldRelocatedMessages);
-  CpvInitialize(int, CldLoadBalanceMessages);
-  CpvInitialize(int, CldMessageChunks);
-  CpvAccess(CldRelocatedMessages) = CpvAccess(CldLoadBalanceMessages) =
-      CpvAccess(CldMessageChunks) = 0;
+  CldHandlerIndex = CmiRegisterHandler((CmiHandler)CldHandler);
+  CldNodeHandlerIndex = CmiRegisterHandler((CmiHandler)CldNodeHandler);
+  CldRelocatedMessages = 0;
+  CldLoadBalanceMessages = 0;
+  CldMessageChunks = 0;
   CldModuleGeneralInit(argv);
 }
 
