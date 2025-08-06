@@ -27,6 +27,20 @@ void exit() {
   }
 }
 
+void initThread(int thread_id, int num_threads) {
+  if (gCommBackend == nullptr) {
+    return;
+  }
+  gCommBackend->initThread(thread_id, num_threads);
+}
+
+void exitThread() {
+  if (gCommBackend == nullptr) {
+    return;
+  }
+  gCommBackend->exitThread();
+}
+
 int getMyNodeId() { return gMyNodeID; }
 
 int getNumNodes() { return gNumNodes; }
