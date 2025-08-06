@@ -47,12 +47,11 @@ typedef struct HandlerInfo {
 std::vector<CmiHandlerInfo> *CmiGetHandlerTable();
 
 typedef struct State {
-  int pe;
-  int rank;
-  int node;
-  ConverseQueue<void *> *queue;
-  int stopFlag;
-
+  int pe = 0;
+  int rank = 0;
+  int node = 0;
+  ConverseQueue<void *> *queue = nullptr;
+  int stopFlag = 0;
 } CmiState;
 
 // state relevant functionality

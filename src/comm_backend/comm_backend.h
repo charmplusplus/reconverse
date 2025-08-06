@@ -18,7 +18,7 @@ const mr_t MR_NULL = nullptr;
 /**
  * @brief Initialize the communication backend. Not thread-safe.
  */
-void init(int *argc, char ***argv);
+void init(char **argv);
 /**
  * @brief Finalize the communication backend. Not thread-safe.
  */
