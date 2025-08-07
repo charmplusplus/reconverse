@@ -35,6 +35,7 @@ jobs:
                 -GNinja \
                 -DCMAKE_BUILD_TYPE=Debug \
                 -DRECONVERSE_AUTOFETCH_LCI2=ON \
+                -DRECONVERSE_TEST_LAUNCHER="mpirun;--oversubscribe" \
                 -DLCI_NETWORK_BACKENDS=ofi \
                 -DLCT_PMI_BACKEND_ENABLE_MPI=ON \
                 .

@@ -3,7 +3,7 @@
 # This script simulates building a reconverse application as a standalone project.
 # It will be run when `ctest` is invoked.
 
-get_filename_component(SCRIPT_DIR "${CMAKE_CURRENT_LIST_FILE}" PATH)
+get_filename_component(SCRIPT_DIR "${CMAKE_CURRENT_LIST_FILE}" DIRECTORY)
 set(STANDALONE_SOURCE_DIR "${SCRIPT_DIR}/standalone_project")
 set(STANDALONE_BINARY_DIR "${CMAKE_CURRENT_BINARY_DIR}/standalone_build")
 
@@ -17,7 +17,7 @@ execute_process(
   COMMAND ${CMAKE_COMMAND}
           -S "${STANDALONE_SOURCE_DIR}"
           -B "${STANDALONE_BINARY_DIR}"
-          -DFETCHCONTENT_SOURCE_RECONVERSE="${RECONVERSE_LOCAL_SOURCE_DIR}"  # for FetchContent
+          -DFETCHCONTENT_SOURCE_DIR_RECONVERSE=${RECONVERSE_LOCAL_SOURCE_DIR}  # for FetchContent
   RESULT_VARIABLE result
 )
 if(NOT result EQUAL 0)
