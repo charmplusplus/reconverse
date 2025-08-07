@@ -101,7 +101,7 @@ void converseRunPe(int rank) {
 
   // init things like cld module, ccs, etc
   CldModuleInit(CmiMyArgv);
-#ifdef SET_CPU_AFFINITY
+#ifdef RECONVERSE_ENABLE_CPU_AFFINITY
   CmiSetCPUAffinity(rank);
 #endif
 
@@ -192,7 +192,7 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
   AmHandlerPE = comm_backend::registerAmHandler(CommRemoteHandlerPE);
   AmHandlerNode = comm_backend::registerAmHandler(CommRemoteHandlerNode);
 
-#ifdef SET_CPU_AFFINITY
+#ifdef RECONVERSE_ENABLE_CPU_AFFINITY
   CmiInitHwlocTopology();
 #endif
 
