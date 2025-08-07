@@ -1,4 +1,3 @@
-#ifdef SET_CPU_AFFINITY
 /*
  This scheme relies on using IP address to identify hosts and assign
  cpu affinity.
@@ -10,12 +9,14 @@
  * new options +pemap +commmap takes complex pattern of a list of cores
 */
 
+#include "converse_internal.h"
+
+#ifdef RECONVERSE_ENABLE_CPU_AFFINITY
+#include "hwloc.h"
+
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
 #endif
-
-#include "converse_internal.h"
-#include "hwloc.h"
 
 CmiHwlocTopology CmiHwlocTopologyLocal;
 

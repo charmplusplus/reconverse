@@ -50,7 +50,8 @@ set(RECONVERSE_TEST_LAUNCHER
     "mpirun"
     CACHE STRING "The executable to run multiple processes in CTest")
 
-option(ENABLE_CPU_AFFINITY "Enable cpu affinity with hwloc" OFF)
+find_package(HWLOC)
+option(RECONVERSE_ENABLE_CPU_AFFINITY "Enable cpu affinity with hwloc" ${HWLOC_FOUND})
 
 function(charm_determine_arch output input)
   if(input STREQUAL "x86_64" OR input STREQUAL "AMD64")
@@ -102,15 +103,6 @@ endif()
 
 find_package(Threads REQUIRED)
 
-if(ENABLE_CPU_AFFINITY)
-  find_library(HWLOC NAMES libhwloc.so libhwloc.dylib PATHS /opt/local/lib /usr/lib /usr/local/lib /usr/local/Cellar/hwloc/2.12.0/lib)
-  if(HWLOC)
-    message(STATUS "Found hwloc: ${HWLOC}")
-  else()
-    message(FATAL_ERROR "Could not find libhwloc")
-  endif()
-endif()
-
 if(RECONVERSE_ATOMIC_QUEUE)
   add_definitions(-DATOMIC_QUEUE_ENABLED)
   message(STATUS "Atomic queue enabled")
@@ -122,7 +114,11 @@ add_library(reconverse $<TARGET_OBJECTS:boost-context>)
 set_target_properties(reconverse PROPERTIES CXX_STANDARD 17)
 add_subdirectory(include)
 add_subdirectory(src)
-target_link_libraries(reconverse PUBLIC Threads::Threads ${HWLOC})
+target_link_libraries(reconverse PUBLIC Threads::Threads)
+
+if(RECONVERSE_ENABLE_CPU_AFFINITY)
+  target_link_libraries(reconverse PUBLIC HWLOC::HWLOC)
+endif()
 
 if(NOT RECONVERSE_ROOT_PROJECT)
   # This project is being fetched as a subproject by another CMake project.
@@ -141,11 +137,4 @@ endif()
 
 if(RECONVERSE_BUILD_TESTS)
   add_subdirectory(test)
-endif()
-
-if(ENABLE_CPU_AFFINITY)
-  add_definitions(-DSET_CPU_AFFINITY)
-  message(STATUS "CPU affinity enabled")
-else()
-  message(STATUS "CPU affinity disabled")
 endif()
