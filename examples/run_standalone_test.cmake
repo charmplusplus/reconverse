@@ -10,10 +10,6 @@ set(STANDALONE_BINARY_DIR "${CMAKE_CURRENT_BINARY_DIR}/standalone_build")
 # Use the real source path for reconverse (one level up from examples/)
 get_filename_component(RECONVERSE_LOCAL_SOURCE_DIR "${SCRIPT_DIR}/.." ABSOLUTE)
 
-# debugging
-execute_process(COMMAND echo ${SCRIPT_DIR})
-execute_process(COMMAND echo ${RECONVERSE_LOCAL_SOURCE_DIR})
-
 file(MAKE_DIRECTORY "${STANDALONE_BINARY_DIR}")
 
 # Configure the standalone project
