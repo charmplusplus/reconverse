@@ -14,7 +14,7 @@ $ make
 ```
 
 ## Runtime options
-- -DENABLE_CPU_AFFINITY (off by default): Enable setting CPU affinity with HWLOC (must have HWLOC installed)
+- -DRECONVERSE_ENABLE_CPU_AFFINITY (ON by default if hwloc is found): Enable setting CPU affinity with HWLOC (must have HWLOC installed)
 
 ## LCI
 
