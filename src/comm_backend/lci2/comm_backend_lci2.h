@@ -46,6 +46,10 @@ private:
   lci::comp_t m_remote_comp;
   lci::rcomp_t m_rcomp;
   AllocatorLCI2 m_allocator;
+
+  lci::device_t getThreadLocalDevice();
+  lci::mr_t getThreadLocalMR(mr_t mr);
+  lci::rmr_t getThreadLocalRMR(void *rmr);
 };
 
 } // namespace comm_backend
