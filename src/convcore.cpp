@@ -15,6 +15,7 @@
 
 // GLOBALS
 static char **Cmi_argv;
+char **Cmi_argvcopy; // do not remove, needed for tracing
 int Cmi_npes;   // total number of PE's across the entire system
 int Cmi_nranks; // TODO: this isnt used in old converse, but we need to know how
                 // many PEs are on our node?
@@ -168,6 +169,7 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
 
   Cmi_npes = 1; // default to 1
   CmiGetArgInt(argv, "+pe", &Cmi_npes);
+  Cmi_argvcopy = CmiCopyArgs(argv); //init for tracing
 
   comm_backend::init(argv);
   Cmi_mynode = comm_backend::getMyNodeId();
