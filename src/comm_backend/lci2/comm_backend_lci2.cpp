@@ -89,16 +89,15 @@ AmHandler CommBackendLCI2::registerAmHandler(CompHandler handler) {
 void CommBackendLCI2::issueAm(int rank, const void *local_buf, size_t size, mr_t mr,
                               CompHandler localComp, AmHandler remoteComp, void *user_context) {
   auto args = new localCallbackArgs{localComp, user_context};
-  auto post_am = lci::post_am_x(rank, const_cast<void *>(local_buf), size,
-                                m_local_comp, m_rcomp)
-                     .mr(getThreadLocalMR(mr))
-                     .device(getThreadLocalDevice())
-                     .tag(remoteComp)
-                     .user_context(args);
   lci::status_t status;
   do {
     // we use LCI tag to pass the remoteComp
-    status = post_am();
+    status = lci::post_am_x(rank, const_cast<void *>(local_buf), size,
+                            m_local_comp, m_rcomp)
+                 .mr(getThreadLocalMR(mr))
+                 .device(getThreadLocalDevice())
+                 .tag(remoteComp)
+                 .user_context(args)();
     progress();
   } while (status.is_retry());
   if (status.is_done()) {

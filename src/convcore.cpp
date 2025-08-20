@@ -415,7 +415,6 @@ int CmiRegisterHandlerEx(CmiHandlerEx h, void *userPtr) {
 
 void CmiNodeBarrier(void) {
   static Barrier nodeBarrier(CmiMyNodeSize());
-  // nodeBarrier.wait(); // TODO: this may be broken...
   int64_t ticket = nodeBarrier.arrive();
   while (!nodeBarrier.test_ticket(ticket)) {
     comm_backend::progress();
