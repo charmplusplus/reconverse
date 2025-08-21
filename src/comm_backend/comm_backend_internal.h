@@ -13,6 +13,8 @@ class CommBackendBase {
 public:
   virtual void init(char **argv) = 0;
   virtual void exit() = 0;
+  virtual void initThread(int thread_id, int num_threads) {}
+  virtual void exitThread() {}
   virtual int getMyNodeId() = 0;
   virtual int getNumNodes() = 0;
   virtual AmHandler registerAmHandler(CompHandler handler) = 0;

@@ -1,35 +1,40 @@
-#include <condition_variable>
+// Acknowledgement: adopted from https://github.com/uiuc-hpc/lci/blob/master/lct/tbarrier/tbarrier.cpp
+
 #include <iostream>
-#include <mutex>
+#include <atomic>
 #include <thread>
 
-// TODO: this is not reusable - on trying to reuse barrier it hangs
 class Barrier {
-private:
-  std::mutex mtx;
-  std::condition_variable cv;
-  int count;
-  int thread_count;
-  int iteration;
+ private:
+  alignas(64) std::atomic<int> waiting;
+  alignas(64) std::atomic<int64_t> step;
+  alignas(64) int thread_num_;
 
-public:
-  explicit Barrier(int num_threads)
-      : count(0), thread_count(num_threads), iteration(0) {}
+ public:
+  explicit Barrier(int thread_num)
+      : waiting(0), step(0), thread_num_(thread_num)
+  {}
 
-  void wait() {
-    std::unique_lock<std::mutex> lock(mtx);
-    int threadlocal_iteration = iteration;
-    count++;
-
-    if (count == thread_count) {
-      count = 0; // Reset barrier for potential reuse
-      iteration++;
-      cv.notify_all();
-      lock.unlock();
-    } else {
-      cv.wait(lock, [this, threadlocal_iteration] {
-        return iteration != threadlocal_iteration;
-      });
+  int64_t arrive()
+  {
+    int64_t mstep = step.load();
+    if (++waiting == thread_num_) {
+      waiting = 0;
+      step++;
     }
+    return mstep;
+  }
+
+  bool test_ticket(int64_t ticket) { return ticket != step; }
+
+  void wait_ticket(int64_t ticket)
+  {
+    while (!test_ticket(ticket)) continue;
+  }
+
+  void wait()
+  {
+    int64_t ticket = arrive();
+    wait_ticket(ticket);
   }
 };
