@@ -175,6 +175,11 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
   comm_backend::init(argv);
   Cmi_mynode = comm_backend::getMyNodeId();
   Cmi_numnodes = comm_backend::getNumNodes();
+  if (plusPeSet && plusPSet && Cmi_npes != Cmi_mynodesize * Cmi_numnodes) {
+    fprintf(stderr,
+            "Error: +pe <N> and +p <M> both set, but N != M * numnodes\n");
+    exit(1);
+  }
   if (plusPSet) Cmi_npes = Cmi_mynodesize * Cmi_numnodes;
   if (Cmi_mynode == 0)
     printf("Charm++> Running in SMP mode on %d nodes and %d PEs\n",
