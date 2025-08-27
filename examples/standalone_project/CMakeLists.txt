@@ -17,4 +17,4 @@ add_executable(broadcast broadcast.cpp)
 target_link_libraries(broadcast PRIVATE reconverse::reconverse)
 
 # Optionally, add a test to run when `ctest` is invoked
-add_test(NAME standalone-broadcast COMMAND broadcast +p 4)
+add_test(NAME standalone-broadcast COMMAND broadcast +pe 4)

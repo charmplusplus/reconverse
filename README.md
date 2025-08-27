@@ -37,7 +37,7 @@ Note: LCI by default will automatically probe and select available network backe
 
 ### Run Reconverse
 
-In the build/examples/<program_name> folder, run the `reconverse_<program_name>` executable. Currently, the first arguments must be `+p <num_pes>`.  
+In the build/examples/<program_name> folder, run the `reconverse_<program_name>` executable. Currently, the first arguments must be `+pe <num_pes>`.  
 
 ### Build and run Reconverse on your own laptop
 
@@ -65,7 +65,7 @@ Then, run the reconverse example with `lcrun`:
 
 ```
 $ cd build/examples/pingpong
-$ lcrun -n 2 ./reconverse_ping_ack +p 4
+$ lcrun -n 2 ./reconverse_ping_ack +pe 4
 ```
 
 **Note:** if you installed `libfabric` in a non-standard location, the linker *may* complain it cannot find the libfabric shared library, in which case you need to let the linker find them by
@@ -108,5 +108,5 @@ $ make
 #### Run reconverse
 ```
 $ cd build/examples/pingpong
-$ srun -n 2 ./reconverse_ping_ack +p 4
+$ srun -n 2 ./reconverse_ping_ack +pe 4
 ```
