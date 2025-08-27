@@ -175,12 +175,19 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
   Cmi_startTime = getCurrentTime();
 
   Cmi_npes = 1; // default to 1
-  CmiGetArgInt(argv, "+pe", &Cmi_npes);
+  int plusPeSet = CmiGetArgInt(argv, "+pe", &Cmi_npes);
+  int plusPSet = CmiGetArgInt(argv, "+p", &Cmi_mynodesize);
   Cmi_argvcopy = CmiCopyArgs(argv); //init for tracing
 
   comm_backend::init(argv);
   Cmi_mynode = comm_backend::getMyNodeId();
   Cmi_numnodes = comm_backend::getNumNodes();
+  if (plusPeSet && plusPSet && Cmi_npes != Cmi_mynodesize * Cmi_numnodes) {
+    fprintf(stderr,
+            "Error: +pe <N> and +p <M> both set, but N != M * numnodes\n");
+    exit(1);
+  }
+  if (plusPSet) Cmi_npes = Cmi_mynodesize * Cmi_numnodes;
   if (Cmi_mynode == 0)
     printf("Charm++> Running in SMP mode on %d nodes and %d PEs\n",
            Cmi_numnodes, Cmi_npes);
@@ -195,7 +202,8 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
             "Error: Number of PEs must be a multiple of number of nodes\n");
     exit(1);
   }
-  Cmi_mynodesize = Cmi_npes / Cmi_numnodes;
+
+  if(plusPeSet) Cmi_mynodesize = Cmi_npes / Cmi_numnodes;
   Cmi_nodestart = Cmi_mynode * Cmi_mynodesize;
   // register am handlers
   AmHandlerPE = comm_backend::registerAmHandler(CommRemoteHandlerPE);
