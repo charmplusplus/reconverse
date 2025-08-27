@@ -1,4 +1,4 @@
-//+pe <N> threads, each running a scheduler
+//+p <N> threads, each running a scheduler
 #include "barrier.h"
 #include "converse_internal.h"
 #include "queue.h"
@@ -159,7 +159,7 @@ void CmiStartThreads() {
   CmiHandlerTable = nullptr;
 }
 
-// argument form: ./prog +pe <N>
+// argument form: ./prog +p <N>
 // TODO: this function need error checking
 // TODO: the input parsing, cmi_arg parsing is not done/robust
 void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
@@ -168,7 +168,7 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
   Cmi_startTime = getCurrentTime();
 
   Cmi_npes = 1; // default to 1
-  CmiGetArgInt(argv, "+pe", &Cmi_npes);
+  CmiGetArgInt(argv, "+p", &Cmi_npes);
   Cmi_argvcopy = CmiCopyArgs(argv); //init for tracing
 
   comm_backend::init(argv);
