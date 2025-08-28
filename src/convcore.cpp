@@ -266,8 +266,6 @@ int CmiRankOf(int pe) { return pe % Cmi_mynodesize; }
 
 int CmiNodeFirst(int node) { return node * Cmi_mynodesize; }
 
-int CmiPhysicalNodeID(int pe) { return CmiNodeOf(pe); }
-
 std::vector<CmiHandlerInfo> *CmiGetHandlerTable() {
   return CmiHandlerTable[CmiMyRank()];
 }

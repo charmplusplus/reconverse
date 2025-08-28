@@ -725,6 +725,6 @@ void CmiGetPesOnPhysicalNode(int node, int** pelist, int* num)
   LrtsPeOnNode(node, pelist, num);
 }
 int CmiPhysicalRank(int pe) { return LrtsRankOf(pe); }
-//int CmiPhysicalNodeID(int pe) { return LrtsNodeOf(pe); }
+int CmiPhysicalNodeID(int pe) { return LrtsNodeOf(pe); }
 int CmiGetFirstPeOnPhysicalNode(int node) { return LrtsNodeFirst(node); }
 void CmiInitCPUTopology(char** argv) { LrtsInitCpuTopo(argv); }
