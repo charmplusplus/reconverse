@@ -12,6 +12,7 @@
 #include "converse_internal.h"
 
 #ifdef RECONVERSE_ENABLE_CPU_AFFINITY
+#if RECONVERSE_ENABLE_CPU_AFFINITY ON
 #include "hwloc.h"
 
 #ifndef _GNU_SOURCE
@@ -114,4 +115,17 @@ int CmiSetCPUAffinity(int mycore) {
 
   return result;
 }
+#else
+int CmiSetCPUAffinity(int mycore) {
+  return 0;
+}
+void CmiInitHwlocTopology(void) {}
+
+#endif
+
+#else
+int CmiSetCPUAffinity(int mycore) {
+  return 0;
+}
+void CmiInitHwlocTopology(void) {}
 #endif
