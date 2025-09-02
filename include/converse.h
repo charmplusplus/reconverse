@@ -302,20 +302,6 @@ int CmiStopFlag();
 #define CmiNodeSize(n) (CmiMyNodeSize())
 int CmiNodeFirst(int node);
 
-// partitions (still needs to implement)
-#define CmiMyPartition() 0
-#define CmiPartitionSize(part) CmiNumNodes()
-#define CmiMyPartitionSize() CmiNumNodes()
-#define CmiNumPartitions() 1
-#define CmiNumNodesGlobal() CmiNumNodes()
-#define CmiMyNodeGlobal() CmiMyNode()
-#define CmiNumPesGlobal() CmiNumPes()
-#define CmiMyPeGlobal() CmiMyPe()
-#define CmiGetPeGlobal(pe, part) (pe)
-#define CmiGetNodeGlobal(node, part) (node)
-#define CmiGetPeLocal(pe) (pe)
-#define CmiGetNodeLocal(node) (node)
-
 // handler things
 void CmiSetHandler(void *msg, int handlerId);
 void CmiSetXHandler(void *msg, int xhandlerId);
@@ -928,5 +914,80 @@ extern "C" {
 }
 
 void registerTraceInit(void (*fn)(char **argv));
+
+//partitions
+#if CMK_HAS_PARTITION
+
+typedef enum Partition_Type {
+      PARTITION_SINGLETON,
+      PARTITION_DEFAULT,
+      PARTITION_MASTER,
+      PARTITION_PREFIX
+} Partition_Type;
+
+/* variables and functions for partition */
+typedef struct {
+  Partition_Type type;
+  int isTopoaware, scheme;
+  int numPartitions;
+  int *partitionSize;
+  int *partitionPrefix;
+  int *nodeMap;
+  int myPartition;
+  char *partsizes;
+} PartitionInfo;
+
+void CmiCreatePartitions(char **argv);
+void CmiSetNumPartitions(int nump);
+void CmiSetMasterPartition(void);
+void CmiSetPartitionSizes(char *size);
+void CmiSetPartitionScheme(int scheme);
+void CmiSetCustomPartitioning(void);
+
+extern int _Cmi_mype_global;
+extern int _Cmi_numpes_global;
+extern int _Cmi_mynode_global;
+extern int _Cmi_numnodes_global;
+extern PartitionInfo _partitionInfo;
+
+#define CmiNumPartitions()              _partitionInfo.numPartitions
+#define CmiMyPartition()                _partitionInfo.myPartition
+#define CmiPartitionSize(part)          _partitionInfo.partitionSize[part]
+#define CmiMyPartitionSize()            CmiPartitionSize(CmiMyPartition())
+#define CmiNumNodesGlobal()             _Cmi_numnodes_global
+#define CmiMyNodeGlobal()               _Cmi_mynode_global
+#define CmiNumPesGlobal()               _Cmi_numpes_global
+/* we need different implementations of this based on SMP or non-smp */
+extern int CmiMyPeGlobal(void);
+
+
+/* functions to translate between local and global */
+int node_lToGTranslate(int node, int partition);
+int pe_lToGTranslate(int pe, int partition);
+
+#define CmiGetPeGlobal(pe,part)         pe_lToGTranslate(pe,part)
+#define CmiGetNodeGlobal(node,part)     node_lToGTranslate(node,part)
+#define CmiGetPeLocal(pe)               pe_gToLTranslate(pe)
+#define CmiGetNodeLocal(node)           node_gToLTranslate(node)
+/* end of variables and functions for partition */
+
+#else
+
+#define CmiMyPartition()         0
+#define CmiPartitionSize(part)       CmiNumNodes()
+#define CmiMyPartitionSize()         CmiNumNodes()
+#define CmiNumPartitions()       1
+#define CmiNumNodesGlobal()      CmiNumNodes()
+#define CmiMyNodeGlobal()        CmiMyNode()
+#define CmiNumPesGlobal()        CmiNumPes()
+#define CmiMyPeGlobal()          CmiMyPe()
+#if !CMK_SMP
+extern int _Cmi_mynodesize;
+#endif
+#define CmiGetPeGlobal(pe,part)         (pe)
+#define CmiGetNodeGlobal(node,part)     (node)
+#define CmiGetPeLocal(pe)               (pe)
+#define CmiGetNodeLocal(node)           (node)
+#endif
 
 #endif // CONVERSE_H
