@@ -23,7 +23,7 @@ typedef struct GroupDef_s {
 #define GROUPTAB_SIZE 101
 
 //debug
-#define  DEBUGF(x)     //CmiPrintf x;
+#define  DEBUGF(...)    //CmiPrintf(__VA_ARGS__)
 
 void CmiStartThreads(char **argv);
 void converseRunPe(int rank);

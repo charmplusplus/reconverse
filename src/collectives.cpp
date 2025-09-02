@@ -27,7 +27,7 @@ void collectiveInit(void) {
 
 /* Broadcast to everyone but the source pe. Source does not free. */
 void CmiSyncBroadcast(int size, void *msg) {
-    DEBUGF(("[%d] CmiSyncBroadcast\n", CmiMyPe()));
+    DEBUGF("[%d] CmiSyncBroadcast\n", CmiMyPe());
     int pe = CmiMyPe();
   
     CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
@@ -35,7 +35,7 @@ void CmiSyncBroadcast(int size, void *msg) {
   
   #ifdef SPANTREE
   #if SPANTREE ON
-    DEBUGF(("[%d] Spanning tree option\n", CmiMyPe()));
+    DEBUGF("[%d] Spanning tree option\n", CmiMyPe());
     CmiSetBcastSource(msg, pe); // used to skip the source
     header->swapHandlerId = header->handlerId;
     header->handlerId = Cmi_bcastHandler;
@@ -63,6 +63,7 @@ void CmiSyncBroadcast(int size, void *msg) {
   }
   
   void CmiSyncBroadcastAll(int size, void *msg) {
+    DEBUGF("[%d] CmiSyncBroadcastAll\n", CmiMyPe());
     CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
     header->messageSize = size;
   
