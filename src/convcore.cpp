@@ -105,6 +105,7 @@ void converseRunPe(int rank) {
   // init things like cld module, ccs, etc
   CldModuleInit(CmiMyArgv);
 #ifdef RECONVERSE_ENABLE_CPU_AFFINITY
+  CmiInitCPUAffinity(CmiMyArgv);
   CmiSetCPUAffinity(rank);
 #endif
 

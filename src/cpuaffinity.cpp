@@ -18,12 +18,69 @@
 #define _GNU_SOURCE
 #endif
 
+static int affMsgsRecvd = 1;  // number of affinity messages received at PE0
+#if defined(CPU_OR)
+static cpu_set_t core_usage;  // used to record union of CPUs used by every PE in physical node
+#endif
+static int aff_is_set = 0;
+
+static std::atomic<bool> cpuPhyAffCheckDone{};
+
+struct affMsg {
+  char core[CmiMsgHeaderSizeBytes];
+  #if defined(CPU_OR)
+  cpu_set_t affinity;
+  #endif
+};
+
 CmiHwlocTopology CmiHwlocTopologyLocal;
+static int cpuPhyNodeAffinityRecvHandlerIdx;
 
 // topology is the set of resources available to this process
 // legacy_topology includes resources disallowed by the system, to implement
 // CmiNumCores
 static hwloc_topology_t topology, legacy_topology;
+
+static void cpuAffSyncWait(std::atomic<bool> & done)
+{
+  do
+    CsdSchedulePoll();
+  while (!done.load());
+
+  CsdSchedulePoll();
+}
+
+static void cpuPhyNodeAffinityRecvHandler(void *msg)
+{
+  static int count = 0;
+
+  affMsg *m = (affMsg *)msg;
+#if defined(CPU_OR)
+  CPU_OR(&core_usage, &core_usage, &m->affinity);
+  affMsgsRecvd++;
+#endif
+  CmiFree(m);
+
+  if (++count == CmiNumPesOnPhysicalNode(0) - 1)
+    cpuPhyAffCheckDone = true;
+}
+
+#if defined(CPU_OR)
+int get_thread_affinity(cpu_set_t *cpuset) {
+  CPU_ZERO(cpuset);
+  if ((errno = pthread_getaffinity_np(pthread_self(), sizeof(cpu_set_t), cpuset))) {
+    perror("pthread_getaffinity");
+    return -1;
+  }
+  return 0;
+}
+#endif
+
+#if defined(CPU_OR)
+int get_affinity(cpu_set_t *cpuset) {
+  return get_thread_affinity(cpuset);
+}
+#endif
 
 void CmiInitHwlocTopology(void) {
   int depth;
@@ -67,20 +124,74 @@ void CmiInitHwlocTopology(void) {
           : 1;
 }
 
-static int set_thread_affinity(hwloc_cpuset_t cpuset) {
-  pthread_t thread = pthread_self();
-
-  if (hwloc_set_thread_cpubind(topology, thread, cpuset,
-                               HWLOC_CPUBIND_THREAD | HWLOC_CPUBIND_STRICT)) {
+static int set_process_affinity(hwloc_cpuset_t cpuset)
+{
+  pid_t process = getpid();
+  #define PRINTF_PROCESS "%d"
+  if (hwloc_set_proc_cpubind(topology, process, cpuset, HWLOC_CPUBIND_PROCESS|HWLOC_CPUBIND_STRICT))
+  {
     char *str;
     int error = errno;
     hwloc_bitmap_asprintf(&str, cpuset);
-    printf("HWLOC> Couldn't bind to cpuset %s: %s\n", str, strerror(error));
+    CmiPrintf("HWLOC> Couldn't bind to cpuset %s: %s\n", str, strerror(error));
     free(str);
     return -1;
   }
-
   return 0;
+  #undef PRINTF_PROCESS
+}
+
+
+static int set_thread_affinity(hwloc_cpuset_t cpuset)
+{
+  pthread_t thread = pthread_self();
+  if (hwloc_set_thread_cpubind(topology, thread, cpuset, HWLOC_CPUBIND_THREAD|HWLOC_CPUBIND_STRICT))
+  {
+    char *str;
+    int error = errno;
+    hwloc_bitmap_asprintf(&str, cpuset);
+    CmiPrintf("HWLOC> Couldn't bind to cpuset %s: %s\n", str, strerror(error));
+    free(str);
+    return -1;
+  }
+  return 0;
+}
+
+static void bind_process_and_threads(hwloc_obj_type_t process_unit, hwloc_obj_type_t thread_unit)
+{
+  hwloc_cpuset_t cpuset;
+
+  int process_unitcount = hwloc_get_nbobjs_by_type(topology, process_unit);
+
+  int process_assignment = CmiMyRank() % process_unitcount;
+
+  hwloc_obj_t process_obj = hwloc_get_obj_by_type(topology, process_unit, process_assignment);
+  set_process_affinity(process_obj->cpuset);
+
+  int thread_unitcount = hwloc_get_nbobjs_inside_cpuset_by_type(topology, process_obj->cpuset, thread_unit);
+
+  int thread_assignment = CmiMyRank() % thread_unitcount;
+
+  hwloc_obj_t thread_obj = hwloc_get_obj_inside_cpuset_by_type(topology, process_obj->cpuset, thread_unit, thread_assignment);
+  hwloc_cpuset_t thread_cpuset = hwloc_bitmap_dup(thread_obj->cpuset);
+  hwloc_bitmap_singlify(thread_cpuset);
+  set_thread_affinity(thread_cpuset);
+  hwloc_bitmap_free(thread_cpuset);
+}
+
+static int set_default_affinity(void){
+  char *s;
+  int n = -1;
+
+  //just implement binding worker threads to PUs
+  bind_process_and_threads(HWLOC_OBJ_PACKAGE, HWLOC_OBJ_PU);
+
+  return n != -1;
+}
+
+void CmiInitCPUAffinity(char **argv) {
+    CmiAssignOnce(&cpuPhyNodeAffinityRecvHandlerIdx, CmiRegisterHandler((CmiHandler)cpuPhyNodeAffinityRecvHandler));
+    set_default_affinity();
 }
 
 // Uses PU indices assigned by the OS
@@ -88,7 +199,7 @@ int CmiSetCPUAffinity(int mycore) {
   int core = mycore;
   if (core < 0) {
     printf("Error with core number");
-    return -1;
+    CmiAbort("CmiSetCPUAffinity failed!");
   }
   /*
     if (core < 0) {
@@ -114,4 +225,60 @@ int CmiSetCPUAffinity(int mycore) {
 
   return result;
 }
+
+void CmiCheckAffinity(void)
+{
+  #if defined(CPU_OR)
+  if (!CmiCpuTopologyEnabled()) return;  // only works if cpu topology enabled
+
+  if (CmiNumPes() == 1)
+    return;
+
+  if (CmiMyPe() == 0)
+  {
+    // wait for every PE affinity from my physical node (for now only done on phy node 0)
+
+    cpu_set_t my_aff;
+    if (get_affinity(&my_aff) == -1) CmiAbort("get_affinity failed\n");
+    CPU_OR(&core_usage, &core_usage, &my_aff); // add my affinity (pe0)
+
+    cpuAffSyncWait(cpuPhyAffCheckDone);
+
+  }
+  else if (CmiPhysicalNodeID(CmiMyPe()) == 0)
+  {
+    // send my affinity to first PE on physical node (only done on phy node 0 for now)
+    affMsg *m = (affMsg*)CmiAlloc(sizeof(affMsg));
+    CmiSetHandler((char *)m, cpuPhyNodeAffinityRecvHandlerIdx);
+    if (get_affinity(&m->affinity) == -1) { // put my affinity in msg
+      CmiFree(m);
+      CmiAbort("get_affinity failed\n");
+    }
+    CmiSyncSendAndFree(0, sizeof(affMsg), (void *)m);
+
+    CsdSchedulePoll();
+  }
+
+  CmiBarrier();
+
+  if (CmiMyPe() == 0)
+  {
+    // NOTE this test is simple and may not detect every possible case of
+    // oversubscription
+    const int N = CmiNumPesOnPhysicalNode(0);
+    if (CPU_COUNT(&core_usage) < N) {
+      // TODO suggest command line arguments?
+      if (!aff_is_set) {
+        CmiAbort("Multiple PEs assigned to same core. Set affinity "
+        "options to correct or lower the number of threads, or pass +setcpuaffinity to ignore.\n");
+      } else {
+        CmiPrintf("WARNING: Multiple PEs assigned to same core, recommend "
+        "adjusting processor affinity or passing +CmiSleepOnIdle to reduce "
+        "interference.\n");
+      }
+    }
+  }
+  #endif
+}
+
 #endif

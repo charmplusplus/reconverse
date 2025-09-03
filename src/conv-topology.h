@@ -1,4 +1,5 @@
 #include "converse.h"
+#include "hwloc.h"
 #include <cstring>
 
 typedef struct {/*IPv4 IP address*/
