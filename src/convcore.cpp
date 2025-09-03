@@ -401,6 +401,46 @@ void CmiSyncSendAndFree(int destPE, int messageSize, void *msg) {
   }
 }
 
+#if CMK_HAS_PARTITION
+
+void CmiInterSyncSend(int destPE, int partition, int messageSize, void *msg) {
+  char *copymsg = (char *)CmiAlloc(messageSize);
+  std::memcpy(copymsg, msg, messageSize);
+  CmiInterSyncSendAndFree(destPE, partition, messageSize, copymsg);
+}
+
+void CmiInterSyncSendAndFree(int destPE, int partition, int messageSize, void *msg) {
+  CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
+  header->destPE = destPE;
+  // check partition num
+  if (partition < 0 || partition >= CmiNumPartitions()) {
+    CmiAbort("CmiInterSyncSend: partition %d out of range\n", partition);
+  }
+  // check if this is my partition, if so sync send
+  if (CmiMyPartition() == partition) {
+    CmiSyncSendAndFree(destPE, messageSize, msg);
+    return;
+  }
+  // not my partition, use comm backend
+  // translate destPE to global
+  int globalDestPE = CmiGetPeGlobal(destPE, partition);
+  header->destPE = globalDestPE;
+  int destNode = CmiGetNodeGlobal(CmiNodeOf(globalDestPE), partition);
+  comm_backend::issueAm(destNode, msg, messageSize, comm_backend::MR_NULL,
+                          CommLocalHandler, AmHandlerPE,
+                          nullptr);
+}
+
+void CmiInterSyncSendFn(int destPE, int partition, int messageSize, char *msg) {
+  CmiInterSyncSend(destPE, partition, messageSize, (void *)msg); 
+}
+
+void CmiInterFreeSendFn(int destPE, int partition, int messageSize, char *msg) {
+  CmiInterSyncSendAndFree(destPE, partition, messageSize, (void *)msg); 
+}
+
+#endif
+
 // EXIT TOOLS
 
 void CmiExitHelper(int status) {
@@ -470,6 +510,12 @@ void CmiExitHandler(void *msg) {
 
 ConverseNodeQueue<void *> *CmiGetNodeQueue() { return CmiNodeQueue; }
 
+void CmiSyncNodeSend(unsigned int destNode, unsigned int size, void *msg) {
+  char *copymsg = (char *)CmiAlloc(size);
+  std::memcpy(copymsg, msg, size); // optionally avoid memcpy and block instead
+  CmiSyncNodeSendAndFree(destNode, size, copymsg);
+}
+
 void CmiSyncNodeSendAndFree(unsigned int destNode, unsigned int size,
                             void *msg) {
 
@@ -485,11 +531,36 @@ void CmiSyncNodeSendAndFree(unsigned int destNode, unsigned int size,
   }
 }
 
-void CmiSyncNodeSend(unsigned int destNode, unsigned int size, void *msg) {
-  char *copymsg = (char *)CmiAlloc(size);
-  std::memcpy(copymsg, msg, size); // optionally avoid memcpy and block instead
-  CmiSyncNodeSendAndFree(destNode, size, copymsg);
+#if CMK_HAS_PARTITION
+
+void CmiInterSyncNodeSend(int destNode, int partition, int messageSize, void *msg) {
+  char *copymsg = (char *)CmiAlloc(messageSize);
+  std::memcpy(copymsg, msg, messageSize);
+  CmiInterSyncNodeSendAndFree(destNode, partition, messageSize, copymsg);
 }
+
+void CmiInterSyncNodeSendAndFree(int destNode, int partition, int messageSize, void *msg) {
+  if (partition < 0 || partition >= CmiNumPartitions()) {
+    CmiAbort("CmiInterSyncSend: partition %d out of range\n", partition);
+  }
+  if (CmiMyPartition() == partition) {
+    CmiSyncNodeSendAndFree(destNode, messageSize, msg);
+    return;
+  }
+  // not my partition, use comm backend
+  int globalDestNode = CmiGetNodeGlobal(destNode, partition);
+  comm_backend::issueAm(destNode, msg, size, comm_backend::MR_NULL, CommLocalHandler, AmHandlerNode, nullptr);
+}
+
+void CmiInterSyncNodeSendFn(int destNode, int partition, int messageSize, char *msg) {
+  CmiInterSyncNodeSend(destNode, partition, messageSize, msg);
+}
+
+void CmiInterSyncNodeSendAndFreeFn(int destNode, int partition, int messageSize, char *msg) {
+  CmiInterSyncNodeSendAndFree(destNode, partition, messageSize, msg);
+}
+
+#endif
 
 // fn versions of the above
 void CmiSyncSendFn(int destPE, int messageSize, char *msg) {

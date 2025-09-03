@@ -969,6 +969,16 @@ int pe_lToGTranslate(int pe, int partition);
 #define CmiGetNodeGlobal(node,part)     node_lToGTranslate(node,part)
 #define CmiGetPeLocal(pe)               pe_gToLTranslate(pe)
 #define CmiGetNodeLocal(node)           node_gToLTranslate(node)
+
+void CmiInterSyncSend(int destPE, int partition, int messageSize, void *msg);
+void CmiInterSyncSendAndFree(int destPE, int partition, int messageSize, void *msg);
+void CmiInterSyncNodeSend(int destNode, int partition, int messageSize, void *msg);
+void CmiInterSyncNodeSendAndFree(int destNode, int partition, int messageSize, void *msg);
+void CmiInterSyncSendFn(int destPE, int partition, int messageSize, char *msg);
+void CmiInterFreeSendFn(int destPE, int partition, int messageSize, char *msg);
+void CmiInterSyncNodeSendFn(int destNode, int partition, int messageSize, char *msg);
+void CmiInterSyncNodeSendAndFreeFn(int destNode, int partition, int messageSize, char *msg);
+
 /* end of variables and functions for partition */
 
 #else
@@ -988,6 +998,12 @@ extern int _Cmi_mynodesize;
 #define CmiGetNodeGlobal(node,part)     (node)
 #define CmiGetPeLocal(pe)               (pe)
 #define CmiGetNodeLocal(node)           (node)
+
+#define CmiInterSyncSend(pe,p,s,m)              (CmiSyncSendFn((pe),(s),(char *)(m)))
+#define CmiInterSyncSendAndFree(pe,p,s,m)       (CmiFreeSendFn((pe),(s),(char *)(m)))
+#define CmiInterSyncNodeSend(pe,p,s,m)         (CmiSyncNodeSendFn((pe),(s),(char *)(m)))
+#define CmiInterSyncNodeSendAndFree(pe,p,s,m)  (CmiFreeNodeSendFn((pe),(s),(char *)(m)))
+
 #endif
 
 #endif // CONVERSE_H
