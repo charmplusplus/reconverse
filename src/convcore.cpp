@@ -332,16 +332,16 @@ void *CmiAlloc(int size) {
     CmiPrintf("CmiAlloc: size <= 0\n");
     return nullptr;
   }
-  return malloc(size);
+
+  char* blk = (char*)malloc(size + sizeof(CmiChunkHeader));
+
+  char* ptr = blk + sizeof(CmiChunkHeader);
+  REFFIELDSET(ptr, 1);
+  SIZEFIELD(ptr) = size;
+
+  return (void*)(ptr);
 }
 
-void CmiFree(void *msg) {
-  if (msg == nullptr) {
-    CmiPrintf("CmiFree: msg is nullptr\n");
-    return;
-  }
-  free(msg);
-}
 
 // header ref count methods
 
@@ -352,6 +352,26 @@ static void *CmiAllocFindEnclosing(void *blk) {
     refCount = REFFIELD(blk);
   }
   return blk;
+}
+
+
+void CmiFree(void *msg) {
+  if (msg == nullptr) {
+    CmiPrintf("CmiFree: msg is nullptr\n");
+    return;
+  }
+  void *parentBlk = CmiAllocFindEnclosing(msg);
+  int refCount = REFFIELDDEC(parentBlk);
+
+    // TODO: does this make sense??
+  // if(refCount==0) /* Logic error: reference count shouldn't already have been zero */
+  //   CmiAbort("CmiFree reference count was zero-- is this a duplicate free?");
+
+  if (refCount == 1) {
+    free(BLKSTART(parentBlk));
+  }
+  
+
 }
 
 int CmiGetReference(void *blk) { return REFFIELD(CmiAllocFindEnclosing(blk)); }
