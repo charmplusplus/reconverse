@@ -337,7 +337,7 @@ void *CmiAlloc(int size) {
 
   char* ptr = blk + sizeof(CmiChunkHeader);
   REFFIELDSET(ptr, 1);
-  SIZEFIELD(ptr) = size;
+  SIZEFIELD(ptr) = size; // TODO: where is this used? just stole from old converse
 
   return (void*)(ptr);
 }
@@ -345,6 +345,7 @@ void *CmiAlloc(int size) {
 
 // header ref count methods
 
+// TODO: what is this for? still needed? copied from old converse.
 static void *CmiAllocFindEnclosing(void *blk) {
   int refCount = REFFIELD(blk);
   while (refCount < 0) {
