@@ -235,11 +235,10 @@ void CmiReductionsInit(void) {
       (CmiNodeReduction *)malloc(CmiMaxReductions * sizeof(CmiNodeReduction));
   for (int i = 0; i < CmiMaxReductions; ++i) {
     CmiNodeReduction &nodered = noderedinfo[i];
-#ifdef CMK_SMP
+
     // node reduction must be initialized with a valid lock
-    nodered.lock = CmiCreateLock();
-#endif
-    nodered.red = nullptr;
+    nodered.lock = CmiCreateLock(); // in non-smp this would just be a nullptr
+
   }
   CsvAccess(_node_reduction_info) = noderedinfo;
   CsvAccess(_node_reduction_counter) = 0;
@@ -271,7 +270,6 @@ static inline CmiReductionID getNextID(CmiReductionID &ctr) {
 // TODO: is this needed for node reductions?? old Converse uses locks and
 // atomics in SMP for node reductions
 // TODO: this overflow is not thread-safe
-#ifdef CMK_SMP
 static inline CmiReductionID getNextID(std::atomic<CmiReductionID> &ctr) {
   CmiReductionID old =
       ctr.fetch_add(1, std::memory_order_relaxed); // Increment atomically
@@ -281,7 +279,7 @@ static inline CmiReductionID getNextID(std::atomic<CmiReductionID> &ctr) {
   }
   return old;
 }
-#endif
+
 
 unsigned CmiGetReductionIndex(CmiReductionID id) {
   // treating the id as the index into the reduction table
@@ -427,19 +425,19 @@ static void CmiClearNodeReduction(CmiReductionID id) {
   reduction_ref = NULL;
 }
 
+// lock and unlock are used to support SMP
 void CmiNodeReduce(void *msg, int size, CmiReduceMergeFn mergeFn) {
-#ifdef CMK_SMP
+
   CmiNodeReduction nodeRed =
       CsvAccess(_node_reduction_info)[CmiGetReductionIndex(CmiGetRedID(msg))];
   CmiLock(nodeRed.lock);
-#endif
+
   const CmiReductionID id = CmiGetNextNodeReductionID();
   CmiReduction *red = CmiGetCreateNodeReduction(id);
   CmiInternalNodeReduce(msg, size, mergeFn, red);
 
-#ifdef CMK_SMP
+
   CmiUnlock(nodeRed.lock);
-#endif
 }
 
 CmiReductionID CmiGetNextNodeReductionID() {
@@ -531,12 +529,13 @@ void CmiSendNodeReduce(CmiReduction *red) {
   CmiClearNodeReduction(red->ReductionID);
 }
 
+// lock and unlock used to support SMP
 void CmiNodeReduceHandler(void *msg) {
-#ifdef CMK_SMP
+
   CmiNodeReduction nodeRed =
       CsvAccess(_node_reduction_info)[CmiGetReductionIndex(CmiGetRedID(msg))];
   CmiLock(nodeRed.lock);
-#endif
+
   CmiReduction *reduction = CmiGetCreateNodeReduction(CmiGetRedID(msg));
 
   // how are we ensuring the messages arrive in order again?
@@ -544,9 +543,9 @@ void CmiNodeReduceHandler(void *msg) {
   reduction->messagesReceived++;
   CmiSendNodeReduce(reduction);
 
-#ifdef CMK_SMP
+
   CmiUnlock(nodeRed.lock);
-#endif
+
 }
 
 /************* Groups ***************/

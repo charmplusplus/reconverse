@@ -4,6 +4,7 @@
 #define CONVCORE_H
 
 #include <cstring>
+#include "converse.h"
 
 #include "converse.h"
 #include "converse_config.h"
@@ -116,9 +117,10 @@ typedef struct {
 
 typedef struct {
   // in non-SMP, node reduction is equivalent to PE reduction
-#ifdef CMK_SMP
+  // Reconverse assumes SMP, use a node lock
+
   CmiNodeLock lock;
-#endif
+
   CmiReduction *red;
 } CmiNodeReduction;
 
@@ -127,11 +129,9 @@ CpvStaticDeclare(CmiReduction **,
                  _reduction_info); // an array of pointers to reduction structs
 CpvStaticDeclare(CmiReductionID, _reduce_seqID_global);
 
-#ifdef CMK_SMP
+// atomics used here to support SMP
 using CmiNodeReductionID = std::atomic<CmiReductionID>;
-#else
-using CmiNodeReductionID = CmiReductionID;
-#endif
+
 CsvStaticDeclare(CmiNodeReductionID, _node_reduction_counter);
 CsvStaticDeclare(
     CmiNodeReduction *,
