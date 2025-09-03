@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <pthread.h>
+#include <atomic>
 
 using CmiInt1 = std::int8_t;
 using CmiInt2 = std::int16_t;
