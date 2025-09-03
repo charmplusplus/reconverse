@@ -4,9 +4,8 @@
 #include <cstdio>
 #include <vector>
 
-#include "converse_config.h"
 #include "comm_backend/comm_backend.h"
-
+#include "converse_config.h"
 
 namespace comm_backend {
 

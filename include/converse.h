@@ -7,7 +7,6 @@
 #include <cstdio>
 #include <cstdlib>
 #include <pthread.h>
-#include <atomic>
 
 using CmiInt1 = std::int8_t;
 using CmiInt2 = std::int16_t;
@@ -144,7 +143,7 @@ struct alignas(ALIGN_BYTES) CmiChunkHeader {
   int size;
 
 private:
-#ifdef CMK_SMP
+#if CMK_SMP
   std::atomic<int> ref;
 #else
   int ref;
@@ -153,17 +152,15 @@ private:
 public:
   CmiChunkHeader() = default;
   CmiChunkHeader(const CmiChunkHeader &x) : size{x.size}, ref{x.getRef()} {}
-#ifdef CMK_SMP
+#if CMK_SMP
   int getRef() const { return ref.load(std::memory_order_acquire); }
   void setRef(int r) { return ref.store(r, std::memory_order_release); }
   int incRef() { return ref.fetch_add(1, std::memory_order_release); }
-  int decRef() { 
-    return ref.fetch_sub(1, std::memory_order_release);
-  }
+  int decRef() { return ref.fetch_sub(1, std::memory_order_release); }
 #else
   int getRef() const { return ref; }
   void setRef(int r) { ref = r; }
-  int incRef() {    return ref++; }
+  int incRef() { return ref++; }
   int decRef() { return ref--; }
 #endif
 };
