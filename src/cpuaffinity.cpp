@@ -190,12 +190,15 @@ static int set_default_affinity(void){
 }
 
 void CmiInitCPUAffinity(char **argv) {
+    #if defined(CPU_OR)
     CmiAssignOnce(&cpuPhyNodeAffinityRecvHandlerIdx, CmiRegisterHandler((CmiHandler)cpuPhyNodeAffinityRecvHandler));
     set_default_affinity();
+    #endif
 }
 
 // Uses PU indices assigned by the OS
 int CmiSetCPUAffinity(int mycore) {
+  #if defined(CPU_OR)
   int core = mycore;
   if (core < 0) {
     printf("Error with core number");
@@ -224,6 +227,9 @@ int CmiSetCPUAffinity(int mycore) {
            CmiMyPe(), mycore);
 
   return result;
+  #else
+  return -1;
+  #endif
 }
 
 void CmiCheckAffinity(void)
