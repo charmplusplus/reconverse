@@ -612,7 +612,7 @@ int CmiTryLock(CmiNodeLock lock);
     if (!(expr)) {                                                             \
       fprintf(stderr, "Assertion %s failed: file %s, line %d\n", #expr,        \
               __FILE__, __LINE__);                                             \
-      CmiExit(0);                                                              \
+      CmiAbort("Failed assert");                                                              \
     }                                                                          \
   } while (0)
 
@@ -621,7 +621,7 @@ int CmiTryLock(CmiNodeLock lock);
     if (!(expr)) {                                                             \
       fprintf(stderr, __VA_ARGS__);                                            \
       fprintf(stderr, "\n");                                                   \
-      CmiExit(0);                                                              \
+      CmiAbort("Failed assert");                                                              \
     }                                                                          \
   } while (0)
 #endif
