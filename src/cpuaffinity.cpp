@@ -245,6 +245,33 @@ static int set_thread_affinity(hwloc_cpuset_t cpuset)
   return 0;
 }
 
+static void bind_process_only(hwloc_obj_type_t process_unit)
+{
+  hwloc_cpuset_t cpuset;
+
+  int process_unitcount = hwloc_get_nbobjs_by_type(topology, process_unit);
+
+  int process_assignment = CmiMyRank() % process_unitcount;
+
+  hwloc_obj_t process_obj = hwloc_get_obj_by_type(topology, process_unit, process_assignment);
+  set_process_affinity(process_obj->cpuset);
+}
+
+static void bind_threads_only(hwloc_obj_type_t thread_unit)
+{
+  hwloc_cpuset_t cpuset;
+
+  int thread_unitcount = hwloc_get_nbobjs_by_type(topology, thread_unit);
+
+  int thread_assignment = CmiMyRank() % thread_unitcount;
+
+  hwloc_obj_t thread_obj = hwloc_get_obj_by_type(topology, thread_unit, thread_assignment);
+  hwloc_cpuset_t thread_cpuset = hwloc_bitmap_dup(thread_obj->cpuset);
+  hwloc_bitmap_singlify(thread_cpuset);
+  set_thread_affinity(thread_cpuset);
+  hwloc_bitmap_free(thread_cpuset);
+}
+
 static void bind_process_and_threads(hwloc_obj_type_t process_unit, hwloc_obj_type_t thread_unit)
 {
   hwloc_cpuset_t cpuset;
@@ -271,8 +298,47 @@ static int set_default_affinity(void){
   char *s;
   int n = -1;
 
-  //just implement binding worker threads to PUs
-  bind_process_and_threads(HWLOC_OBJ_PACKAGE, HWLOC_OBJ_PU);
+  if ((s = getenv("CmiProcessPerSocket")))
+  {
+    n = atoi(s);
+    if (getenv("CmiOneWthPerCore"))
+      bind_process_and_threads(HWLOC_OBJ_PACKAGE, HWLOC_OBJ_CORE);
+    else if (getenv("CmiOneWthPerPU"))
+      bind_process_and_threads(HWLOC_OBJ_PACKAGE, HWLOC_OBJ_PU);
+    else
+      bind_process_only(HWLOC_OBJ_PACKAGE);
+  }
+  else if ((s = getenv("CmiProcessPerCore")))
+  {
+    n = atoi(s);
+    if (getenv("CmiOneWthPerPU"))
+      bind_process_and_threads(HWLOC_OBJ_CORE, HWLOC_OBJ_PU);
+    else
+      bind_process_only(HWLOC_OBJ_CORE);
+  }
+  else if ((s = getenv("CmiProcessPerPU")))
+  {
+    n = atoi(s);
+    bind_process_only(HWLOC_OBJ_PU);
+  }
+  else // if ((s = getenv("CmiProcessPerHost")))
+  {
+    if (getenv("CmiOneWthPerSocket"))
+    {
+      n = 0;
+      bind_threads_only(HWLOC_OBJ_PACKAGE);
+    }
+    else if (getenv("CmiOneWthPerCore"))
+    {
+      n = 0;
+      bind_threads_only(HWLOC_OBJ_CORE);
+    }
+    else if (getenv("CmiOneWthPerPU"))
+    {
+      n = 0;
+      bind_threads_only(HWLOC_OBJ_PU);
+    }
+  }
 
   return n != -1;
 }
