@@ -106,7 +106,6 @@ void converseRunPe(int rank) {
   CldModuleInit(CmiMyArgv);
 #ifdef RECONVERSE_ENABLE_CPU_AFFINITY
   CmiInitCPUAffinity(CmiMyArgv);
-  CmiSetCPUAffinity(rank);
 #endif
 
   Cmi_exitHandler = CmiRegisterHandler(CmiExitHandler);

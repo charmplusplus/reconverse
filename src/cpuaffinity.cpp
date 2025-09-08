@@ -41,6 +41,94 @@ static int cpuPhyNodeAffinityRecvHandlerIdx;
 // CmiNumCores
 static hwloc_topology_t topology, legacy_topology;
 
+static int search_pemap(char *pecoremap, int pe)
+{
+  int *map = (int *)malloc(CmiNumPesGlobal()*sizeof(int));
+  char *ptr = NULL;
+  int h, i, j, k, count;
+  int plusarr[128];
+  char *str;
+
+  char *mapstr = (char*)malloc(strlen(pecoremap)+1);
+  strcpy(mapstr, pecoremap);
+
+  str = strtok_r(mapstr, ",", &ptr);
+  count = 0;
+  while (str && count < CmiNumPesGlobal())
+  {
+      int hasdash=0, hascolon=0, hasdot=0, hasstar1=0, hasstar2=0, numplus=0;
+      int start, end, stride=1, block=1;
+      int iter=1;
+      plusarr[0] = 0;
+      for (i=0; i<strlen(str); i++) {
+          if (str[i] == '-' && i!=0) hasdash=1;
+          else if (str[i] == ':') hascolon=1;
+          else if (str[i] == '.') hasdot=1;
+          else if (str[i] == 'x') hasstar1=1;
+          else if (str[i] == 'X') hasstar2=1;
+          else if (str[i] == '+') {
+            if (str[i+1] == '+' || str[i+1] == '-') {
+              printf("Warning: Check the format of \"%s\".\n", str);
+            } else if (sscanf(&str[i], "+%d", &plusarr[++numplus]) != 1) {
+              printf("Warning: Check the format of \"%s\".\n", str);
+              --numplus;
+            }
+          }
+      }
+      if (hasstar1 || hasstar2) {
+          if (hasstar1) sscanf(str, "%dx", &iter);
+          if (hasstar2) sscanf(str, "%dX", &iter);
+          while (*str!='x' && *str!='X') str++;
+          str++;
+      }
+      if (hasdash) {
+          if (hascolon) {
+            if (hasdot) {
+              if (sscanf(str, "%d-%d:%d.%d", &start, &end, &stride, &block) != 4)
+                 printf("Warning: Check the format of \"%s\".\n", str);
+            }
+            else {
+              if (sscanf(str, "%d-%d:%d", &start, &end, &stride) != 3)
+                 printf("Warning: Check the format of \"%s\".\n", str);
+            }
+          }
+          else {
+            if (sscanf(str, "%d-%d", &start, &end) != 2)
+                 printf("Warning: Check the format of \"%s\".\n", str);
+          }
+      }
+      else {
+          sscanf(str, "%d", &start);
+          end = start;
+      }
+      if (block > stride) {
+        printf("Warning: invalid block size in \"%s\" ignored.\n", str);
+        block=1;
+      }
+      //if (CmiMyPe() == 0) printf("iter: %d start: %d end: %d stride: %d, block: %d. plus %d \n", iter, start, end, stride, block, numplus);
+      for (k = 0; k<iter; k++) {
+        for (i = start; i<=end; i+=stride) {
+          for (j=0; j<block; j++) {
+            if (i+j>end) break;
+            for (h=0; h<=numplus; h++) {
+              map[count++] = i+j+plusarr[h];
+              if (count == CmiNumPesGlobal()) break;
+            }
+            if (count == CmiNumPesGlobal()) break;
+          }
+          if (count == CmiNumPesGlobal()) break;
+        }
+        if (count == CmiNumPesGlobal()) break;
+      }
+      str = strtok_r(NULL, ",", &ptr);
+  }
+  i = map[pe % count];
+
+  free(map);
+  free(mapstr);
+  return i;
+}
+
 static void cpuAffSyncWait(std::atomic<bool> & done)
 {
   do
@@ -191,9 +279,53 @@ static int set_default_affinity(void){
 
 void CmiInitCPUAffinity(char **argv) {
     #if defined(CPU_OR)
+    // check for flags
+    int affinity_flag = CmiGetArgFlagDesc(argv,"+setcpuaffinity", "set cpu affinity");
+    char *pemap = NULL;
+    // 0 if OS-assigned, 1 if logical hwloc assigned
+    // for now, stick with os-assigned only
+    // also no commap, we have no commthreads
+    int pemap_logical_flag = 0;
+    CmiGetArgStringDesc(argv, "+pemap", &pemap, "define pe to core mapping");
+    if (pemap!=NULL) affinity_flag = 1;
     CmiAssignOnce(&cpuPhyNodeAffinityRecvHandlerIdx, CmiRegisterHandler((CmiHandler)cpuPhyNodeAffinityRecvHandler));
-    set_default_affinity();
+    // setting default affinity (always needed, not the same as setting cpu affinity)
+    int done = 0;
+    CmiNodeAllBarrier();
+    /* must bind the rank 0 which is the main thread first */
+    /* binding the main thread seems to change binding for all threads */
+    if (CmiMyRank() == 0) {
+        done = set_default_affinity();
+    }
+    CmiNodeAllBarrier();
+    if (CmiMyRank() != 0) {
+        done = set_default_affinity();
+    }
+    if (done) {
+        return;
+    }
+    //set cmi affinity
+    if (!affinity_flag) {
+      if (CmiMyPe() == 0) CmiPrintf("Charm++> cpu affinity NOT enabled.\n");
+      return;
+    }
+    if (CmiMyPe() == 0) {
+     CmiPrintf("Charm++> cpu affinity enabled. \n");
+     if (pemap!=NULL)
+       CmiPrintf("Charm++> cpuaffinity PE-core map (%s): %s\n",
+           pemap_logical_flag ? "logical indices" : "OS indices", pemap);
+    }
+    // if a pemap is provided
+    if (pemap != NULL){
+      int mycore = search_pemap(pemap, CmiMyPeGlobal());
+      if (CmiSetCPUAffinity(mycore) == -1) CmiAbort("CmiSetCPUAffinity failed!");
+    }
+    // if we are just using +setcpuaffinity
+    else {
+      CmiPrintf("Charm++> +setcpuaffinity implementation in progress\n");
+    }
     #endif
+    CmiNodeAllBarrier();
 }
 
 // Uses PU indices assigned by the OS
