@@ -42,6 +42,8 @@ set(RECONVERSE_AUTOFETCH_LCI2_TAG
     CACHE STRING "The tag to fetch for LCIv2") # master branch as of 2025-08-19
 
 option(SPANTREE "whether to enable spanning tree collectives" OFF) #should turn this on once charm issues fixed
+
+# Reconverse uses SMP always, but turn on this option for backwards compatibility (see pingpong_multipairs for example)
 option(CMK_SMP "whether to enable SMP support" ON)
 
 option(RECONVERSE_ATOMIC_QUEUE "whether to use atomic queue" ON)
