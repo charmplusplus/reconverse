@@ -17,6 +17,10 @@ void init(char **argv) {
   gCommBackend->init(argv);
   gMyNodeID = gCommBackend->getMyNodeId();
   gNumNodes = gCommBackend->getNumNodes();
+  if (gNumNodes == 1) {
+    DEBUGF("Only one node detected, exiting comm backend\n");
+    exit();
+  }
 }
 
 void exit() {
