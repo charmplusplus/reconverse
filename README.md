@@ -15,6 +15,7 @@ $ make
 
 ## Runtime options
 - -DRECONVERSE_ENABLE_CPU_AFFINITY (ON by default if hwloc is found): Enable setting CPU affinity with HWLOC (must have HWLOC installed)
+- -DCMAKE_BUILD_TYPE (not set by default): Set the build type to change which flags are passed to the compiler, e.g. use `Release` to compile with `-O3` or `Debug` to compile with `-g`
 
 ## LCI
 
