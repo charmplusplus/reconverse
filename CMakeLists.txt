@@ -48,7 +48,6 @@ option(CMK_SMP "whether to enable SMP support" ON)
 option(CMK_CPV_IS_SMP "whether to enable SMP support for cpvs" ON)
 
 option(RECONVERSE_ATOMIC_QUEUE "whether to use atomic queue" ON)
-option(RECONVERSE_OPTIMIZED "whether to compile with optimizations" ON)
 
 set(RECONVERSE_TEST_LAUNCHER
     "mpirun"
@@ -128,13 +127,6 @@ if(NOT RECONVERSE_ROOT_PROJECT)
   # This project is being fetched as a subproject by another CMake project.
   # Define an alias to mimic find_package behavior and ensure consistent usage.
   add_library(reconverse::reconverse ALIAS reconverse)
-endif()
-
-if(RECONVERSE_OPTIMIZED)
-  set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
-  message(STATUS "Compiling with optimizations")
-else()
-  message(STATUS "Compiling without optimizations")
 endif()
 
 # ##############################################################################
