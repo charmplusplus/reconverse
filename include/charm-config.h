@@ -8,5 +8,6 @@
 #define RECONVERSE_INCLUDE_CHARM_CONFIG_H
 
 #define CMK_LBDB_ON 1
+#define CMK_HAS_PARTITION 1
 
 #endif
