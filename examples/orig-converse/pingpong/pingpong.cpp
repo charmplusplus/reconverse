@@ -195,7 +195,7 @@ CmiStartFn mymain(int argc, char *argv[]) {
 
   // Update the argc after runtime parameters are extracted out
   argc = CmiGetArgc(argv);
-  if (argc == 5) {
+  if (argc >= 5) {
     CpvAccess(nCycles) = atoi(argv[1]);
     CpvAccess(minMsgSize) = atoi(argv[2]);
     CpvAccess(maxMsgSize) = atoi(argv[3]);

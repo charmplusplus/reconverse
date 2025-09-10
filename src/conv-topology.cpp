@@ -48,50 +48,6 @@
 //   return CmiHwlocTopologyLocal.total_num_pus;
 // }
 
-static int affMsgsRecvd = 1;  // number of affinity messages received at PE0
-#if defined(CPU_OR)
-static cpu_set_t core_usage;  // used to record union of CPUs used by every PE in physical node
-#endif
-static int aff_is_set = 0;
-
-static std::atomic<bool> cpuPhyAffCheckDone{};
-static int cpuPhyNodeAffinityRecvHandlerIdx;
-
-struct affMsg {
-  char core[CmiMsgHeaderSizeBytes];
-  #if defined(CPU_OR)
-  cpu_set_t affinity;
-  #endif
-};
-
-static void cpuPhyNodeAffinityRecvHandler(void *msg)
-{
-  static int count = 0;
-
-  affMsg *m = (affMsg *)msg;
-#if !defined(_WIN32) && defined(CPU_OR)
-  CPU_OR(&core_usage, &core_usage, &m->affinity);
-  affMsgsRecvd++;
-#endif
-  CmiFree(m);
-
-  if (++count == CmiNumPesOnPhysicalNode(0) - 1)
-    cpuPhyAffCheckDone = true;
-}
-
-void CmiInitCPUAffinity(char **argv) {
-    CmiAssignOnce(&cpuPhyNodeAffinityRecvHandlerIdx, CmiRegisterHandler((CmiHandler)cpuPhyNodeAffinityRecvHandler));
-}
-
-
-static void cpuAffSyncWait(std::atomic<bool> & done)
-{
-  do
-    CsdSchedulePoll();
-  while (!done.load());
-
-  CsdSchedulePoll();
-}
 
 void CmiInitMemAffinity(char **argv) {
     char *tmpstr = NULL;
@@ -105,78 +61,7 @@ void CmiInitMemAffinity(char **argv) {
     CmiGetArgStringDesc(argv, "+mempol", &tmpstr, "define memory policy {bind, preferred or interleave} ");
 }
 
-#if defined(CPU_OR)
-int get_thread_affinity(cpu_set_t *cpuset) {
-  CPU_ZERO(cpuset);
-  if ((errno = pthread_getaffinity_np(pthread_self(), sizeof(cpu_set_t), cpuset))) {
-    perror("pthread_getaffinity");
-    return -1;
-  }
-  return 0;
-}
-#endif
 
-
-#if defined(CPU_OR)
-int get_affinity(cpu_set_t *cpuset) {
-  return get_thread_affinity(cpuset);
-}
-#endif
-
-void CmiCheckAffinity(void)
-{
-  #if defined(CPU_OR)
-  if (!CmiCpuTopologyEnabled()) return;  // only works if cpu topology enabled
-
-  if (CmiNumPes() == 1)
-    return;
-
-  if (CmiMyPe() == 0)
-  {
-    // wait for every PE affinity from my physical node (for now only done on phy node 0)
-
-    cpu_set_t my_aff;
-    if (get_affinity(&my_aff) == -1) CmiAbort("get_affinity failed\n");
-    CPU_OR(&core_usage, &core_usage, &my_aff); // add my affinity (pe0)
-
-    cpuAffSyncWait(cpuPhyAffCheckDone);
-
-  }
-  else if (CmiPhysicalNodeID(CmiMyPe()) == 0)
-  {
-    // send my affinity to first PE on physical node (only done on phy node 0 for now)
-    affMsg *m = (affMsg*)CmiAlloc(sizeof(affMsg));
-    CmiSetHandler((char *)m, cpuPhyNodeAffinityRecvHandlerIdx);
-    if (get_affinity(&m->affinity) == -1) { // put my affinity in msg
-      CmiFree(m);
-      CmiAbort("get_affinity failed\n");
-    }
-    CmiSyncSendAndFree(0, sizeof(affMsg), (void *)m);
-
-    CsdSchedulePoll();
-  }
-
-  CmiBarrier();
-
-  if (CmiMyPe() == 0)
-  {
-    // NOTE this test is simple and may not detect every possible case of
-    // oversubscription
-    const int N = CmiNumPesOnPhysicalNode(0);
-    if (CPU_COUNT(&core_usage) < N) {
-      // TODO suggest command line arguments?
-      if (!aff_is_set) {
-        CmiAbort("Multiple PEs assigned to same core. Set affinity "
-        "options to correct or lower the number of threads, or pass +setcpuaffinity to ignore.\n");
-      } else {
-        CmiPrintf("WARNING: Multiple PEs assigned to same core, recommend "
-        "adjusting processor affinity or passing +CmiSleepOnIdle to reduce "
-        "interference.\n");
-      }
-    }
-  }
-  #endif
-}
 
 skt_ip_t _skt_invalid_ip={{0}};
 
