@@ -912,7 +912,6 @@ extern "C" {
 void registerTraceInit(void (*fn)(char **argv));
 
 //partitions
-#if CMK_HAS_PARTITION
 
 typedef enum Partition_Type {
       PARTITION_SINGLETON,
@@ -976,30 +975,5 @@ void CmiInterSyncNodeSendFn(int destNode, int partition, int messageSize, char *
 void CmiInterSyncNodeSendAndFreeFn(int destNode, int partition, int messageSize, char *msg);
 
 /* end of variables and functions for partition */
-
-#else
-
-#define CmiMyPartition()         0
-#define CmiPartitionSize(part)       CmiNumNodes()
-#define CmiMyPartitionSize()         CmiNumNodes()
-#define CmiNumPartitions()       1
-#define CmiNumNodesGlobal()      CmiNumNodes()
-#define CmiMyNodeGlobal()        CmiMyNode()
-#define CmiNumPesGlobal()        CmiNumPes()
-#define CmiMyPeGlobal()          CmiMyPe()
-#if !CMK_SMP
-extern int _Cmi_mynodesize;
-#endif
-#define CmiGetPeGlobal(pe,part)         (pe)
-#define CmiGetNodeGlobal(node,part)     (node)
-#define CmiGetPeLocal(pe)               (pe)
-#define CmiGetNodeLocal(node)           (node)
-
-#define CmiInterSyncSend(pe,p,s,m)              (CmiSyncSendFn((pe),(s),(char *)(m)))
-#define CmiInterSyncSendAndFree(pe,p,s,m)       (CmiFreeSendFn((pe),(s),(char *)(m)))
-#define CmiInterSyncNodeSend(pe,p,s,m)         (CmiSyncNodeSendFn((pe),(s),(char *)(m)))
-#define CmiInterSyncNodeSendAndFree(pe,p,s,m)  (CmiFreeNodeSendFn((pe),(s),(char *)(m)))
-
-#endif
 
 #endif // CONVERSE_H
