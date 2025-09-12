@@ -346,6 +346,14 @@ void *CmiAlloc(int size) {
   char* blk = (char*)malloc(size + sizeof(CmiChunkHeader));
 
   char* ptr = blk + sizeof(CmiChunkHeader);
+
+  // zero out some header fields
+  if(size >= CmiMsgHeaderSizeBytes) {
+    // Set zcMsgType in the converse message header to CMK_REG_NO_ZC_MSG
+    CMI_ZC_MSGTYPE((void*) ptr) = CMK_REG_NO_ZC_MSG;
+    CMI_MSG_NOKEEP((void*) ptr) = 0;
+  }
+
   REFFIELDSET(ptr, 1);
   SIZEFIELD(ptr) = size; // TODO: where is this used? just stole from old converse
 
