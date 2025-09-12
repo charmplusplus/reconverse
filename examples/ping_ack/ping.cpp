@@ -8,6 +8,7 @@ CpvDeclare(int, ackmsg_index);
 CpvDeclare(int, stop_index);
 CpvDeclare(int, msg_size);
 CpvDeclare(int, ack_count);
+CpvDeclare(double, start_time);
 
 struct Message {
   CmiMessageHeader header;
@@ -98,6 +99,7 @@ void pe0_ack_handler(void *vmsg) {
   CpvAccess(ack_count) = 1 + CpvAccess(ack_count);
 
   if (CpvAccess(ack_count) == CmiNumPes() / 2) {
+    printf("All acks received at PE 0 after %f\n", CmiWallTimer() - CpvAccess(start_time));
     CpvAccess(ack_count) = 0;
 
     CmiFree(msg);
@@ -129,6 +131,7 @@ void ping_moduleinit(int argc, char **argv) {
   CpvInitialize(int, stop_index);
   CpvInitialize(int, msg_size);
   CpvInitialize(int, ack_count);
+  CpvInitialize(double, start_time);
 
   CpvAccess(ping_index) = CmiRegisterHandler(ping_handler);
   CpvAccess(ackmsg_index) = CmiRegisterHandler(pe0_ack_handler);
@@ -143,7 +146,7 @@ void ping_moduleinit(int argc, char **argv) {
   // CpthreadModuleInit();
   //  CpmInitializeThisModule();
   // Set runtime cpuaffinity
-  //  CmiInitCPUAffinity(argv);
+    CmiInitCPUAffinity(argv);
   // Initialize CPU topology
   //  CmiInitCPUTopology(argv);
   // Wait for all PEs of the node to complete topology init
@@ -151,6 +154,7 @@ void ping_moduleinit(int argc, char **argv) {
 
   // Update the argc after runtime parameters are extracted out
   // argc = CmiGetArgc(argv);
+  if(CmiMyPe == 0) CpvAccess(start_time) = CmiWallTimer();
   if (CmiMyPe() < CmiNumPes() / 2)
     ping_init();
 }
