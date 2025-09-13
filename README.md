@@ -83,7 +83,7 @@ $ git clone https://github.com/charmplusplus/reconverse.git
 $ cd reconverse
 $ mkdir build
 $ cd build
-$ cmake -DRECONVERSE_TRY_ENABLE_COMM_LCI2=ON -DRECONVERSE_AUTOFETCH_LCI2=ON -DLCI_NETWORK_BACKENDS=ofi ..
+$ cmake -DRECONVERSE_TRY_ENABLE_COMM_LCI2=ON -DRECONVERSE_AUTOFETCH_LCI2=ON ..
 $ make
 ```
 
