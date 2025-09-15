@@ -38,8 +38,8 @@ option(RECONVERSE_TRY_ENABLE_COMM_LCI2 "whether to enable the LCIv2 backend" ON)
 option(RECONVERSE_AUTOFETCH_LCI2
         "whether to autofetch LCIv2 if LCI2 cannot be found" OFF)
 set(RECONVERSE_AUTOFETCH_LCI2_TAG
-    "1d2de3b763a96aa0395cd3169f63909e726f2687"
-    CACHE STRING "The tag to fetch for LCIv2") # master branch as of 2025-09-12
+    "0d20794cd8a76a35eac4e464ac3c2f5f615f5537"
+    CACHE STRING "The tag to fetch for LCIv2") # master branch as of 2025-09-14
 
 option(SPANTREE "whether to enable spanning tree collectives" OFF) #should turn this on once charm issues fixed
 
