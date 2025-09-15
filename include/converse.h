@@ -277,6 +277,8 @@ void CmiNumberHandlerEx(int n, CmiHandlerEx h, void *userPtr);
 // message allocation/memory
 void *CmiAlloc(int size);
 void CmiFree(void *msg);
+#define CmiRdmaAlloc CmiAlloc
+#define CmiRdmaFree CmiFree
 #define CmiMemoryUsage() 0
 void CmiMemoryMarkBlock(void *blk);
 extern void
