@@ -465,7 +465,7 @@ void CmiInterFreeSendFn(int destPE, int partition, int messageSize, char *msg) {
 // EXIT TOOLS
 
 void CmiExitHelper(int status) {
-  CmiMessageHeader *exitMsg = new CmiMessageHeader(); // might need to allocate
+  CmiMessageHeader *exitMsg = (CmiMessageHeader *) CmiAlloc(CmiMsgHeaderSizeBytes); // might need to allocate
   exitMsg->handlerId = Cmi_exitHandler;
   CmiSyncBroadcastAllAndFree(sizeof(*exitMsg), exitMsg);
 }

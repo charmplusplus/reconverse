@@ -277,6 +277,8 @@ void CmiNumberHandlerEx(int n, CmiHandlerEx h, void *userPtr);
 // message allocation/memory
 void *CmiAlloc(int size);
 void CmiFree(void *msg);
+#define CmiRdmaAlloc CmiAlloc
+#define CmiRdmaFree CmiFree
 #define CmiMemoryUsage() 0
 void CmiMemoryMarkBlock(void *blk);
 extern void
@@ -451,13 +453,14 @@ double CrnDrandRange(double, double);
 #define CcdUSERMAX 127
 
 // convcond functions
-typedef CmiHandler CcdVoidFn;
-typedef CmiHandler CcdCondFn;
+typedef void (*CcdCondFn)(void *userParam);
+typedef void (*CcdVoidFn)(void *userParam,double curWallTime);
 void CcdModuleInit();
-void CcdCallFnAfter(CmiHandler fnp, void *arg, double msecs);
-#define CcdCallFnAfterOnPE(fn, arg, msecs, pe) CcdCallFnAfter(fn, arg, msecs)
-int CcdCallOnCondition(int condnum, CmiHandler fnp, void *arg);
-int CcdCallOnConditionKeep(int condnum, CmiHandler fnp, void *arg);
+#define CcdIGNOREPE   -2
+void CcdCallFnAfter(CcdVoidFn fnp, void *arg, double msecs);
+void CcdCallFnAfterOnPE(CcdVoidFn fnp, void *arg, double msecs, int pe);
+int CcdCallOnCondition(int condnum, CcdCondFn fnp, void *arg);
+int CcdCallOnConditionKeep(int condnum, CcdCondFn fnp, void *arg);
 void CcdCancelCallOnCondition(int condnum, int idx);
 void CcdCancelCallOnConditionKeep(int condnum, int idx);
 void CcdRaiseCondition(int condnum);
