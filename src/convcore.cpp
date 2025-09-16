@@ -222,7 +222,9 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
   Cmi_startfn = fn;
   CharmLibInterOperate = 0;
 
+  #ifdef CMK_HAS_PARTITION
   CmiCreatePartitions(argv);
+  #endif
 
   CmiStartThreads();
 }

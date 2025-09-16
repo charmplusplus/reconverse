@@ -46,7 +46,6 @@ option(SPANTREE "whether to enable spanning tree collectives" OFF) #should turn 
 # Reconverse uses SMP always, but turn on this option for backwards compatibility (see pingpong_multipairs for example)
 option(CMK_SMP "whether to enable SMP support" ON)
 option(CMK_CPV_IS_SMP "whether to enable SMP support for cpvs" ON)
-option(CMK_HAS_PARTITION "whether to enable partition support" ON)
 
 option(RECONVERSE_ATOMIC_QUEUE "whether to use atomic queue" ON)
 
