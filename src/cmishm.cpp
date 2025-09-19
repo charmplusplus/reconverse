@@ -17,6 +17,7 @@ CpvStaticDeclare(int, num_cbs_exptd);
 CpvStaticDeclare(int, handle_callback);
 CpvStaticDeclare(int, handle_node_pid);
 CsvStaticDeclare(pid_t, node_pid);
+CpvExtern(int, CthResumeNormalThreadIdx);
 
 static int sendPid_(CmiIpcManager*);
 static void openAllShared_(CmiIpcManager*);
@@ -118,6 +119,31 @@ static void openAllShared_(CmiIpcManager* meta) {
     meta->shared[proc] = res.second;
   }
   DEBUGF(("%d> finished opening all shared\n", meta->mine));
+}
+
+// NOTE ( there may be a faster way to do this? )
+inline std::size_t whichBin_(std::size_t size) {
+  std::size_t bin;
+  for (bin = 0; bin < kNumCutOffPoints; bin++) {
+    if (size <= kCutOffPoints[bin]) {
+      break;
+    }
+  }
+  return bin;
+}
+
+static void awakenSleepers_(void) {
+  auto& current_sleepers = CsvAccess(sleepers);
+  for (auto i = 0; i < current_sleepers.size(); i++) {
+    auto& th = current_sleepers[i];
+    if (i == CmiMyRank()) {
+      CthAwaken(th);
+    } else {
+      auto* token = CthGetToken(th);
+      CmiSetHandler(token, CpvAccess(CthResumeNormalThreadIdx));
+      CmiPushPE(i, token);
+    }
+  }
 }
 
 // returns number of processes in node

@@ -6,7 +6,7 @@
 #include "cmishm.cpp"
 #endif
 
-#define CMI_DEST_RANK(msg) ((CmiMsgHeaderBasic*)msg)->rank
+#define CMI_DEST_RANK(msg) ((CmiMsgHeaderBasic*)msg)->destPE
 extern void CmiPushNode(void* msg);
 
 CpvExtern(int, CthResumeNormalThreadIdx);
@@ -23,8 +23,8 @@ void* CmiIpcBlockToMsg(CmiIpcBlock* block, bool init) {
   if (init) {
     // NOTE ( this is identical to code in CmiAlloc )
     CmiAssert(((uintptr_t)msg % ALIGN_BYTES) == 0);
-    CMI_ZC_MSGTYPE((void*) ptr) = CMK_REG_NO_ZC_MSG;
-    CMI_MSG_NOKEEP((void*) ptr) = 0;
+    CMI_ZC_MSGTYPE((void*) msg) = CMK_REG_NO_ZC_MSG;
+    CMI_MSG_NOKEEP((void*) msg) = 0;
     SIZEFIELD(msg) = block->size;
     REFFIELDSET(msg, 1);
   }
@@ -56,7 +56,7 @@ CmiIpcBlock* CmiMsgToIpcBlock(CmiIpcManager* manager, char* src, std::size_t len
     if (block == nullptr) {
       return nullptr;
     } else {
-      CmiAssertMsg((block->dst == manager->mine) && (manager->mine == CmiMyNode()));
+      CmiAssert((block->dst == manager->mine) && (manager->mine == CmiMyNode()));
       dst = (char*)CmiIpcBlockToMsg(block, true);
       memcpy(dst, src, len);
       CmiFree(src);
@@ -99,7 +99,7 @@ bool CmiPushIpcBlock(CmiIpcManager* meta, CmiIpcBlock* block) {
 
 std::pair<CmiIpcBlock*, CmiIpcAllocStatus> CmiAllocIpcBlock(CmiIpcManager* meta, int dstProc, std::size_t size) {
   auto dstNode = CmiPhysicalNodeID(CmiNodeFirst(dstProc));
-  auto thisPe = CmiInCommThread() ? CmiNodeFirst(CmiMyNode()) : CmiMyPe();
+  auto thisPe = CmiMyPe();
   auto thisProc = CmiMyNode();
   auto thisNode = CmiPhysicalNodeID(thisPe);
   if ((thisProc == dstProc) || (thisNode != dstNode)) {
@@ -137,7 +137,7 @@ std::pair<CmiIpcBlock*, CmiIpcAllocStatus> CmiAllocIpcBlock(CmiIpcManager* meta,
 
 void CmiFreeIpcBlock(CmiIpcManager* meta, CmiIpcBlock* block) {
   auto bin = whichBin_(block->size);
-  CmiAssertMsg(bin < kNumCutOffPoints);
+  CmiAssert(bin < kNumCutOffPoints);
   auto& shared = meta->shared[block->src];
   auto& free = shared->free[bin];
   while (!pushBlock_(free, block->orig, shared))
@@ -177,17 +177,6 @@ static std::uintptr_t allocBlock_(ipc_shared_* meta, std::size_t size) {
   }
 }
 
-// NOTE ( there may be a faster way to do this? )
-inline std::size_t whichBin_(std::size_t size) {
-  std::size_t bin;
-  for (bin = 0; bin < kNumCutOffPoints; bin++) {
-    if (size <= kCutOffPoints[bin]) {
-      break;
-    }
-  }
-  return bin;
-}
-
 inline static CmiIpcBlock* popBlock_(std::atomic<std::uintptr_t>& head,
                                      void* base) {
   auto prev = head.exchange(cmi::ipc::nil, std::memory_order_acquire);
@@ -219,18 +208,4 @@ inline static bool pushBlock_(std::atomic<std::uintptr_t>& head,
   auto check = head.exchange(value, std::memory_order_release);
   CmiAssert(check == cmi::ipc::nil);
   return true;
-}
-
-static void awakenSleepers_(void) {
-  auto& sleepers = CsvAccess(sleepers);
-  for (auto i = 0; i < sleepers.size(); i++) {
-    auto& th = sleepers[i];
-    if (i == CmiMyRank()) {
-      CthAwaken(th);
-    } else {
-      auto* token = CthGetToken(th);
-      CmiSetHandler(token, CpvAccess(CthResumeNormalThreadIdx));
-      CmiPushPE(i, token);
-    }
-  }
 }

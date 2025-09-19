@@ -1,9 +1,6 @@
 #ifndef CMI_SHMEM_HH
 #define CMI_SHMEM_HH
 
-static_assert(CMK_USE_SHMEM, "enable shmem to use this header");
-
-#include "converse_internal.h"
 #include <atomic>
 #include <cstdint>
 #include <limits>
@@ -13,6 +10,9 @@ static_assert(CMK_USE_SHMEM, "enable shmem to use this header");
 #define CMI_IPC_CUTOFF_DESC "max message size for cmi-shmem (in bytes)"
 #define CMI_IPC_POOL_SIZE_ARG "ipcpoolsize"
 #define CMI_IPC_POOL_SIZE_DESC "size of cmi-shmem pool (in bytes)"
+
+struct CmiIpcManager;
+#include "converse.h"
 
 namespace cmi {
 namespace ipc {
@@ -43,8 +43,6 @@ public:
   CmiIpcBlock(std::size_t size_, std::uintptr_t orig_)
       : orig(orig_), next(cmi::ipc::nil), size(size_) {}
 };
-
-struct CmiIpcManager;
 
 enum CmiIpcAllocStatus {
   CMI_IPC_OUT_OF_MEMORY,

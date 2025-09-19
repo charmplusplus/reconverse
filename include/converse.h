@@ -389,15 +389,25 @@ int CmiError(const char *format, ...);
 void CmiInitCPUTopology(char **argv);
 void CmiInitCPUAffinity(char **argv);
 
-void __CmiEnforceMsgHelper(const char *expr, const char *fileName, int lineNum,
-                           const char *msg, ...);
+#define __CMK_STRING(x) #x
+#define __CMK_XSTRING(x) __CMK_STRING(x)
 
-#define CmiEnforce(condition)                                                  \
-  do {                                                                         \
-    if (!(condition)) {                                                        \
-      __CmiEnforceMsgHelper(#condition, __FILE__, __LINE__, "");               \
-    }                                                                          \
-  } while (0)
+void __CmiEnforceHelper(const char* expr, const char* fileName, const char* lineNum);
+void __CmiEnforceMsgHelper(const char* expr, const char* fileName,
+			   const char* lineNum, const char* msg, ...);
+
+#define CmiEnforce(expr)                                             \
+  ((void)(CMI_LIKELY(expr) ? 0                                       \
+                 : (__CmiEnforceHelper(__CMK_STRING(expr), __FILE__, \
+                                       __CMK_XSTRING(__LINE__)),     \
+                    0)))
+
+#define CmiEnforceMsg(expr, ...)                                              \
+  ((void)(CMI_LIKELY(expr)                                                    \
+              ? 0                                                             \
+              : (__CmiEnforceMsgHelper(__CMK_STRING(expr), __FILE__,          \
+                                       __CMK_XSTRING(__LINE__), __VA_ARGS__), \
+                 0)))
 
 double getCurrentTime(void);
 double CmiWallTimer(void);

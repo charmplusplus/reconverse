@@ -251,20 +251,6 @@ using namespace CpuTopoDetails;
 // }
 
 static std::atomic<bool> cpuTopoSyncHandlerDone{};
-#  if CMK_SMP && !CMK_SMP_NO_COMMTHD
-extern void CommunicationServerThread(int sleepTime);
-static std::atomic<bool> cpuTopoSyncCommThreadDone{};
-#  endif
-
-#  if CMK_SMP && !CMK_SMP_NO_COMMTHD
-static void cpuTopoSyncWaitCommThread(std::atomic<bool>& done)
-{
-  do CommunicationServerThread(5);
-  while (!done.load());
-
-  CommunicationServerThread(5);
-}
-#  endif
 
 static void cpuTopoSyncWait(std::atomic<bool>& done)
 {
@@ -532,13 +518,6 @@ void LrtsInitCpuTopo(char** argv)
     return;
   }
 
-#    if CMK_SMP && !CMK_SMP_NO_COMMTHD
-  if (CmiInCommThread())
-  {
-    cpuTopoSyncWaitCommThread(cpuTopoSyncCommThreadDone);
-  }
-  else
-#    endif
   {
     /* prepare a msg to send */
     hostnameMsg* msg = (hostnameMsg*)CmiAlloc(sizeof(hostnameMsg) + sizeof(_procInfo));
@@ -566,9 +545,6 @@ void LrtsInitCpuTopo(char** argv)
         CsdSchedulePoll();
       }
 
-#    if CMK_SMP && !CMK_SMP_NO_COMMTHD
-      cpuTopoSyncCommThreadDone = true;
-#    endif
     }
   }
 
