@@ -258,7 +258,7 @@ void CmiInitState(int rank) {
                 newZCPupGets); // Check if this is necessary
   CpvInitialize(int, interopExitFlag);
   CpvAccess(interopExitFlag) = 0;
-  #if CMK_USE_SHMEM
+  #ifdef CMK_USE_SHMEM
   CsvInitialize(CmiIpcManager*, coreIpcManager_);
   CsvAccess(coreIpcManager_) = nullptr;
   #endif
@@ -398,14 +398,14 @@ void CmiFree(void *msg) {
     free(BLKSTART(parentBlk));
   }
 
-  #if CMK_USE_SHMEM
+  #ifdef CMK_USE_SHMEM
     // we should only free _our_ IPC blocks -- so calling CmiFree on
     // an IPC block issued by another process will cause a bad free!
     // (note -- this would only occur if you alloc an ipc block then
     //          decide not to send it; that should be avoided! )
     CmiIpcBlock* ipc;
     auto* manager = CsvAccess(coreIpcManager_);
-    if (blk && (ipc = CmiIsIpcBlock(manager, BLKSTART(blk), CmiMyNode()))) {
+    if (msg && (ipc = CmiIsIpcBlock(manager, BLKSTART(msg), CmiMyNode()))) {
       CmiFreeIpcBlock(manager, ipc);
       return;
     }
@@ -747,11 +747,33 @@ int CmiError(const char *format, ...) {
   return ret;
 }
 
-void __CmiEnforceMsgHelper(const char *expr, const char *fileName, int lineNum,
-                           const char *msg, ...) {
-  CmiAbort("[%d] Assertion \"%s\" failed in file %s line %d.\n", CmiMyPe(),
-           expr, fileName, lineNum);
+void __CmiEnforceHelper(const char* expr, const char* fileName, const char* lineNum)
+{
+  CmiAbort("[%d] Assertion \"%s\" failed in file %s line %s.\n", CmiMyPe(), expr,
+           fileName, lineNum);
 }
+
+void __CmiEnforceMsgHelper(const char* expr, const char* fileName, const char* lineNum,
+                           const char* msg, ...)
+{
+  va_list args;
+  va_start(args, msg);
+
+  // Get length of formatted string
+  va_list argsCopy;
+  va_copy(argsCopy, args);
+  const auto size = 1 + vsnprintf(nullptr, 0, msg, argsCopy);
+  va_end(argsCopy);
+
+  // Allocate a buffer of right size and create formatted string in it
+  std::vector<char> formatted(size);
+  vsnprintf(formatted.data(), size, msg, args);
+  va_end(args);
+
+  CmiAbort("[%d] Assertion \"%s\" failed in file %s line %s.\n%s", CmiMyPe(), expr,
+           fileName, lineNum, formatted.data());
+}
+
 
 bool CmiGetIdle() { return idle_condition; }
 
