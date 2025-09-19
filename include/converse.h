@@ -314,6 +314,7 @@ void CmiSyncSendAndFree(int destPE, int messageSize, void *msg);
 void CmiSyncListSend(int npes, const int *pes, int len, void *msg);
 void CmiSyncListSendAndFree(int npes, const int *pes, int len, void *msg);
 void CmiPushPE(int destPE, void *msg);
+void CmiPushNode(void *msg);
 
 void CmiSyncSendFn(int destPE, int messageSize, char *msg);
 void CmiFreeSendFn(int destPE, int messageSize, char *msg);
@@ -978,5 +979,8 @@ void CmiInterSyncNodeSendFn(int destNode, int partition, int messageSize, char *
 void CmiInterSyncNodeSendAndFreeFn(int destNode, int partition, int messageSize, char *msg);
 
 /* end of variables and functions for partition */
+
+#include "cmishmem.h"
+CsvExtern(CmiIpcManager*, coreIpcManager_);
 
 #endif // CONVERSE_H

@@ -43,6 +43,7 @@ int quietMode;
 int quietModeRequested;
 int userDrivenMode;
 int _replaySystem = 0;
+CsvDeclare(CmiIpcManager*, coreIpcManager_);
 
 //partition
 PartitionInfo _partitionInfo;
@@ -257,6 +258,10 @@ void CmiInitState(int rank) {
                 newZCPupGets); // Check if this is necessary
   CpvInitialize(int, interopExitFlag);
   CpvAccess(interopExitFlag) = 0;
+  #if CMK_USE_SHMEM
+  CsvInitialize(CmiIpcManager*, coreIpcManager_);
+  CsvAccess(coreIpcManager_) = nullptr;
+  #endif
   CmiOnesidedDirectInit();
   CcdModuleInit();
 }
@@ -336,6 +341,10 @@ void CmiPushPE(int destPE, void *msg) {
   CmiPushPE(destPE, messageSize, msg);
 }
 
+void CmiPushNode(void *msg) {
+  CmiNodeQueue->push(msg);
+}
+
 void *CmiAlloc(int size) {
   if (size <= 0) {
     CmiPrintf("CmiAlloc: size <= 0\n");
@@ -388,8 +397,20 @@ void CmiFree(void *msg) {
   if (refCount == 1) {
     free(BLKSTART(parentBlk));
   }
-  
 
+  #if CMK_USE_SHMEM
+    // we should only free _our_ IPC blocks -- so calling CmiFree on
+    // an IPC block issued by another process will cause a bad free!
+    // (note -- this would only occur if you alloc an ipc block then
+    //          decide not to send it; that should be avoided! )
+    CmiIpcBlock* ipc;
+    auto* manager = CsvAccess(coreIpcManager_);
+    if (blk && (ipc = CmiIsIpcBlock(manager, BLKSTART(blk), CmiMyNode()))) {
+      CmiFreeIpcBlock(manager, ipc);
+      return;
+    }
+#endif
+  
 }
 
 int CmiGetReference(void *blk) { return REFFIELD(CmiAllocFindEnclosing(blk)); }
