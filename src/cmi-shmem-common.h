@@ -2,7 +2,6 @@
 #define CMI_SHMEM_COMMON_HH
 
 #include "converse_internal.h"
-#include "cmishmem.h"
 
 #include <array>
 #include <limits>
