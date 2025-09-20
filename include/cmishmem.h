@@ -12,7 +12,6 @@
 #define CMI_IPC_POOL_SIZE_DESC "size of cmi-shmem pool (in bytes)"
 
 struct CmiIpcManager;
-#include "converse.h"
 
 namespace cmi {
 namespace ipc {
