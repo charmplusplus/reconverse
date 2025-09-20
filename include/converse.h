@@ -200,6 +200,8 @@ static void CthThreadFree(CthThread t);
 
 void CthResume(CthThread t);
 
+int CthIsSuspendable(CthThread t);
+
 void CthSuspend(void);
 
 void CthAwaken(CthThread th);
