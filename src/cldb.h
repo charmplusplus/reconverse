@@ -5,7 +5,7 @@
 
 #define MAXMSGBFRSIZE 100000
 
-extern thread_local int CldHandlerIndex;
+CpvExtern(int, CldHandlerIndex);
 extern thread_local int CldNodeHandlerIndex;
 extern thread_local int CldBalanceHandlerIndex;
 extern thread_local int CldRelocatedMessages;

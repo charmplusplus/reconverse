@@ -42,7 +42,7 @@ void CldEnqueueGroup(CmiGroup grp, void *msg, int infofn) {
     pfn(&msg);
     ifn(msg, &pfn, &len, &queueing, &priobits, &prioptr);
   }
-  CldSwitchHandler((char *)msg, CldHandlerIndex);
+  CldSwitchHandler((char *)msg, CpvAccess(CldHandlerIndex));
   CmiSetInfo(msg, infofn);
 
   CmiSyncMulticastAndFree(grp, len, msg);
@@ -61,7 +61,7 @@ void CldEnqueueWithinNode(void *msg, int infofn) {
     pfn(&msg);
     ifn(msg, &pfn, &len, &queueing, &priobits, &prioptr);
   }
-  CldSwitchHandler((char *)msg, CldHandlerIndex);
+  CldSwitchHandler((char *)msg, CpvAccess(CldHandlerIndex));
   CmiSetInfo(msg, infofn);
 
   CmiWithinNodeBroadcast(len, (char *)msg);
@@ -77,7 +77,7 @@ void CldEnqueueMulti(int npes, const int *pes, void *msg, int infofn) {
     pfn(&msg);
     ifn(msg, &pfn, &len, &queueing, &priobits, &prioptr);
   }
-  CldSwitchHandler((char *)msg, CldHandlerIndex);
+  CldSwitchHandler((char *)msg, CpvAccess(CldHandlerIndex));
   CmiSetInfo(msg, infofn);
 
   CmiSyncListSendAndFree(npes, pes, len, msg);
@@ -112,7 +112,7 @@ void CldEnqueue(int pe, void *msg, int infofn) {
       pfn(&msg);
       ifn(msg, &pfn, &len, &queueing, &priobits, &prioptr);
     }
-    CldSwitchHandler((char *)msg, CldHandlerIndex);
+    CldSwitchHandler((char *)msg, CpvAccess(CldHandlerIndex));
     CmiSetInfo(msg, infofn);
     if (pe == CLD_BROADCAST) {
       CmiSyncBroadcastAndFree(len, msg);
@@ -157,7 +157,8 @@ void CldNodeEnqueue(int node, void *msg, int infofn) {
 }
 
 void CldModuleInit(char **argv) {
-  CldHandlerIndex = CmiRegisterHandler((CmiHandler)CldHandler);
+  CpvInitialize(int, CldHandlerIndex);
+  CpvAccess(CldHandlerIndex) = CmiRegisterHandler((CmiHandler)CldHandler);
   CldNodeHandlerIndex = CmiRegisterHandler((CmiHandler)CldNodeHandler);
   CldRelocatedMessages = 0;
   CldLoadBalanceMessages = 0;
