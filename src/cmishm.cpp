@@ -192,6 +192,7 @@ static void callbackHandler_(void* msg) {
   int node = CmiPhysicalNodeID(mine);
   int first = CmiGetFirstPeOnPhysicalNode(node);
   auto* pmsg = (pid_message_*)msg;
+  int key = pmsg->key;
 
   if (mine == first) {
     // if we're still expecting messages:
@@ -209,7 +210,7 @@ static void callbackHandler_(void* msg) {
     CmiFree(msg);
   }
 
-  auto& meta = (CsvAccess(managers_))[(pmsg->key - 1)];
+  auto& meta = (CsvAccess(managers_))[(key - 1)];
   openAllShared_(meta.get());
   awakenSleepers_();
 }
