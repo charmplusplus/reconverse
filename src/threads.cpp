@@ -97,14 +97,14 @@ void CthSetStrategy(CthThread t, CthAwkFn awkfn, CthThFn chsfn) {
 void CthEnqueueNormalThread(CthThreadToken *token, int s, int pb,
                             unsigned int *prio) {
   CmiSetHandler(token, CpvAccess(CthResumeNormalThreadIdx));
-  CmiGetQueue(CmiMyPe())->push(token);
+  CmiGetQueue(CmiMyRank())->push(token);
 }
 
 void CthEnqueueSchedulingThread(CthThreadToken *token, int s, int pb,
                                 unsigned int *prio) {
   CmiSetHandler(token, CpvAccess(CthResumeSchedulingThreadIdx));
   CpvStaticDeclare(int, CthResumeSchedulingThreadIdx);
-  CmiGetQueue(CmiMyPe())->push(token);
+  CmiGetQueue(CmiMyRank())->push(token);
 }
 
 static CthThread CthSuspendNormalThread(void) {
