@@ -134,5 +134,5 @@ endif()
 add_subdirectory(boost-context)
 
 if(RECONVERSE_BUILD_TESTS)
-  add_subdirectory(test)
+  add_subdirectory(tests)
 endif()
