@@ -38,7 +38,7 @@ Note: LCI by default will automatically probe and select available network backe
 
 ### Run Reconverse
 
-In the build/examples/<program_name> folder, run the `reconverse_<program_name>` executable. Currently, the first arguments must be `+pe <num_pes>`.  
+In the build/test/<program_name> folder, run the `reconverse_<program_name>` executable. Currently, the first arguments must be `+pe <num_pes>`.  
 
 ### Build and run Reconverse on your own laptop
 
@@ -65,7 +65,7 @@ Using `lcrun` to run the reconverse example is typically the most simplest way. 
 Then, run the reconverse example with `lcrun`:
 
 ```
-$ cd build/examples/pingpong
+$ cd build/test/pingpong
 $ lcrun -n 2 ./reconverse_ping_ack +pe 4
 ```
 
@@ -108,6 +108,6 @@ $ make
 
 #### Run reconverse
 ```
-$ cd build/examples/pingpong
+$ cd build/test/pingpong
 $ srun -n 2 ./reconverse_ping_ack +pe 4
 ```

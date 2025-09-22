@@ -31,7 +31,6 @@ else()
   set(RECONVERSE_ROOT_PROJECT OFF)
 endif()
 
-option(RECONVERSE_BUILD_EXAMPLES "Build examples" ${RECONVERSE_ROOT_PROJECT})
 option(RECONVERSE_BUILD_TESTS "Build tests" ${RECONVERSE_ROOT_PROJECT})
 
 option(RECONVERSE_TRY_ENABLE_COMM_LCI2 "whether to enable the LCIv2 backend" ON)
@@ -135,10 +134,6 @@ endif()
 # ##############################################################################
 add_subdirectory(boost-context)
 
-if(RECONVERSE_BUILD_EXAMPLES)
-  add_subdirectory(examples)
-endif()
-
 if(RECONVERSE_BUILD_TESTS)
-  add_subdirectory(test)
+  add_subdirectory(tests)
 endif()
