@@ -394,10 +394,6 @@ void CmiFree(void *msg) {
   // if(refCount==0) /* Logic error: reference count shouldn't already have been zero */
   //   CmiAbort("CmiFree reference count was zero-- is this a duplicate free?");
 
-  if (refCount == 1) {
-    free(BLKSTART(parentBlk));
-  }
-
   #ifdef CMK_USE_SHMEM
     // we should only free _our_ IPC blocks -- so calling CmiFree on
     // an IPC block issued by another process will cause a bad free!
@@ -409,7 +405,11 @@ void CmiFree(void *msg) {
       CmiFreeIpcBlock(manager, ipc);
       return;
     }
-#endif
+  #endif
+
+  if (refCount == 1) {
+    free(BLKSTART(parentBlk));
+  }
   
 }
 
