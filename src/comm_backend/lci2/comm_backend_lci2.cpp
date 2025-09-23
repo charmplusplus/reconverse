@@ -1,6 +1,7 @@
 #include "converse_internal.h"
 
 namespace comm_backend {
+namespace lci2_impl {
 
 namespace detail {
 struct ThreadContext {
@@ -229,4 +230,5 @@ lci::rmr_t CommBackendLCI2::getThreadLocalRMR(void *rmr) {
   return static_cast<lci::rmr_t *>(rmr)[detail::g_thread_context.device_idx];
 }
 
+} // namespace lci2_impl
 } // namespace comm_backend

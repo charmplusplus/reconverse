@@ -17,15 +17,22 @@ public:
   virtual void exitThread() {}
   virtual int getMyNodeId() = 0;
   virtual int getNumNodes() = 0;
+  virtual bool isRMACapable() { return false; }
   virtual AmHandler registerAmHandler(CompHandler handler) = 0;
   virtual void issueAm(int rank, const void *local_buf, size_t size, mr_t mr,
                        CompHandler localComp, AmHandler remoteComp, void *user_context) = 0;
-  virtual void issueRget(int rank, const void *local_buf, size_t size, mr_t local_mr,
-                         uintptr_t remote_disp, void *rmr,
-                         CompHandler localComp, void *user_context) = 0;
-  virtual void issueRput(int rank, const void *local_buf, size_t size, mr_t local_mr,
-                         uintptr_t remote_disp, void *rmr,
-                         CompHandler localComp, void *user_context) = 0;
+  virtual void issueRget(int rank, const void *local_buf, size_t size,
+                         mr_t local_mr, uintptr_t remote_disp, void *rmr,
+                         CompHandler localComp, void *user_context) {
+    // Default implementation: not supported
+    CmiAbort("Rget not supported in this backend");
+  }
+  virtual void issueRput(int rank, const void *local_buf, size_t size,
+                         mr_t local_mr, uintptr_t remote_disp, void *rmr,
+                         CompHandler localComp, void *user_context) {
+    // Default implementation: not supported
+    CmiAbort("Rput not supported in this backend");
+  }
   // return true if there is more work to do
   virtual bool progress(void) = 0;
   virtual void barrier(void) = 0;
@@ -39,6 +46,9 @@ public:
 
 #ifdef RECONVERSE_ENABLE_COMM_LCI2
 #include "comm_backend/lci2/comm_backend_lci2.h"
+#endif
+#ifdef RECONVERSE_ENABLE_COMM_LCW
+#include "comm_backend/lcw/comm_backend_lcw.h"
 #endif
 
 #endif // COMM_BACKEND_INTERNAL_H

@@ -40,6 +40,13 @@ set(RECONVERSE_AUTOFETCH_LCI2_TAG
     "0d20794cd8a76a35eac4e464ac3c2f5f615f5537"
     CACHE STRING "The tag to fetch for LCIv2") # master branch as of 2025-09-14
 
+option(RECONVERSE_TRY_ENABLE_COMM_LCW "whether to enable the LCW backend" ON)
+option(RECONVERSE_AUTOFETCH_LCW
+        "whether to autofetch LCW if LCW cannot be found" OFF)
+set(RECONVERSE_AUTOFETCH_LCW_TAG
+    "9adb80d822cd39994bcbc4cd2fba9793323c1ee7"
+    CACHE STRING "The tag to fetch for LCW") # master branch as of 2025-09-25
+
 option(SPANTREE "whether to enable spanning tree collectives" OFF) #should turn this on once charm issues fixed
 
 # Reconverse uses SMP always, but turn on this option for backwards compatibility (see pingpong_multipairs for example)
