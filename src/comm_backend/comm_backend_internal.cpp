@@ -7,11 +7,37 @@ int gNumNodes = 1;
 int gMyNodeID = 0;
 
 void init(char **argv) {
+  const char *backend_str = nullptr;
+// default to LCI2 if both are enabled
 #ifdef RECONVERSE_ENABLE_COMM_LCI2
-  gCommBackend = new CommBackendLCI2();
+  backend_str = "lci";
+#elif defined(RECONVERSE_ENABLE_COMM_LCW)
+  backend_str = "lcw";
+#else
+  backend_str = "none";
 #endif
-  if (gCommBackend == nullptr) {
+  char *backend_str_input = nullptr;
+  CmiGetArgStringDesc(argv, "+backend", &backend_str_input,
+                      "Communication backend to use {lci, lcw} ");
+  if (backend_str_input) {
+    backend_str = backend_str_input;
+  }
+  if (strcmp(backend_str, "lci") == 0) {
+#ifdef RECONVERSE_ENABLE_COMM_LCI2
+    gCommBackend = new lci2_impl::CommBackendLCI2();
+#else
+    CmiAbort("LCI2 backend is not enabled in this build.\n");
+#endif
+  } else if (strcmp(backend_str, "lcw") == 0) {
+#ifdef RECONVERSE_ENABLE_COMM_LCW
+    gCommBackend = new lcw_impl::CommBackendLCW();
+#else
+    CmiAbort("LCW backend is not enabled in this build.\n");
+#endif
+  } else if (strcmp(backend_str, "none") == 0) {
     return;
+  } else {
+    CmiAbort("Unknown communication backend: %s\n", backend_str);
   }
 
   gCommBackend->init(argv);
@@ -48,6 +74,13 @@ void exitThread() {
 int getMyNodeId() { return gMyNodeID; }
 
 int getNumNodes() { return gNumNodes; }
+
+bool isRMACapable() {
+  if (gCommBackend == nullptr) {
+    return false;
+  }
+  return gCommBackend->isRMACapable();
+}
 
 AmHandler registerAmHandler(CompHandler handler) {
   if (gCommBackend == nullptr) {

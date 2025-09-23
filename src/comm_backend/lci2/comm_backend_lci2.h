@@ -4,6 +4,7 @@
 #include "lci.hpp"
 
 namespace comm_backend {
+namespace lci2_impl {
 // A breach of the comm_backend interface with direct access to CmiAlloc/CmiFree
 // There are another way to do this, but this is the simplest way to do it
 struct AllocatorLCI2 : lci::allocator_base_t {
@@ -20,6 +21,7 @@ public:
   void exitThread() override;
   int getMyNodeId() override;
   int getNumNodes() override;
+  bool isRMACapable() override { return true; }
   AmHandler registerAmHandler(CompHandler handler) override;
   void issueAm(int rank, const void *local_buf, size_t size, mr_t mr,
                CompHandler localComp, AmHandler remoteComp, void *user_context) override;
@@ -52,6 +54,7 @@ private:
   lci::rmr_t getThreadLocalRMR(void *rmr);
 };
 
+} // namespace lci2_impl
 } // namespace comm_backend
 
 #endif // RECONVERSE_COMM_BACKEND_LCI2_H
