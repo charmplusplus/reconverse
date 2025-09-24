@@ -6,8 +6,8 @@
 
 typedef char *BitVector;
 
-/*
 CpvDeclare(int, CldHandlerIndex);
+/*
 CpvDeclare(int, CldNodeHandlerIndex);
 CpvDeclare(BitVector, CldPEBitVector);
 CpvDeclare(int, CldBalanceHandlerIndex);

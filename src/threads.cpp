@@ -309,6 +309,8 @@ void CthResume(CthThread t) {
     */
 }
 
+int CthIsSuspendable(CthThread t) { return B(t)->suspendable; }
+
 /*
 Suspend: finds the next thread to execute, and resumes it
 */
