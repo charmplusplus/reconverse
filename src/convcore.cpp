@@ -47,6 +47,13 @@ int _replaySystem = 0;
 
 CmiNodeLock CmiMemLock_lock;
 CpvDeclare(int, isHelperOn);
+//partition
+PartitionInfo _partitionInfo;
+int _Cmi_mype_global;
+int _Cmi_numpes_global;
+int _Cmi_mynode_global;
+int _Cmi_numnodes_global;
+int Cmi_nodestartGlobal;
 
 void (*CmiTraceFn)(char **argv) = nullptr;
 
@@ -226,6 +233,18 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
   Cmi_startfn = fn;
   CharmLibInterOperate = 0;
 
+  #ifdef CMK_HAS_PARTITION
+  CmiCreatePartitions(argv);
+  #else
+  _partitionInfo.type = PARTITION_SINGLETON;
+  _partitionInfo.numPartitions = 1;
+  _partitionInfo.myPartition = 0;
+  _Cmi_numnodes_global = Cmi_numnodes;
+  _Cmi_mynode_global = Cmi_mynode;
+  _Cmi_numpes_global = Cmi_npes;
+  Cmi_nodestartGlobal = _Cmi_mynode_global * Cmi_mynodesize;
+  #endif
+
   CmiStartThreads();
 }
 
@@ -345,6 +364,14 @@ void *CmiAlloc(int size) {
   char* blk = (char*)malloc(size + sizeof(CmiChunkHeader));
 
   char* ptr = blk + sizeof(CmiChunkHeader);
+
+  // zero out some header fields
+  if(size >= CmiMsgHeaderSizeBytes) {
+    // Set zcMsgType in the converse message header to CMK_REG_NO_ZC_MSG
+    CMI_ZC_MSGTYPE((void*) ptr) = CMK_REG_NO_ZC_MSG;
+    CMI_MSG_NOKEEP((void*) ptr) = 0;
+  }
+
   REFFIELDSET(ptr, 1);
   SIZEFIELD(ptr) = size; // TODO: where is this used? just stole from old converse
 
@@ -418,10 +445,48 @@ void CmiSyncSendAndFree(int destPE, int messageSize, void *msg) {
   }
 }
 
+
+
+void CmiInterSyncSend(int destPE, int partition, int messageSize, void *msg) {
+  char *copymsg = (char *)CmiAlloc(messageSize);
+  std::memcpy(copymsg, msg, messageSize);
+  CmiInterSyncSendAndFree(destPE, partition, messageSize, copymsg);
+}
+
+void CmiInterSyncSendAndFree(int destPE, int partition, int messageSize, void *msg) {
+  CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
+  header->destPE = destPE;
+  // check partition num
+  if (partition < 0 || partition >= CmiNumPartitions()) {
+    CmiAbort("CmiInterSyncSend: partition %d out of range\n", partition);
+  }
+  // check if this is my partition, if so sync send
+  if (CmiMyPartition() == partition) {
+    CmiSyncSendAndFree(destPE, messageSize, msg);
+    return;
+  }
+  // not my partition, use comm backend
+  // translate destPE to global
+  int globalDestPE = CmiGetPeGlobal(destPE, partition);
+  header->destPE = globalDestPE;
+  int destNode = CmiGetNodeGlobal(CmiNodeOf(globalDestPE), partition);
+  comm_backend::issueAm(destNode, msg, messageSize, comm_backend::MR_NULL,
+                          CommLocalHandler, AmHandlerPE,
+                          nullptr);
+}
+
+void CmiInterSyncSendFn(int destPE, int partition, int messageSize, char *msg) {
+  CmiInterSyncSend(destPE, partition, messageSize, (void *)msg); 
+}
+
+void CmiInterFreeSendFn(int destPE, int partition, int messageSize, char *msg) {
+  CmiInterSyncSendAndFree(destPE, partition, messageSize, (void *)msg); 
+}
+
 // EXIT TOOLS
 
 void CmiExitHelper(int status) {
-  CmiMessageHeader *exitMsg = new CmiMessageHeader(); // might need to allocate
+  CmiMessageHeader *exitMsg = (CmiMessageHeader *) CmiAlloc(CmiMsgHeaderSizeBytes); // might need to allocate
   exitMsg->handlerId = Cmi_exitHandler;
   CmiSyncBroadcastAllAndFree(sizeof(*exitMsg), exitMsg);
 }
@@ -487,6 +552,12 @@ void CmiExitHandler(void *msg) {
 
 ConverseNodeQueue<void *> *CmiGetNodeQueue() { return CmiNodeQueue; }
 
+void CmiSyncNodeSend(unsigned int destNode, unsigned int size, void *msg) {
+  char *copymsg = (char *)CmiAlloc(size);
+  std::memcpy(copymsg, msg, size); // optionally avoid memcpy and block instead
+  CmiSyncNodeSendAndFree(destNode, size, copymsg);
+}
+
 void CmiSyncNodeSendAndFree(unsigned int destNode, unsigned int size,
                             void *msg) {
 
@@ -502,11 +573,34 @@ void CmiSyncNodeSendAndFree(unsigned int destNode, unsigned int size,
   }
 }
 
-void CmiSyncNodeSend(unsigned int destNode, unsigned int size, void *msg) {
-  char *copymsg = (char *)CmiAlloc(size);
-  std::memcpy(copymsg, msg, size); // optionally avoid memcpy and block instead
-  CmiSyncNodeSendAndFree(destNode, size, copymsg);
+
+void CmiInterSyncNodeSend(int destNode, int partition, int messageSize, void *msg) {
+  char *copymsg = (char *)CmiAlloc(messageSize);
+  std::memcpy(copymsg, msg, messageSize);
+  CmiInterSyncNodeSendAndFree(destNode, partition, messageSize, copymsg);
 }
+
+void CmiInterSyncNodeSendAndFree(int destNode, int partition, int messageSize, void *msg) {
+  if (partition < 0 || partition >= CmiNumPartitions()) {
+    CmiAbort("CmiInterSyncSend: partition %d out of range\n", partition);
+  }
+  if (CmiMyPartition() == partition) {
+    CmiSyncNodeSendAndFree(destNode, messageSize, msg);
+    return;
+  }
+  // not my partition, use comm backend
+  int globalDestNode = CmiGetNodeGlobal(destNode, partition);
+  comm_backend::issueAm(destNode, msg, messageSize, comm_backend::MR_NULL, CommLocalHandler, AmHandlerNode, nullptr);
+}
+
+void CmiInterSyncNodeSendFn(int destNode, int partition, int messageSize, char *msg) {
+  CmiInterSyncNodeSend(destNode, partition, messageSize, msg);
+}
+
+void CmiInterSyncNodeSendAndFreeFn(int destNode, int partition, int messageSize, char *msg) {
+  CmiInterSyncNodeSendAndFree(destNode, partition, messageSize, msg);
+}
+
 
 // fn versions of the above
 void CmiSyncSendFn(int destPE, int messageSize, char *msg) {
@@ -1070,6 +1164,234 @@ void CmiForwardMsgToPeers(int size, char *msg) {
     }
   }
 }
+
+// partitions
+
+
+void CmiSetNumPartitions(int nump) {
+  _partitionInfo.numPartitions = nump;
+}
+
+void CmiSetMasterPartition(void) {
+  if(!CmiMyNodeGlobal() && _partitionInfo.type != PARTITION_DEFAULT) {
+    CmiAbort("setMasterPartition used with incompatible option\n");
+  }
+  _partitionInfo.type = PARTITION_MASTER;
+} 
+
+void CmiSetPartitionSizes(char *sizes) {
+  int length = strlen(sizes);
+  _partitionInfo.partsizes = (char*)malloc((length+1)*sizeof(char));
+
+  if(!CmiMyNodeGlobal() && _partitionInfo.type != PARTITION_DEFAULT) {
+    CmiAbort("setPartitionSizes used with incompatible option\n");
+  }
+
+  memcpy(_partitionInfo.partsizes, sizes, length*sizeof(char));
+  _partitionInfo.partsizes[length] = '\0';
+  _partitionInfo.type = PARTITION_PREFIX;
+}
+
+void CmiSetPartitionScheme(int scheme) {
+  _partitionInfo.scheme = scheme;
+  _partitionInfo.isTopoaware = 1;
+}
+
+void CmiSetCustomPartitioning(void) {
+  _partitionInfo.scheme = 100;
+  _partitionInfo.isTopoaware = 1;
+}
+
+static void create_partition_map( char **argv)
+{
+  char* token, *tptr;
+  int i;
+  
+  _partitionInfo.numPartitions = 1; 
+  _partitionInfo.type = PARTITION_DEFAULT;
+  _partitionInfo.partsizes = NULL;
+  _partitionInfo.scheme = 0;
+  _partitionInfo.isTopoaware = 0;
+
+  if(!CmiGetArgIntDesc(argv,"+partitions", &_partitionInfo.numPartitions,"number of partitions")) {
+    CmiGetArgIntDesc(argv,"+replicas", &_partitionInfo.numPartitions,"number of partitions");
+  }
+
+#if CMK_MULTICORE
+  if(_partitionInfo.numPartitions != 1) {
+    CmiAbort("+partitions other than 1 is not allowed for multicore build\n");
+  }
+#endif
+
+  _partitionInfo.partitionSize = (int*)calloc(_partitionInfo.numPartitions,sizeof(int));
+  _partitionInfo.partitionPrefix = (int*)calloc(_partitionInfo.numPartitions,sizeof(int));
+  
+  if (CmiGetArgFlagDesc(argv,"+master_partition","assign a process as master partition")) {
+    _partitionInfo.type = PARTITION_MASTER;
+  }
+ 
+  if (CmiGetArgStringDesc(argv, "+partition_sizes", &_partitionInfo.partsizes, "size of partitions")) {
+    if(!CmiMyNodeGlobal() && _partitionInfo.type != PARTITION_DEFAULT) {
+      CmiAbort("+partition_sizes used with incompatible option, possibly +master_partition\n");
+    }
+    _partitionInfo.type = PARTITION_PREFIX;
+  }
+
+  if (CmiGetArgFlagDesc(argv,"+partition_topology","topology aware partitions")) {
+    _partitionInfo.isTopoaware = 1;
+    _partitionInfo.scheme = 1;
+  }  
+
+  if (CmiGetArgIntDesc(argv,"+partition_topology_scheme", &_partitionInfo.scheme, "topology aware partitioning scheme")) {
+    _partitionInfo.isTopoaware = 1;
+  }
+
+  if (CmiGetArgFlagDesc(argv,"+use_custom_partition", "custom partitioning scheme")) {
+    _partitionInfo.scheme = 100;
+    _partitionInfo.isTopoaware = 1;
+  }
+
+  if(_partitionInfo.type == PARTITION_DEFAULT) {
+    if((_Cmi_numnodes_global % _partitionInfo.numPartitions) != 0) {
+      CmiAbort("Number of partitions does not evenly divide number of processes. Aborting\n");
+    }
+    _partitionInfo.partitionPrefix[0] = 0;
+    _partitionInfo.partitionSize[0] = _Cmi_numnodes_global / _partitionInfo.numPartitions;
+    for(i = 1; i < _partitionInfo.numPartitions; i++) {
+      _partitionInfo.partitionSize[i] = _partitionInfo.partitionSize[i-1];
+      _partitionInfo.partitionPrefix[i] = _partitionInfo.partitionPrefix[i-1] + _partitionInfo.partitionSize[i-1];
+    } 
+    _partitionInfo.myPartition = _Cmi_mynode_global / _partitionInfo.partitionSize[0];
+  } else if(_partitionInfo.type == PARTITION_MASTER) {
+    if(((_Cmi_numnodes_global-1) % (_partitionInfo.numPartitions-1)) != 0) {
+      CmiAbort("Number of non-master partitions does not evenly divide number of processes minus one. Aborting\n");
+    }
+    _partitionInfo.partitionSize[0] = 1;
+    _partitionInfo.partitionPrefix[0] = 0;
+    _partitionInfo.partitionSize[1] = (_Cmi_numnodes_global-1) / (_partitionInfo.numPartitions-1);
+    _partitionInfo.partitionPrefix[1] = 1;
+    for(i = 2; i < _partitionInfo.numPartitions; i++) {
+      _partitionInfo.partitionSize[i] = _partitionInfo.partitionSize[i-1];
+      _partitionInfo.partitionPrefix[i] = _partitionInfo.partitionPrefix[i-1] + _partitionInfo.partitionSize[i-1];
+    } 
+    _partitionInfo.myPartition = 1 + (_Cmi_mynode_global-1) / _partitionInfo.partitionSize[1];
+    if(!_Cmi_mynode_global) 
+      _partitionInfo.myPartition = 0;
+  } else if(_partitionInfo.type == PARTITION_PREFIX) {
+    token = strtok_r(_partitionInfo.partsizes, ",", &tptr);
+    while (token)
+    {
+      int i,j;
+      int hasdash=0, hascolon=0, hasdot=0;
+      int start, end, stride = 1, block = 1, size;
+      for (i = 0; i < strlen(token); i++) {
+        if (token[i] == '-') hasdash=1;
+        else if (token[i] == ':') hascolon=1;
+        else if (token[i] == '.') hasdot=1;
+      }
+      if (hasdash) {
+        if (hascolon) {
+          if (hasdot) {
+            if (sscanf(token, "%d-%d:%d.%d#%d", &start, &end, &stride, &block, &size) != 5)
+              printf("Warning: Check the format of \"%s\".\n", token);
+          }
+          else {
+            if (sscanf(token, "%d-%d:%d#%d", &start, &end, &stride, &size) != 4)
+              printf("Warning: Check the format of \"%s\".\n", token);
+          }
+        }
+        else {
+          if (sscanf(token, "%d-%d#%d", &start, &end, &size) != 3)
+            printf("Warning: Check the format of \"%s\".\n", token);
+        }
+      }
+      else {
+        if (sscanf(token, "%d#%d", &start, &size) != 2) {
+          printf("Warning: Check the format of \"%s\".\n", token);
+        }
+        end = start;
+      }
+      if (block > stride) {
+        printf("Warning: invalid block size in \"%s\" ignored.\n", token);
+        block = 1;
+      }
+      for (i = start; i <= end; i += stride) {
+        for (j = 0; j < block; j++) {
+          if (i + j > end) break;
+          _partitionInfo.partitionSize[i+j] = size;
+        }
+      }
+      token = strtok_r(NULL, ",", &tptr);
+    }
+    _partitionInfo.partitionPrefix[0] = 0;
+    _partitionInfo.myPartition = 0;
+    for(i = 1; i < _partitionInfo.numPartitions; i++) {
+      if(_partitionInfo.partitionSize[i-1] <= 0) {
+        CmiAbort("Partition size has to be greater than zero.\n");
+      }
+      _partitionInfo.partitionPrefix[i] = _partitionInfo.partitionPrefix[i-1] + _partitionInfo.partitionSize[i-1];
+      if((_Cmi_mynode_global >= _partitionInfo.partitionPrefix[i]) && (_Cmi_mynode_global < (_partitionInfo.partitionPrefix[i] + _partitionInfo.partitionSize[i]))) {
+        _partitionInfo.myPartition = i;
+      }
+    } 
+    if(_partitionInfo.partitionSize[i-1] <= 0) {
+      CmiAbort("Partition size has to be greater than zero.\n");
+    }
+  }
+  Cmi_mynode = Cmi_mynode - _partitionInfo.partitionPrefix[_partitionInfo.myPartition];
+
+  if(_partitionInfo.isTopoaware) {
+    CmiAbort("Partition aware not implemented yet\n");
+  }
+}
+
+int node_lToGTranslate(int node, int partition) {
+  int rank;
+  if(_partitionInfo.type == PARTITION_SINGLETON) { 
+    return node;
+  } else if(_partitionInfo.type == PARTITION_DEFAULT) { 
+    rank =  (partition * _partitionInfo.partitionSize[0]) + node;
+  } else if(_partitionInfo.type == PARTITION_MASTER) {
+    if(partition == 0) {
+      rank =  0;
+    } else {
+      rank = 1 + ((partition - 1) * _partitionInfo.partitionSize[1]) + node;
+    }
+  } else if(_partitionInfo.type == PARTITION_PREFIX) {
+    rank = _partitionInfo.partitionPrefix[partition] + node;
+  } else {
+    CmiAbort("Partition type did not match any of the supported types\n");
+  }
+  if(_partitionInfo.isTopoaware) {
+    return _partitionInfo.nodeMap[rank];
+  } else {
+    return rank;
+  }
+}
+
+int pe_lToGTranslate(int pe, int partition) {
+  if(_partitionInfo.type == PARTITION_SINGLETON) 
+    return pe;
+
+  if(pe < CmiPartitionSize(partition)*CmiMyNodeSize()) {
+    return node_lToGTranslate(CmiNodeOf(pe),partition)*CmiMyNodeSize() + CmiRankOf(pe);
+  }
+
+  return CmiNumPesGlobal() + node_lToGTranslate(pe - CmiPartitionSize(partition)*CmiMyNodeSize(), partition);
+}
+
+int CmiMyPeGlobal(void) {
+    return CmiGetPeGlobal(CmiGetState()->pe,CmiMyPartition());
+}
+
+void CmiCreatePartitions(char **argv) {
+  _Cmi_numnodes_global = Cmi_numnodes;
+  _Cmi_mynode_global = Cmi_mynode;
+  _Cmi_numpes_global = Cmi_npes;
+  Cmi_nodestartGlobal =  _Cmi_mynode_global * Cmi_mynodesize;
+  create_partition_map(argv);
+}
+
 
 // Since we are not implementing converse level seed balancers yet
 void LBTopoInit() {}

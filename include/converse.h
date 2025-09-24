@@ -288,6 +288,8 @@ void CmiNumberHandlerEx(int n, CmiHandlerEx h, void *userPtr);
 // message allocation/memory
 void *CmiAlloc(int size);
 void CmiFree(void *msg);
+#define CmiRdmaAlloc CmiAlloc
+#define CmiRdmaFree CmiFree
 #define CmiMemoryUsage() 0
 void CmiMemoryMarkBlock(void *blk);
 extern void
@@ -308,20 +310,6 @@ int CmiRankOf(int pe);
 int CmiStopFlag();
 #define CmiNodeSize(n) (CmiMyNodeSize())
 int CmiNodeFirst(int node);
-
-// partitions (still needs to implement)
-#define CmiMyPartition() 0
-#define CmiPartitionSize(part) CmiNumNodes()
-#define CmiMyPartitionSize() CmiNumNodes()
-#define CmiNumPartitions() 1
-#define CmiNumNodesGlobal() CmiNumNodes()
-#define CmiMyNodeGlobal() CmiMyNode()
-#define CmiNumPesGlobal() CmiNumPes()
-#define CmiMyPeGlobal() CmiMyPe()
-#define CmiGetPeGlobal(pe, part) (pe)
-#define CmiGetNodeGlobal(node, part) (node)
-#define CmiGetPeLocal(pe) (pe)
-#define CmiGetNodeLocal(node) (node)
 
 // handler things
 void CmiSetHandler(void *msg, int handlerId);
@@ -477,13 +465,14 @@ double CrnDrandRange(double, double);
 #define CcdUSERMAX 127
 
 // convcond functions
-typedef CmiHandler CcdVoidFn;
-typedef CmiHandler CcdCondFn;
+typedef void (*CcdCondFn)(void *userParam);
+typedef void (*CcdVoidFn)(void *userParam,double curWallTime);
 void CcdModuleInit();
-void CcdCallFnAfter(CmiHandler fnp, void *arg, double msecs);
-#define CcdCallFnAfterOnPE(fn, arg, msecs, pe) CcdCallFnAfter(fn, arg, msecs)
-int CcdCallOnCondition(int condnum, CmiHandler fnp, void *arg);
-int CcdCallOnConditionKeep(int condnum, CmiHandler fnp, void *arg);
+#define CcdIGNOREPE   -2
+void CcdCallFnAfter(CcdVoidFn fnp, void *arg, double msecs);
+void CcdCallFnAfterOnPE(CcdVoidFn fnp, void *arg, double msecs, int pe);
+int CcdCallOnCondition(int condnum, CcdCondFn fnp, void *arg);
+int CcdCallOnConditionKeep(int condnum, CcdCondFn fnp, void *arg);
 void CcdCancelCallOnCondition(int condnum, int idx);
 void CcdCancelCallOnConditionKeep(int condnum, int idx);
 void CcdRaiseCondition(int condnum);
@@ -995,5 +984,69 @@ int 	   CmmGetLastTag(CmmTable t, int ntags, int *tags);
 # define CMI_CACHE_LINE_SIZE 64
 #endif
 #endif
+//partitions
+
+typedef enum Partition_Type {
+      PARTITION_SINGLETON,
+      PARTITION_DEFAULT,
+      PARTITION_MASTER,
+      PARTITION_PREFIX
+} Partition_Type;
+
+/* variables and functions for partition */
+typedef struct {
+  Partition_Type type;
+  int isTopoaware, scheme;
+  int numPartitions;
+  int *partitionSize;
+  int *partitionPrefix;
+  int *nodeMap;
+  int myPartition;
+  char *partsizes;
+} PartitionInfo;
+
+void CmiCreatePartitions(char **argv);
+void CmiSetNumPartitions(int nump);
+void CmiSetMasterPartition(void);
+void CmiSetPartitionSizes(char *size);
+void CmiSetPartitionScheme(int scheme);
+void CmiSetCustomPartitioning(void);
+
+extern int _Cmi_mype_global;
+extern int _Cmi_numpes_global;
+extern int _Cmi_mynode_global;
+extern int _Cmi_numnodes_global;
+extern PartitionInfo _partitionInfo;
+
+#define CmiNumPartitions()              _partitionInfo.numPartitions
+#define CmiMyPartition()                _partitionInfo.myPartition
+#define CmiPartitionSize(part)          _partitionInfo.partitionSize[part]
+#define CmiMyPartitionSize()            CmiPartitionSize(CmiMyPartition())
+#define CmiNumNodesGlobal()             _Cmi_numnodes_global
+#define CmiMyNodeGlobal()               _Cmi_mynode_global
+#define CmiNumPesGlobal()               _Cmi_numpes_global
+/* we need different implementations of this based on SMP or non-smp */
+extern int CmiMyPeGlobal(void);
+
+
+/* functions to translate between local and global */
+int node_lToGTranslate(int node, int partition);
+int pe_lToGTranslate(int pe, int partition);
+
+#define CmiGetPeGlobal(pe,part)         pe_lToGTranslate(pe,part)
+#define CmiGetNodeGlobal(node,part)     node_lToGTranslate(node,part)
+#define CmiGetPeLocal(pe)               pe_gToLTranslate(pe)
+#define CmiGetNodeLocal(node)           node_gToLTranslate(node)
+
+void CmiInterSyncSend(int destPE, int partition, int messageSize, void *msg);
+void CmiInterSyncSendAndFree(int destPE, int partition, int messageSize, void *msg);
+void CmiInterSyncNodeSend(int destNode, int partition, int messageSize, void *msg);
+void CmiInterSyncNodeSendAndFree(int destNode, int partition, int messageSize, void *msg);
+void CmiInterSyncSendFn(int destPE, int partition, int messageSize, char *msg);
+void CmiInterFreeSendFn(int destPE, int partition, int messageSize, char *msg);
+void CmiInterSyncNodeSendFn(int destNode, int partition, int messageSize, char *msg);
+void CmiInterSyncNodeSendAndFreeFn(int destNode, int partition, int messageSize, char *msg);
+
+/* end of variables and functions for partition */
 
 #endif // CONVERSE_H

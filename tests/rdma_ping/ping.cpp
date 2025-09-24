@@ -34,22 +34,6 @@ void send_msg() {
   for (int i = 0; i < payload_size / sizeof(int); ++i)
     p_payload[i] = i;
   CmiSyncSendAndFree(destPE, CpvAccess(msg_size), msg);
-  /*
-  struct myMsg *msg;
-  msg = (message)CmiAlloc(CpvAccess(msg_size));
-  // Fills payload with ints
-  for (int i = 0; i < (CpvAccess(msg_size) - CmiMsgHeaderSizeBytes) /
-  sizeof(int); ++i) msg->payload[i] = i;
-
-  // DEBUG: Print ints stored in payload
-  // for (int i = 0; i < (CpvAccess(msg_size) - CmiMsgHeaderSizeBytes) /
-  sizeof(int); ++i) CmiPrintf("%d ", msg->payload[i]);
-  // CmiPrintf("\n");
-
-  CmiSetHandler(msg, CpvAccess(ping_index));
-  //Send from my pe-i on node-0 to q+i on node-1
-  CmiSyncSendAndFree(CmiNumPes() / 2 + CmiMyPe(), CpvAccess(msg_size), msg);
-  */
 }
 
 void ping_handler(void *msg) {
@@ -110,17 +94,11 @@ void pe0_ack_handler(void *vmsg) {
 }
 
 void ping_init() {
-  int totalpes = CmiNumPes();        // p=num_pes
-  int npes_as_sender = totalpes / 2; // q=p/2
-  if (CmiNumPes() % 2 != 0) {
-    // printf("note: this test requires at multiple of 2 pes, skipping
-    // test.\n"); printf("exiting.\n");
-    CmiAbort("note: this test requires at multiple of 2 pes, exiting\n");
-    //    Cpm_ping_stop(CpmSend(CpmALL));
-  } else {
-    if (CmiMyPe() < npes_as_sender)
-      send_msg();
-  }
+  if (CmiNumPes() != 2)
+    CmiAbort("This test must be run with 2 pes.\n");
+
+  if (CmiMyPe() == 0)
+    send_msg();
 }
 
 void ping_moduleinit(int argc, char **argv) {
@@ -151,7 +129,7 @@ void ping_moduleinit(int argc, char **argv) {
 
   // Update the argc after runtime parameters are extracted out
   // argc = CmiGetArgc(argv);
-  if (CmiMyPe() < CmiNumPes() / 2)
+  if (CmiMyPe() == 0)
     ping_init();
 }
 

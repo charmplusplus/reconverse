@@ -31,20 +31,20 @@ else()
   set(RECONVERSE_ROOT_PROJECT OFF)
 endif()
 
-option(RECONVERSE_BUILD_EXAMPLES "Build examples" ${RECONVERSE_ROOT_PROJECT})
 option(RECONVERSE_BUILD_TESTS "Build tests" ${RECONVERSE_ROOT_PROJECT})
 
 option(RECONVERSE_TRY_ENABLE_COMM_LCI2 "whether to enable the LCIv2 backend" ON)
 option(RECONVERSE_AUTOFETCH_LCI2
         "whether to autofetch LCIv2 if LCI2 cannot be found" OFF)
 set(RECONVERSE_AUTOFETCH_LCI2_TAG
-    "1953565f41f18df55f5560d2eae6582d2b6f6ebc"
-    CACHE STRING "The tag to fetch for LCIv2") # master branch as of 2025-08-19
+    "0d20794cd8a76a35eac4e464ac3c2f5f615f5537"
+    CACHE STRING "The tag to fetch for LCIv2") # master branch as of 2025-09-14
 
 option(SPANTREE "whether to enable spanning tree collectives" OFF) #should turn this on once charm issues fixed
 
 # Reconverse uses SMP always, but turn on this option for backwards compatibility (see pingpong_multipairs for example)
 option(CMK_SMP "whether to enable SMP support" ON)
+option(CMK_CPV_IS_SMP "whether to enable SMP support for cpvs" ON)
 
 option(RECONVERSE_ATOMIC_QUEUE "whether to use atomic queue" ON)
 
@@ -133,10 +133,6 @@ endif()
 # ##############################################################################
 add_subdirectory(boost-context)
 
-if(RECONVERSE_BUILD_EXAMPLES)
-  add_subdirectory(examples)
-endif()
-
 if(RECONVERSE_BUILD_TESTS)
-  add_subdirectory(test)
+  add_subdirectory(tests)
 endif()

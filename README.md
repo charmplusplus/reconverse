@@ -15,6 +15,7 @@ $ make
 
 ## Runtime options
 - -DRECONVERSE_ENABLE_CPU_AFFINITY (ON by default if hwloc is found): Enable setting CPU affinity with HWLOC (must have HWLOC installed)
+- -DCMAKE_BUILD_TYPE (not set by default): Set the build type to change which flags are passed to the compiler, e.g. use `Release` to compile with `-O3` or `Debug` to compile with `-g`
 
 ## LCI
 
@@ -37,7 +38,7 @@ Note: LCI by default will automatically probe and select available network backe
 
 ### Run Reconverse
 
-In the build/examples/<program_name> folder, run the `reconverse_<program_name>` executable. Currently, the first arguments must be `+pe <num_pes>`.  
+In the build/test/<program_name> folder, run the `reconverse_<program_name>` executable. Currently, the first arguments must be `+pe <num_pes>`.  
 
 ### Build and run Reconverse on your own laptop
 
@@ -64,7 +65,7 @@ Using `lcrun` to run the reconverse example is typically the most simplest way. 
 Then, run the reconverse example with `lcrun`:
 
 ```
-$ cd build/examples/pingpong
+$ cd build/test/pingpong
 $ lcrun -n 2 ./reconverse_ping_ack +pe 4
 ```
 
@@ -82,7 +83,7 @@ $ git clone https://github.com/charmplusplus/reconverse.git
 $ cd reconverse
 $ mkdir build
 $ cd build
-$ cmake -DRECONVERSE_TRY_ENABLE_COMM_LCI2=ON -DRECONVERSE_AUTOFETCH_LCI2=ON -DLCI_NETWORK_BACKENDS=ofi ..
+$ cmake -DRECONVERSE_TRY_ENABLE_COMM_LCI2=ON -DRECONVERSE_AUTOFETCH_LCI2=ON ..
 $ make
 ```
 
@@ -95,7 +96,7 @@ $ git clone https://github.com/uiuc-hpc/lci.git --branch=lci2
 $ cd lci
 $ export CMAKE_INSTALL_PREFIX=/u/<username>/opt (or somewhere else you prefer)
 $ export OFI_ROOT=/opt/cray/libfabric/1.15.2.0
-$ cmake -DLCI_NETWORK_BACKENDS=ofi .
+$ cmake .
 $ make install
 $ cd ..
 $ git clone https://github.com/charmplusplus/reconverse.git
@@ -107,6 +108,6 @@ $ make
 
 #### Run reconverse
 ```
-$ cd build/examples/pingpong
+$ cd build/test/pingpong
 $ srun -n 2 ./reconverse_ping_ack +pe 4
 ```

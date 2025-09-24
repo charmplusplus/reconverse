@@ -45,7 +45,8 @@
 int CmiNumCores(void)
 {
   // PU count is the intended output here rather than literal cores
-  return CmiHwlocTopologyLocal.total_num_pus;
+  //return CmiHwlocTopologyLocal.total_num_pus;
+  return 0;
 }
 
 

@@ -25,7 +25,7 @@ void mediumHandler(void *vmsg) {
          CmiMyRank());
 }
 
-void callAfter7s(void *vmsg) {
+void callAfter7s(void *vmsg, double) {
   printf("7s (ccd call after) HANDLER CALLED at time %lf on PE %d\n",
          CmiWallTimer(), CmiMyRank());
 }
