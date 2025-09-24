@@ -81,8 +81,7 @@ static int CmmTagsMatch(int ntags1, int *tags1, int ntags2, int *tags2)
 void *CmmFind(CmmTable t, int ntags, int *tags, int *rtags, int del)
 {
   CmmEntry *enth; CmmEntry ent; void *msg; int i;
-/* added by Chao Mei in case that t is already freed
-  which happens in ~ampi() when doing out-of-core emulation for AMPI programs */
+  /* Added by Chao Mei to handle the case where t is already freed, which happens in ~ampi() when doing out-of-core emulation for AMPI programs. */
   if(t==NULL) return NULL;
 
   enth = &(t->first);
