@@ -42,12 +42,6 @@
 #include <cerrno>
 
 
-// int CmiNumCores(void)
-// {
-//   // PU count is the intended output here rather than literal cores
-//   return CmiHwlocTopologyLocal.total_num_pus;
-// }
-
 
 void CmiInitMemAffinity(char **argv) {
     char *tmpstr = NULL;

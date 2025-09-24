@@ -358,6 +358,21 @@ void CthAwaken(CthThread th) {
   awakenfn(token, strategy, 0, 0); // If this crashes, disable ASLR.
 }
 
+void CthAwakenPrio(CthThread th, int s, int pb, unsigned int *prio)
+{
+  CthAwkFn awakenfn = B(th)->awakenfn;
+  if (awakenfn == 0) CthNoStrategy();
+#if CMK_TRACE_ENABLED
+#if ! CMK_TRACE_IN_CHARM
+  if(CpvAccess(traceOn))
+    traceAwaken(th);
+#endif
+#endif
+  CthThreadToken * token = B(th)->token;
+  awakenfn(token, s, pb, prio); // If this crashes, disable ASLR.
+  B(th)->scheduled++;
+}
+
 void CthYield(void) {
   CthAwaken(CpvAccess(CthCurrent));
   CthSuspend();
@@ -487,3 +502,15 @@ void CthSetEventInfo(CthThread t, int event, int srcPE)
   B(t)->eventID = event;
   B(t)->srcPE = srcPE;
 }
+
+void CthFree(CthThread t)
+{
+  if (t==NULL) return;
+
+  if (t != CthSelf()) {
+    CthThreadFree(t);
+  } else
+    t->base.exiting = 1;
+}
+
+int CthImplemented(void) { return 1; }
