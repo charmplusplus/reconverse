@@ -224,6 +224,14 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
 
   #ifdef CMK_HAS_PARTITION
   CmiCreatePartitions(argv);
+  #else
+  _partitionInfo.type = PARTITION_SINGLETON;
+  _partitionInfo.numPartitions = 1;
+  _partitionInfo.myPartition = 0;
+  _Cmi_numnodes_global = Cmi_numnodes;
+  _Cmi_mynode_global = Cmi_mynode;
+  _Cmi_numpes_global = Cmi_npes;
+  Cmi_nodestartGlobal = _Cmi_mynode_global * Cmi_mynodesize;
   #endif
 
   CmiStartThreads();
