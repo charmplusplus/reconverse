@@ -12,6 +12,7 @@
 #include <stdlib.h>
 #include <thread>
 #include <vector>
+#include <sys/time.h>
 
 // GLOBALS
 static char **Cmi_argv;
@@ -44,6 +45,9 @@ int quietModeRequested;
 int userDrivenMode;
 int _replaySystem = 0;
 
+CmiNodeLock CmiMemLock_lock;
+CpvDeclare(int, isHelperOn);
+
 void (*CmiTraceFn)(char **argv) = nullptr;
 
 void CldModuleInit(char **);
@@ -65,6 +69,10 @@ int Cmi_exitHandler;
 
 comm_backend::AmHandler AmHandlerPE;
 comm_backend::AmHandler AmHandlerNode;
+
+CpvStaticDeclare(double, clocktick);
+CpvStaticDeclare(int,inittime_wallclock);
+CpvStaticDeclare(int,inittime_virtual);
 
 void registerTraceInit(void (*fn)(char **argv)) {
   CmiTraceFn = fn;
@@ -115,6 +123,9 @@ void converseRunPe(int rank) {
   CthInit(NULL);
   CthSchedInit();
 
+  CpvInitialize(int, isHelperOn);
+  CpvAccess(isHelperOn) = 0;
+
   if (CmiTraceFn)
     CmiTraceFn(Cmi_argv);
 
@@ -138,6 +149,7 @@ void CmiStartThreads() {
   CmiNodeQueue = new ConverseNodeQueue<void *>();
 
   _smp_mutex = CmiCreateLock();
+  CmiMemLock_lock = CmiCreateLock();
 
   // make sure the queues are allocated before PEs start sending messages around
   comm_backend::barrier();
@@ -1061,3 +1073,8 @@ void CmiForwardMsgToPeers(int size, char *msg) {
 
 // Since we are not implementing converse level seed balancers yet
 void LBTopoInit() {}
+
+int CmiDeliverMsgs(int maxmsgs)
+{
+  return CsdScheduler(maxmsgs);
+}

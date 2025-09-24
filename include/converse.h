@@ -196,17 +196,28 @@ CthThread CthCreate(CthVoidFn fn, void *arg, int size);
 
 static void CthThreadFree(CthThread t);
 
+void CthFree(CthThread t);
+
 void CthResume(CthThread t);
 
 void CthSuspend(void);
 
 void CthAwaken(CthThread th);
 
+void CthAwakenPrio(CthThread th, int s, int pb, unsigned int *prio);
+
 void CthYield(void);
 
 void CthTraceResume(CthThread t);
 
 void CthSetEventInfo(CthThread t, int event, int srcPE);
+
+void CthSetStrategyDefault(CthThread t);
+
+int CthImplemented(void);
+
+#define CmiTurnOnStats()
+#define CmiTurnOffStats()
 
 // Ctv functions
 
@@ -383,7 +394,7 @@ void CmiResetGlobalNodeReduceSeqID();
 
 // Exit functions
 void CmiExit(int status);
-#define ConverseExit(status) CmiExit(status)
+#define ConverseExit(...) CmiExit(__VA_ARGS__ + 0)
 void CmiAbort(const char *format, ...);
 
 // Utility functions
@@ -413,6 +424,7 @@ void __CmiEnforceMsgHelper(const char *expr, const char *fileName, int lineNum,
 double getCurrentTime(void);
 double CmiWallTimer(void);
 #define CmiCpuTimer() CmiWallTimer()
+#define CmiTimer() CmiWallTimer()
 double CmiStartTimer(void);
 double CmiInitTime(void);
 int CmiTimerAbsolute(void);
@@ -924,5 +936,64 @@ extern "C" {
 }
 
 void registerTraceInit(void (*fn)(char **argv));
+
+int CmiDeliverMsgs(int maxmsgs);
+
+#define CmiMemoryReadFence()                 std::atomic_thread_fence(std::memory_order_seq_cst)
+#define CmiMemoryWriteFence()                std::atomic_thread_fence(std::memory_order_seq_cst)
+
+extern CmiNodeLock CmiMemLock_lock;
+#define CmiMemLock() do{if (CmiMemLock_lock) CmiLock(CmiMemLock_lock);} while (0)
+
+#define CmiMemUnlock() do{if (CmiMemLock_lock) CmiUnlock(CmiMemLock_lock);} while (0)
+
+template <typename T> struct CmiIsAtomic : std::false_type {};
+template <typename T> struct CmiIsAtomic<std::atomic<T>> : std::true_type {};
+
+template <typename T>
+typename std::enable_if<CmiIsAtomic<T>::value, typename T::value_type>::type
+CmiAtomicFetchAndIncImpl(T& input) {
+    return std::atomic_fetch_add(&input, typename T::value_type(1));
+}
+
+template <typename T>
+typename std::enable_if<!CmiIsAtomic<T>::value, T>::type
+CmiAtomicFetchAndIncImpl(T& input) {
+    T old = input;
+    ++input;
+    return old;
+}
+
+#define CmiMemoryAtomicFetchAndInc(input, output) ((output) = CmiAtomicFetchAndIncImpl(input))
+
+#define CmiEnableUrgentSend(yn)   
+
+typedef struct CmmTableStruct *CmmTable;
+
+#define CmmWildCard (-1)
+
+//typedef void (*CmmPupMessageFn)(pup_er p,void **msg);
+//CmmTable CmmPup(pup_er p, CmmTable t, CmmPupMessageFn msgpup);
+
+CmmTable   CmmNew(void);
+void       CmmFree(CmmTable t);
+void	   CmmFreeAll(CmmTable t);
+void       CmmPut(CmmTable t, int ntags, int *tags, void *msg);
+void      *CmmFind(CmmTable t, int ntags, int *tags, int *returntags, int del);
+int        CmmEntries(CmmTable t);
+int 	   CmmGetLastTag(CmmTable t, int ntags, int *tags);
+#define    CmmGet(t,nt,tg,rt)   (CmmFind((t),(nt),(tg),(rt),1))
+#define    CmmProbe(t,nt,tg,rt) (CmmFind((t),(nt),(tg),(rt),0))
+
+
+#ifndef CMI_CACHE_LINE_SIZE
+#ifdef __cpp_lib_hardware_interference_size
+# define CMI_CACHE_LINE_SIZE std::hardware_destructive_interference_size
+#elif CMK_PPC64 || (defined __APPLE__ && defined __arm64__)
+# define CMI_CACHE_LINE_SIZE 128
+#else
+# define CMI_CACHE_LINE_SIZE 64
+#endif
+#endif
 
 #endif // CONVERSE_H
