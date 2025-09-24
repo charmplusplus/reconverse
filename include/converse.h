@@ -955,7 +955,7 @@ CmiAtomicFetchAndIncImpl(T& input) {
 
 #define CmiMemoryAtomicFetchAndInc(input, output) ((output) = CmiAtomicFetchAndIncImpl(input))
 
-#define CmiEnableUrgentSend(yn)   
+#define CmiEnableUrgentSend(yn) /* intentionally left empty */
 
 typedef struct CmmTableStruct *CmmTable;
 
