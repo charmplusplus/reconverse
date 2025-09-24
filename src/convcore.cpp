@@ -231,7 +231,7 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
   _Cmi_numnodes_global = Cmi_numnodes;
   _Cmi_mynode_global = Cmi_mynode;
   _Cmi_numpes_global = Cmi_npes;
-  Cmi_nodestartGlobal =  _Cmi_mynode_global * Cmi_mynodesize;
+  Cmi_nodestartGlobal = _Cmi_mynode_global * Cmi_mynodesize;
   #endif
 
   CmiStartThreads();
