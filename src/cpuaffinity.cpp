@@ -494,4 +494,6 @@ void CmiCheckAffinity(void)
 // Dummy function if RECONVERSE_ENABLE_CPU_AFFINITY not set
 void CmiInitCPUAffinity(char **argv) {}
 
+void CmiCheckAffinity(void) {}
+
 #endif
