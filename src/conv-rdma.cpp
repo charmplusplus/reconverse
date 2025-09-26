@@ -9,7 +9,7 @@
 
 // User specified configuration
 // TODO: move to a better location
-bool CmiUseCopyBasedRDMA = false;
+bool CmiUseCopyBasedRDMA = true;
 
 bool useCMAForZC;
 CpvExtern(std::vector<NcpyOperationInfo *>, newZCPupGets);
@@ -97,6 +97,15 @@ static void putDataHandler(ConverseRdmaMsg *payloadMsg) {
   ncpyDirectAckHandlerFn(ncpyOpInfo);
 
   CmiFree(payloadMsg);
+}
+
+void RDMAInit(char **argv) {
+  CmiUseCopyBasedRDMA = !comm_backend::isRMACapable();
+  int force_copybased =
+      CmiGetArgFlagDesc(argv, "+nordma", "Force use of copy-based RDMA");
+  if (force_copybased) {
+    CmiUseCopyBasedRDMA = true;
+  }
 }
 
 void CmiIssueRgetCopyBased(NcpyOperationInfo *ncpyOpInfo) {

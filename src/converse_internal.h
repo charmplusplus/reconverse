@@ -174,4 +174,7 @@ void CmiSetRedID(void *msg, CmiReductionID redID);
 void CmiSetBcastSource(void *msg, CmiBroadcastSource source);
 CmiBroadcastSource CmiGetBcastSource(void *msg);
 
+// helpers for RDMA
+void RDMAInit(char **argv);
+
 #endif

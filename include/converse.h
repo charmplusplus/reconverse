@@ -3,11 +3,11 @@
 #ifndef CONVERSE_H
 #define CONVERSE_H
 
+#include <atomic>
 #include <cinttypes>
 #include <cstdio>
 #include <cstdlib>
 #include <pthread.h>
-#include <atomic>
 
 using CmiInt1 = std::int8_t;
 using CmiInt2 = std::int16_t;
@@ -65,7 +65,7 @@ typedef __uint128_t CmiUInt16;
 #define CpvExtern(t, v) extern t *CMK_TAG(Cpv_, v)
 #define CpvInitialized(v) (0 != CMK_TAG(Cpv_, v))
 
-#define CpvCExtern(t,v)    extern "C" t* CMK_TAG(Cpv_,v)
+#define CpvCExtern(t, v) extern "C" t *CMK_TAG(Cpv_, v)
 
 #define CsvDeclare(t, v) t v
 #define CsvStaticDeclare(t, v) static t v
@@ -98,6 +98,7 @@ typedef void (*CldInfoFn)(void *msg, CldPackFn *packer, int *len, int *queueing,
 
 typedef int (*CldEstimator)(void);
 
+#define CmiMessageDestPENode static_cast<CmiUint4>(-1)
 typedef struct Header {
   CmiInt2 handlerId;
   CmiUint4 destPE; // global ID of destination PE
@@ -116,7 +117,6 @@ typedef CmiMessageHeader CmiMsgHeaderBasic;
 
 // #define CMK_NODE_QUEUE_AVAILABLE CMK_SMP
 #define CMK_NODE_QUEUE_AVAILABLE 1 // we assume CMK_SMP
-
 
 typedef struct {
   int parent;
@@ -148,17 +148,16 @@ struct alignas(ALIGN_BYTES) CmiChunkHeader {
 private:
   std::atomic<int> ref; // only supports smp, would just be int otherwise
 
-
 public:
   CmiChunkHeader() = default;
   CmiChunkHeader(const CmiChunkHeader &x) : size{x.size}, ref{x.getRef()} {}
 
-  // reference counting (assumes SMP. otherwise could just use basic int operations)
+  // reference counting (assumes SMP. otherwise could just use basic int
+  // operations)
   int getRef() const { return ref.load(std::memory_order_acquire); }
   void setRef(int r) { return ref.store(r, std::memory_order_release); }
   int incRef() { return ref.fetch_add(1, std::memory_order_release); }
-  int decRef() { return ref.fetch_sub(1, std::memory_order_release);}
-
+  int decRef() { return ref.fetch_sub(1, std::memory_order_release); }
 };
 
 // threads library
@@ -369,7 +368,8 @@ void CmiNodeAllBarrier();
 void CsdExitScheduler();
 int CsdScheduler(int maxmsgs);
 void CsdEnqueueGeneral(void *Message, int strategy, int priobits, int *prioptr);
-void CsdNodeEnqueueGeneral(void *Message, int strategy, int priobits, unsigned int *prioptr);
+void CsdNodeEnqueueGeneral(void *Message, int strategy, int priobits,
+                           unsigned int *prioptr);
 
 void CmiAssignOnce(int *variable, int value);
 
@@ -466,9 +466,9 @@ double CrnDrandRange(double, double);
 
 // convcond functions
 typedef void (*CcdCondFn)(void *userParam);
-typedef void (*CcdVoidFn)(void *userParam,double curWallTime);
+typedef void (*CcdVoidFn)(void *userParam, double curWallTime);
 void CcdModuleInit();
-#define CcdIGNOREPE   -2
+#define CcdIGNOREPE -2
 void CcdCallFnAfter(CcdVoidFn fnp, void *arg, double msecs);
 void CcdCallFnAfterOnPE(CcdVoidFn fnp, void *arg, double msecs, int pe);
 int CcdCallOnCondition(int condnum, CcdCondFn fnp, void *arg);
@@ -573,19 +573,13 @@ extern CmiNodeLock _smp_mutex;
 
 #define CmiCreateImmediateLock() (0)
 #define CmiImmediateLock(ignored)                                              \
-  {                                                                            \
-    _immediateLock++;                                                          \
-  }
+  { _immediateLock++; }
 #define CmiImmediateUnlock(ignored)                                            \
-  {                                                                            \
-    _immediateLock--;                                                          \
-  }
+  { _immediateLock--; }
 #define CmiCheckImmediateLock(ignored)                                         \
   ((_immediateLock) ? ((_immediateFlag = 1), 1) : 0)
 #define CmiClearImmediateFlag()                                                \
-  {                                                                            \
-    _immediateFlag = 0;                                                        \
-  }
+  { _immediateFlag = 0; }
 #define CmiBecomeImmediate(msg) /* empty */
 #define CmiResetImmediate(msg)  /* empty */
 #define CmiIsImmediate(msg) (0)
@@ -613,7 +607,7 @@ int CmiTryLock(CmiNodeLock lock);
     if (!(expr)) {                                                             \
       fprintf(stderr, "Assertion %s failed: file %s, line %d\n", #expr,        \
               __FILE__, __LINE__);                                             \
-      CmiAbort("Failed assert");                                                              \
+      CmiAbort("Failed assert");                                               \
     }                                                                          \
   } while (0)
 
@@ -622,7 +616,7 @@ int CmiTryLock(CmiNodeLock lock);
     if (!(expr)) {                                                             \
       fprintf(stderr, __VA_ARGS__);                                            \
       fprintf(stderr, "\n");                                                   \
-      CmiAbort("Failed assert");                                                              \
+      CmiAbort("Failed assert");                                               \
     }                                                                          \
   } while (0)
 #endif
@@ -842,12 +836,12 @@ enum ncpyFreeNcpyOpInfoMode {
 #define CMK_SPANTREE_MAXSPAN 4
 #define CST_W (CMK_SPANTREE_MAXSPAN)
 #define CST_NN (CmiNumNodes())
-#define CmiNodeSpanTreeParent(n) ((n) ? (((n) - 1) / CST_W) : (-1))
+#define CmiNodeSpanTreeParent(n) ((n) ? (((n)-1) / CST_W) : (-1))
 #define CmiNodeSpanTreeChildren(n, c)                                          \
   do {                                                                         \
     int _i;                                                                    \
     for (_i = 0; _i < CST_W; _i++) {                                           \
-      int _x = (n) * CST_W + _i + 1;                                           \
+      int _x = (n)*CST_W + _i + 1;                                             \
       if (_x < CST_NN)                                                         \
         (c)[_i] = _x;                                                          \
     }                                                                          \
@@ -855,7 +849,7 @@ enum ncpyFreeNcpyOpInfoMode {
 #define CmiNumNodeSpanTreeChildren(n)                                          \
   ((((n) + 1) * CST_W < CST_NN)                                                \
        ? CST_W                                                                 \
-       : ((((n) * CST_W + 1) >= CST_NN) ? 0 : ((CST_NN - 1) - (n) * CST_W)))
+       : ((((n)*CST_W + 1) >= CST_NN) ? 0 : ((CST_NN - 1) - (n)*CST_W)))
 #define CST_R(p) (CmiRankOf(p))
 #define CST_NF(n) (CmiNodeFirst(n))
 #define CST_SP(n) (CmiNodeSpanTreeParent(n))
@@ -890,7 +884,6 @@ enum ncpyFreeNcpyOpInfoMode {
     }                                                                          \
   } while (0)
 
-
 extern void CsdSchedulePoll(void);
 
 // topology
@@ -916,12 +909,11 @@ void LBTopoInit();
 
 extern "C" {
 
-  size_t CmiFwrite(const void *ptr, size_t size, size_t nmemb, FILE *f);
-  CmiInt8 CmiPwrite(int fd, const char *buf, size_t bytes, size_t offset);
-  int CmiOpen(const char *pathname, int flags, int mode);
-  FILE *CmiFopen(const char *path, const char *mode);
-  int CmiFclose(FILE *fp);
-
+size_t CmiFwrite(const void *ptr, size_t size, size_t nmemb, FILE *f);
+CmiInt8 CmiPwrite(int fd, const char *buf, size_t bytes, size_t offset);
+int CmiOpen(const char *pathname, int flags, int mode);
+FILE *CmiFopen(const char *path, const char *mode);
+int CmiFclose(FILE *fp);
 }
 
 void registerTraceInit(void (*fn)(char **argv));
@@ -987,10 +979,10 @@ int 	   CmmGetLastTag(CmmTable t, int ntags, int *tags);
 //partitions
 
 typedef enum Partition_Type {
-      PARTITION_SINGLETON,
-      PARTITION_DEFAULT,
-      PARTITION_MASTER,
-      PARTITION_PREFIX
+  PARTITION_SINGLETON,
+  PARTITION_DEFAULT,
+  PARTITION_MASTER,
+  PARTITION_PREFIX
 } Partition_Type;
 
 /* variables and functions for partition */
@@ -1018,34 +1010,38 @@ extern int _Cmi_mynode_global;
 extern int _Cmi_numnodes_global;
 extern PartitionInfo _partitionInfo;
 
-#define CmiNumPartitions()              _partitionInfo.numPartitions
-#define CmiMyPartition()                _partitionInfo.myPartition
-#define CmiPartitionSize(part)          _partitionInfo.partitionSize[part]
-#define CmiMyPartitionSize()            CmiPartitionSize(CmiMyPartition())
-#define CmiNumNodesGlobal()             _Cmi_numnodes_global
-#define CmiMyNodeGlobal()               _Cmi_mynode_global
-#define CmiNumPesGlobal()               _Cmi_numpes_global
+#define CmiNumPartitions() _partitionInfo.numPartitions
+#define CmiMyPartition() _partitionInfo.myPartition
+#define CmiPartitionSize(part) _partitionInfo.partitionSize[part]
+#define CmiMyPartitionSize() CmiPartitionSize(CmiMyPartition())
+#define CmiNumNodesGlobal() _Cmi_numnodes_global
+#define CmiMyNodeGlobal() _Cmi_mynode_global
+#define CmiNumPesGlobal() _Cmi_numpes_global
 /* we need different implementations of this based on SMP or non-smp */
 extern int CmiMyPeGlobal(void);
-
 
 /* functions to translate between local and global */
 int node_lToGTranslate(int node, int partition);
 int pe_lToGTranslate(int pe, int partition);
 
-#define CmiGetPeGlobal(pe,part)         pe_lToGTranslate(pe,part)
-#define CmiGetNodeGlobal(node,part)     node_lToGTranslate(node,part)
-#define CmiGetPeLocal(pe)               pe_gToLTranslate(pe)
-#define CmiGetNodeLocal(node)           node_gToLTranslate(node)
+#define CmiGetPeGlobal(pe, part) pe_lToGTranslate(pe, part)
+#define CmiGetNodeGlobal(node, part) node_lToGTranslate(node, part)
+#define CmiGetPeLocal(pe) pe_gToLTranslate(pe)
+#define CmiGetNodeLocal(node) node_gToLTranslate(node)
 
 void CmiInterSyncSend(int destPE, int partition, int messageSize, void *msg);
-void CmiInterSyncSendAndFree(int destPE, int partition, int messageSize, void *msg);
-void CmiInterSyncNodeSend(int destNode, int partition, int messageSize, void *msg);
-void CmiInterSyncNodeSendAndFree(int destNode, int partition, int messageSize, void *msg);
+void CmiInterSyncSendAndFree(int destPE, int partition, int messageSize,
+                             void *msg);
+void CmiInterSyncNodeSend(int destNode, int partition, int messageSize,
+                          void *msg);
+void CmiInterSyncNodeSendAndFree(int destNode, int partition, int messageSize,
+                                 void *msg);
 void CmiInterSyncSendFn(int destPE, int partition, int messageSize, char *msg);
 void CmiInterFreeSendFn(int destPE, int partition, int messageSize, char *msg);
-void CmiInterSyncNodeSendFn(int destNode, int partition, int messageSize, char *msg);
-void CmiInterSyncNodeSendAndFreeFn(int destNode, int partition, int messageSize, char *msg);
+void CmiInterSyncNodeSendFn(int destNode, int partition, int messageSize,
+                            char *msg);
+void CmiInterSyncNodeSendAndFreeFn(int destNode, int partition, int messageSize,
+                                   char *msg);
 
 /* end of variables and functions for partition */
 
