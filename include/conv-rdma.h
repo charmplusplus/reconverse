@@ -2,7 +2,9 @@
 #define _CONV_RDMA_H
 
 #include "cmirdmautils.h"
+#include "pup.h"
 #include <functional>
+#include <stdint.h>
 
 // User specified configuration
 // TODO: move to a better location
@@ -182,6 +184,34 @@ public:
               "regMode=%d, deregMode=%d, ref:%p, refAckInfo:%p\n",
               CmiMyPe(), CmiMyNode(), CmiMyRank(), ptr, cnt, pe, regMode,
               deregMode, ref, refAckInfo);
+  }
+
+  void pup(PUP::er &p) {
+    // Serialize pointer as uintptr_t for portability
+    uintptr_t ptr_val = (uintptr_t)ptr;
+    p(ptr_val);
+    p(cnt);
+    p(pe);
+    p(regMode);
+    p(deregMode);
+
+    // Serialize ref pointer as uintptr_t for portability
+    uintptr_t ref_val = (uintptr_t)ref;
+    p(ref_val);
+
+    // Serialize refAckInfo pointer as uintptr_t for portability
+    uintptr_t refAckInfo_val = (uintptr_t)refAckInfo;
+    p(refAckInfo_val);
+
+    p(isRegistered);
+    // Note: layerInfo is not serialized as it's machine-specific
+
+    // On unpacking, restore the pointers
+    if (p.isUnpacking()) {
+      ptr = (const void *)ptr_val;
+      ref = (const void *)ref_val;
+      refAckInfo = (const void *)refAckInfo_val;
+    }
   }
 
   void init(const void *ptr_, size_t cnt_,
