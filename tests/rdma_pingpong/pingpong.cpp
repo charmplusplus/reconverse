@@ -18,7 +18,6 @@ CpvDeclare(int, setRemoteBufHIdx);
 CpvDeclare(int, rmaGetSignalHIdx);
 CpvDeclare(int, exitBenchmarkHIdx);
 
-
 void setupRMABuf();
 
 void startRing() {
@@ -39,7 +38,8 @@ void setupRMABuf() {
   char *msg = (char *)CmiAlloc(CmiMsgHeaderSizeBytes + sizeof(CmiNcpyBuffer));
   *((CmiNcpyBuffer *)(msg + CmiMsgHeaderSizeBytes)) = CpvAccess(localBuf);
   CmiSetHandler(msg, CpvAccess(setRemoteBufHIdx));
-  CmiSyncSendAndFree(1 - CmiMyPe(), CmiMsgHeaderSizeBytes + sizeof(CmiNcpyBuffer), msg);
+  CmiSyncSendAndFree(1 - CmiMyPe(),
+                     CmiMsgHeaderSizeBytes + sizeof(CmiNcpyBuffer), msg);
 }
 
 void startWarmUp();
@@ -63,8 +63,7 @@ void startWarmUp() {
 }
 
 void doRMA() {
-  CpvAccess(localBuf).rdmaGet(CpvAccess(remoteBuf), 0,
-                          nullptr, nullptr);
+  CpvAccess(localBuf).rdmaGet(CpvAccess(remoteBuf), 0, nullptr, nullptr);
 }
 
 void rmaGetLocalComp(void *context) {
@@ -77,13 +76,12 @@ void rmaGetLocalComp(void *context) {
   // send remote completion signal
   char *msg = (char *)CmiAlloc(CmiMsgHeaderSizeBytes);
   CmiSetHandler(msg, CpvAccess(rmaGetSignalHIdx));
-  CmiSyncSendAndFree(1 - CmiMyPe(),
-                     CmiMsgHeaderSizeBytes, msg);
+  CmiSyncSendAndFree(1 - CmiMyPe(), CmiMsgHeaderSizeBytes, msg);
 }
 
 void endRing();
 
-void rmaGetSignalHandler(char*) {
+void rmaGetSignalHandler(char *) {
   if (CmiMyPe() == 1) {
     // PE 1 just do a "pong" get back
     doRMA();
@@ -113,7 +111,8 @@ void endRing() {
   CpvAccess(endTime) = CmiWallTimer();
 
   // Print the time for that message size
-  CmiPrintf("Size=%zu bytes, time=%lf microseconds one-way\n", CpvAccess(msgSize),
+  CmiPrintf("Size=%zu bytes, time=%lf microseconds one-way\n",
+            CpvAccess(msgSize),
             (1e6 * (CpvAccess(endTime) - CpvAccess(startTime))) /
                 (2. * CpvAccess(nCycles)));
 
@@ -126,7 +125,7 @@ void endRing() {
     exitBenchmark();
   }
 }
-void exitBenchmarkHandler(char*);
+void exitBenchmarkHandler(char *);
 
 void exitBenchmark() {
   char *msg = (char *)CmiAlloc(CmiMsgHeaderSizeBytes);
@@ -134,7 +133,7 @@ void exitBenchmark() {
   CmiSyncBroadcastAllAndFree(CmiMsgHeaderSizeBytes, msg);
 }
 
-void exitBenchmarkHandler(char*) {
+void exitBenchmarkHandler(char *) {
   // clean up resources
   if (CpvAccess(localBuf).ptr != nullptr) {
     CpvAccess(localBuf).deregisterMem();
@@ -159,11 +158,14 @@ CmiStartFn mymain(int argc, char *argv[]) {
 
   // Register Handlers
   CpvInitialize(int, setRemoteBufHIdx);
-  CpvAccess(setRemoteBufHIdx) = CmiRegisterHandler((CmiHandler)setRemoteBufHandler);
+  CpvAccess(setRemoteBufHIdx) =
+      CmiRegisterHandler((CmiHandler)setRemoteBufHandler);
   CpvInitialize(int, rmaGetSignalHIdx);
-  CpvAccess(rmaGetSignalHIdx) = CmiRegisterHandler((CmiHandler)rmaGetSignalHandler);
+  CpvAccess(rmaGetSignalHIdx) =
+      CmiRegisterHandler((CmiHandler)rmaGetSignalHandler);
   CpvInitialize(int, exitBenchmarkHIdx);
-  CpvAccess(exitBenchmarkHIdx) = CmiRegisterHandler((CmiHandler)exitBenchmarkHandler);
+  CpvAccess(exitBenchmarkHIdx) =
+      CmiRegisterHandler((CmiHandler)exitBenchmarkHandler);
 
   CpvInitialize(double, startTime);
   CpvInitialize(double, endTime);
@@ -206,8 +208,7 @@ CmiStartFn mymain(int argc, char *argv[]) {
   }
 
   if (CmiNumNodes() != 2 && CmiNumPes() != 2 && CmiMyPe() == 0) {
-    CmiAbort(
-        "This test is designed for only 2 nodes and with 1 PE per node\n");
+    CmiAbort("This test is designed for only 2 nodes and with 1 PE per node\n");
   }
 
   CpvAccess(msgSize) = CpvAccess(minMsgSize);

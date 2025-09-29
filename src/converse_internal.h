@@ -3,8 +3,8 @@
 #ifndef CONVCORE_H
 #define CONVCORE_H
 
-#include <cstring>
 #include "converse.h"
+#include <cstring>
 
 #include "converse.h"
 #include "converse_config.h"
@@ -23,8 +23,8 @@ typedef struct GroupDef_s {
 
 #define GROUPTAB_SIZE 101
 
-//debug
-#define  DEBUGF(...)    //CmiPrintf(__VA_ARGS__)
+// debug
+#define DEBUGF(...) // CmiPrintf(__VA_ARGS__)
 
 void CmiStartThreads(char **argv);
 void converseRunPe(int rank);
@@ -41,8 +41,8 @@ void CmiGroupHandler(void *msg);
 void CmiReduceHandler(void *msg);
 
 typedef struct HandlerInfo {
-  union{
-    CmiHandler hdlr; // handler function
+  union {
+    CmiHandler hdlr;     // handler function
     CmiHandlerEx exhdlr; // handler function with user pointer
   };
   void *userPtr; // does this point to the mesage data itself

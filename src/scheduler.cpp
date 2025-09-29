@@ -85,7 +85,7 @@ void CsdSchedulePoll() {
   // get node level queue
   ConverseNodeQueue<void *> *nodeQueue = CmiGetNodeQueue();
 
-  while(1){
+  while (1) {
 
     CcdCallBacks();
 
@@ -124,27 +124,26 @@ void CsdSchedulePoll() {
 
     else {
       comm_backend::progress();
-      break; //break when queues are empty
+      break; // break when queues are empty
     }
-
   }
-
 }
 
-int CsdScheduler(int maxmsgs){
+int CsdScheduler(int maxmsgs) {
   if (maxmsgs < 0) {
-    CsdScheduler(); //equivalent to CsdScheduleForever in old converse
-  }
-  else CsdSchedulePoll(); //not implementing CsdScheduleCount
+    CsdScheduler(); // equivalent to CsdScheduleForever in old converse
+  } else
+    CsdSchedulePoll(); // not implementing CsdScheduleCount
   return 0;
-  
 }
 
-void CsdEnqueueGeneral(void *Message, int strategy, int priobits, int *prioptr){
+void CsdEnqueueGeneral(void *Message, int strategy, int priobits,
+                       int *prioptr) {
   CmiPushPE(CmiMyPe(), sizeof(Message), Message);
 }
 
-void CsdNodeEnqueueGeneral(void *Message, int strategy, int priobits, unsigned int *prioptr){
+void CsdNodeEnqueueGeneral(void *Message, int strategy, int priobits,
+                           unsigned int *prioptr) {
   CmiGetNodeQueue()->push(Message);
 }
 

@@ -21,10 +21,19 @@ jobs:
         sudo apt-get update
         sudo apt-get install clang-format
 
-    - name: Run clang-format
+    - name: Verify clang-format installation
       run: |
-        git diff --exit-code --ignore-submodules -- '*.cpp' '*.h' '*.c' '*.hpp'
-        if [ $? -ne 0 ]; then
-          echo "Clang-format failed. Please format your code."
+        clang-format --version
+
+    - name: Run clang-format on all files
+      run: |
+        # From anywhere inside the repo:
+        repo_root=$(git rev-parse --show-toplevel) && cd "$repo_root"
+        git ls-files -z -- '*.c' '*.cc' '*.cpp' '*.cxx' '*.h' '*.hh' '*.hpp' '*.hxx' \
+        | xargs -0 -r clang-format -i
+
+        # Fail if formatting made changes
+        git diff --exit-code || {
+          echo "clang-format changed files above. Please commit the formatting."
           exit 1
-        fi
+        }

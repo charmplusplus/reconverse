@@ -89,16 +89,18 @@ AmHandler registerAmHandler(CompHandler handler) {
   return gCommBackend->registerAmHandler(handler);
 }
 
-void issueAm(int rank, const void *msg, size_t size, mr_t mr, CompHandler localComp,
-             AmHandler remoteComp, void *user_context) {
+void issueAm(int rank, const void *msg, size_t size, mr_t mr,
+             CompHandler localComp, AmHandler remoteComp, void *user_context) {
   if (gCommBackend == nullptr) {
     return;
   }
-  gCommBackend->issueAm(rank, msg, size, mr, localComp, remoteComp, user_context);
+  gCommBackend->issueAm(rank, msg, size, mr, localComp, remoteComp,
+                        user_context);
 }
 
 void issueRget(int rank, const void *local_buf, size_t size, mr_t local_mr,
-               uintptr_t remote_disp, void *rmr, CompHandler localComp, void *user_context) {
+               uintptr_t remote_disp, void *rmr, CompHandler localComp,
+               void *user_context) {
   if (gCommBackend == nullptr) {
     return;
   }
@@ -107,7 +109,8 @@ void issueRget(int rank, const void *local_buf, size_t size, mr_t local_mr,
 }
 
 void issueRput(int rank, const void *local_buf, size_t size, mr_t local_mr,
-               uintptr_t remote_disp, void *rmr, CompHandler localComp, void *user_context) {
+               uintptr_t remote_disp, void *rmr, CompHandler localComp,
+               void *user_context) {
   if (gCommBackend == nullptr) {
     return;
   }

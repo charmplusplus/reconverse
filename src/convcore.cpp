@@ -10,9 +10,9 @@
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <sys/time.h>
 #include <thread>
 #include <vector>
-#include <sys/time.h>
 
 // GLOBALS
 static char **Cmi_argv;
@@ -47,7 +47,7 @@ int _replaySystem = 0;
 
 CmiNodeLock CmiMemLock_lock;
 CpvDeclare(int, isHelperOn);
-//partition
+// partition
 PartitionInfo _partitionInfo;
 int _Cmi_mype_global;
 int _Cmi_numpes_global;
@@ -77,12 +77,10 @@ int Cmi_exitHandler;
 comm_backend::AmHandler g_amHandler;
 
 CpvStaticDeclare(double, clocktick);
-CpvStaticDeclare(int,inittime_wallclock);
-CpvStaticDeclare(int,inittime_virtual);
+CpvStaticDeclare(int, inittime_wallclock);
+CpvStaticDeclare(int, inittime_virtual);
 
-void registerTraceInit(void (*fn)(char **argv)) {
-  CmiTraceFn = fn;
-}
+void registerTraceInit(void (*fn)(char **argv)) { CmiTraceFn = fn; }
 
 void CommLocalHandler(comm_backend::Status status) {
   CmiFree(const_cast<void *>(status.local_buf));
@@ -236,7 +234,7 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
 
 #ifdef CMK_HAS_PARTITION
   CmiCreatePartitions(argv);
-  #else
+#else
   _partitionInfo.type = PARTITION_SINGLETON;
   _partitionInfo.numPartitions = 1;
   _partitionInfo.myPartition = 0;
@@ -244,7 +242,7 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
   _Cmi_mynode_global = Cmi_mynode;
   _Cmi_numpes_global = Cmi_npes;
   Cmi_nodestartGlobal = _Cmi_mynode_global * Cmi_mynodesize;
-  #endif
+#endif
 
   CmiStartThreads();
 }
@@ -1425,7 +1423,4 @@ void CmiCreatePartitions(char **argv) {
 // Since we are not implementing converse level seed balancers yet
 void LBTopoInit() {}
 
-int CmiDeliverMsgs(int maxmsgs)
-{
-  return CsdScheduler(maxmsgs);
-}
+int CmiDeliverMsgs(int maxmsgs) { return CsdScheduler(maxmsgs); }

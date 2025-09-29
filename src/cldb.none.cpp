@@ -25,9 +25,9 @@ void CldHandler(char *msg) {
             msg); // use priority queue when we add priority queue
 }
 
-void CldEnqueueGroup(CmiGroup grp, void *msg, int infofn)
-{
-  int len, queueing, priobits; unsigned int *prioptr;
+void CldEnqueueGroup(CmiGroup grp, void *msg, int infofn) {
+  int len, queueing, priobits;
+  unsigned int *prioptr;
   CldInfoFn ifn = (CldInfoFn)CmiHandlerToFunction(infofn);
   CldPackFn pfn;
   ifn(msg, &pfn, &len, &queueing, &priobits, &prioptr);
@@ -36,7 +36,7 @@ void CldEnqueueGroup(CmiGroup grp, void *msg, int infofn)
     ifn(msg, &pfn, &len, &queueing, &priobits, &prioptr);
   }
   CldSwitchHandler((char *)msg, CldHandlerIndex);
-  CmiSetInfo(msg,infofn);
+  CmiSetInfo(msg, infofn);
 
   CmiSyncMulticastAndFree(grp, len, msg);
 }

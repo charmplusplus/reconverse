@@ -27,187 +27,187 @@ void collectiveInit(void) {
 
 /* Broadcast to everyone but the source pe. Source does not free. */
 void CmiSyncBroadcast(int size, void *msg) {
-    DEBUGF("[%d] CmiSyncBroadcast\n", CmiMyPe());
-    int pe = CmiMyPe();
-  
-    CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
-    header->messageSize = size;
-  
-  #ifdef SPANTREE
-  #if SPANTREE ON
-    DEBUGF("[%d] Spanning tree option\n", CmiMyPe());
-    CmiSetBcastSource(msg, pe); // used to skip the source
-    header->swapHandlerId = header->handlerId;
-    header->handlerId = Cmi_bcastHandler;
-    CmiSyncSend(0, size, msg);
-  #else
-    for (int i = pe + 1; i < CmiNumPes(); i++)
-        CmiSyncSend(i, size, msg);
-  
-    for (int i = 0; i < pe; i++)
-      CmiSyncSend(i, size, msg);
-  #endif
-  #else
-  
-    for (int i = pe + 1; i < CmiNumPes(); i++)
-      CmiSyncSend(i, size, msg);
-  
-    for (int i = 0; i < pe; i++)
-      CmiSyncSend(i, size, msg);
-  #endif
-  }
-  
-  void CmiSyncBroadcastAndFree(int size, void *msg) {
-    CmiSyncBroadcast(size, msg);
-    CmiFree(msg);
-  }
-  
-  void CmiSyncBroadcastAll(int size, void *msg) {
-    DEBUGF("[%d] CmiSyncBroadcastAll\n", CmiMyPe());
-    CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
-    header->messageSize = size;
-  
-  #ifdef SPANTREE
-  #if SPANTREE ON
-    CmiSetBcastSource(msg, -1); // don't skip the source
-    header->swapHandlerId = header->handlerId;
-  
-    header->handlerId = Cmi_bcastHandler;
-    CmiSyncSend(0, size, msg);
-  #else
-    for (int i = 0; i < CmiNumPes(); i++)
-      CmiSyncSend(i, size, msg);
-  #endif
-  #else
-    for (int i = 0; i < CmiNumPes(); i++)
-      CmiSyncSend(i, size, msg);
-  #endif
-  }
-  
-  void CmiSyncBroadcastAllAndFree(int size, void *msg) {
-    CmiSyncBroadcastAll(size, msg);
-    CmiFree(msg);
-  }
-  
-  void CmiWithinNodeBroadcast(int size, void *msg) {
-    for (int i = 0; i < CmiMyNodeSize(); i++) {
-      int destPe = CmiMyNode() * CmiMyNodeSize() + i;
-      CmiSyncSend(destPe, size, msg);
-    }
-  }
-  
-  void CmiSyncNodeBroadcast(unsigned int size, void *msg) {
+  DEBUGF("[%d] CmiSyncBroadcast\n", CmiMyPe());
+  int pe = CmiMyPe();
 
-    int node = CmiMyNode();
-  
-    CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
-    header->messageSize = size;
-  
-  #ifdef SPANTREE
-  #if SPANTREE ON
-    CmiSetBcastSource(msg, node); // used to skip the source
-    header->swapHandlerId = header->handlerId;
-    header->handlerId = Cmi_nodeBcastHandler;
-    CmiSyncNodeSend(0, size, msg);
-  #else
-  
-    for (int i = node + 1; i < CmiNumNodes(); i++)
-      CmiSyncNodeSend(i, size, msg);
-  
-    for (int i = 0; i < node; i++)
-      CmiSyncNodeSend(i, size, msg);
-  #endif
-  #else
-  
-    for (int i = node + 1; i < CmiNumNodes(); i++)
-      CmiSyncNodeSend(i, size, msg);
-  
-    for (int i = 0; i < node; i++)
-      CmiSyncNodeSend(i, size, msg);
-  #endif
+  CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
+  header->messageSize = size;
+
+#ifdef SPANTREE
+#if SPANTREE ON
+  DEBUGF("[%d] Spanning tree option\n", CmiMyPe());
+  CmiSetBcastSource(msg, pe); // used to skip the source
+  header->swapHandlerId = header->handlerId;
+  header->handlerId = Cmi_bcastHandler;
+  CmiSyncSend(0, size, msg);
+#else
+  for (int i = pe + 1; i < CmiNumPes(); i++)
+    CmiSyncSend(i, size, msg);
+
+  for (int i = 0; i < pe; i++)
+    CmiSyncSend(i, size, msg);
+#endif
+#else
+
+  for (int i = pe + 1; i < CmiNumPes(); i++)
+    CmiSyncSend(i, size, msg);
+
+  for (int i = 0; i < pe; i++)
+    CmiSyncSend(i, size, msg);
+#endif
+}
+
+void CmiSyncBroadcastAndFree(int size, void *msg) {
+  CmiSyncBroadcast(size, msg);
+  CmiFree(msg);
+}
+
+void CmiSyncBroadcastAll(int size, void *msg) {
+  DEBUGF("[%d] CmiSyncBroadcastAll\n", CmiMyPe());
+  CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
+  header->messageSize = size;
+
+#ifdef SPANTREE
+#if SPANTREE ON
+  CmiSetBcastSource(msg, -1); // don't skip the source
+  header->swapHandlerId = header->handlerId;
+
+  header->handlerId = Cmi_bcastHandler;
+  CmiSyncSend(0, size, msg);
+#else
+  for (int i = 0; i < CmiNumPes(); i++)
+    CmiSyncSend(i, size, msg);
+#endif
+#else
+  for (int i = 0; i < CmiNumPes(); i++)
+    CmiSyncSend(i, size, msg);
+#endif
+}
+
+void CmiSyncBroadcastAllAndFree(int size, void *msg) {
+  CmiSyncBroadcastAll(size, msg);
+  CmiFree(msg);
+}
+
+void CmiWithinNodeBroadcast(int size, void *msg) {
+  for (int i = 0; i < CmiMyNodeSize(); i++) {
+    int destPe = CmiMyNode() * CmiMyNodeSize() + i;
+    CmiSyncSend(destPe, size, msg);
   }
-  
-  void CmiSyncNodeBroadcastAndFree(unsigned int size, void *msg) {
-    CmiSyncNodeBroadcast(size, msg);
-    CmiFree(msg);
+}
+
+void CmiSyncNodeBroadcast(unsigned int size, void *msg) {
+
+  int node = CmiMyNode();
+
+  CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
+  header->messageSize = size;
+
+#ifdef SPANTREE
+#if SPANTREE ON
+  CmiSetBcastSource(msg, node); // used to skip the source
+  header->swapHandlerId = header->handlerId;
+  header->handlerId = Cmi_nodeBcastHandler;
+  CmiSyncNodeSend(0, size, msg);
+#else
+
+  for (int i = node + 1; i < CmiNumNodes(); i++)
+    CmiSyncNodeSend(i, size, msg);
+
+  for (int i = 0; i < node; i++)
+    CmiSyncNodeSend(i, size, msg);
+#endif
+#else
+
+  for (int i = node + 1; i < CmiNumNodes(); i++)
+    CmiSyncNodeSend(i, size, msg);
+
+  for (int i = 0; i < node; i++)
+    CmiSyncNodeSend(i, size, msg);
+#endif
+}
+
+void CmiSyncNodeBroadcastAndFree(unsigned int size, void *msg) {
+  CmiSyncNodeBroadcast(size, msg);
+  CmiFree(msg);
+}
+
+void CmiSyncNodeBroadcastAll(unsigned int size, void *msg) {
+  CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
+  header->messageSize = size;
+
+#ifdef SPANTREE
+#if SPANTREE ON
+  CmiSetBcastSource(msg, -1); // don't skip the source
+  header->swapHandlerId = header->handlerId;
+  header->handlerId = Cmi_nodeBcastHandler;
+  CmiSyncNodeSend(0, size, msg);
+#else
+
+  for (int i = 0; i < CmiNumNodes(); i++)
+    CmiSyncNodeSend(i, size, msg);
+#endif
+#else
+
+  for (int i = 0; i < CmiNumNodes(); i++)
+    CmiSyncNodeSend(i, size, msg);
+#endif
+}
+
+void CmiSyncNodeBroadcastAllAndFree(unsigned int size, void *msg) {
+  CmiSyncNodeBroadcastAll(size, msg);
+  CmiFree(msg);
+}
+
+/* Handler for broadcast via the spanning tree. */
+void CmiBcastHandler(void *msg) {
+  int mype = CmiMyPe();
+  int numChildren = CmiNumSpanTreeChildren(mype);
+  int children[numChildren];
+  CmiSpanTreeChildren(mype, children);
+
+  CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
+
+  // send broadcast to all children
+  for (int i = 0; i < numChildren; i++) {
+    CmiSyncSend(children[i], header->messageSize, msg);
   }
-  
-  void CmiSyncNodeBroadcastAll(unsigned int size, void *msg) {
-    CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
-    header->messageSize = size;
-  
-  #ifdef SPANTREE
-  #if SPANTREE ON
-    CmiSetBcastSource(msg, -1); // don't skip the source
-    header->swapHandlerId = header->handlerId;
-    header->handlerId = Cmi_nodeBcastHandler;
-    CmiSyncNodeSend(0, size, msg);
-  #else
-  
-    for (int i = 0; i < CmiNumNodes(); i++)
-      CmiSyncNodeSend(i, size, msg);
-  #endif
-  #else
-  
-    for (int i = 0; i < CmiNumNodes(); i++)
-      CmiSyncNodeSend(i, size, msg);
-  #endif
+
+  // call handler locally (unless I am source of broadcast, and bcast is
+  // exclusive)
+  if (CmiGetBcastSource(msg) != mype) {
+    CmiCallHandler(header->swapHandlerId, msg);
   }
-  
-  void CmiSyncNodeBroadcastAllAndFree(unsigned int size, void *msg) {
-    CmiSyncNodeBroadcastAll(size, msg);
-    CmiFree(msg);
+}
+
+/* Handler for node broadcast via the spanning tree. */
+void CmiNodeBcastHandler(void *msg) {
+  int mynode = CmiMyNode();
+  int numChildren = CmiNumNodeSpanTreeChildren(mynode);
+  int children[numChildren];
+  CmiNodeSpanTreeChildren(mynode, children);
+
+  CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
+
+  // send broadcast to node children
+  for (int i = 0; i < numChildren; i++) {
+    CmiSyncNodeSend(children[i], header->messageSize, msg);
   }
-  
-  /* Handler for broadcast via the spanning tree. */
-  void CmiBcastHandler(void *msg) {
-    int mype = CmiMyPe();
-    int numChildren = CmiNumSpanTreeChildren(mype);
-    int children[numChildren];
-    CmiSpanTreeChildren(mype, children);
-  
-    CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
-  
-    // send broadcast to all children
-    for (int i = 0; i < numChildren; i++) {
-      CmiSyncSend(children[i], header->messageSize, msg);
-    }
-  
-    // call handler locally (unless I am source of broadcast, and bcast is
-    // exclusive)
-    if (CmiGetBcastSource(msg) != mype) {
-      CmiCallHandler(header->swapHandlerId, msg);
-    }
+
+  if (CmiGetBcastSource(msg) != mynode) {
+    CmiCallHandler(header->swapHandlerId, msg);
   }
-  
-  /* Handler for node broadcast via the spanning tree. */
-  void CmiNodeBcastHandler(void *msg) {
-    int mynode = CmiMyNode();
-    int numChildren = CmiNumNodeSpanTreeChildren(mynode);
-    int children[numChildren];
-    CmiNodeSpanTreeChildren(mynode, children);
-  
-    CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
-  
-    // send broadcast to node children
-    for (int i = 0; i < numChildren; i++) {
-      CmiSyncNodeSend(children[i], header->messageSize, msg);
-    }
-  
-    if (CmiGetBcastSource(msg) != mynode) {
-      CmiCallHandler(header->swapHandlerId, msg);
-    }
-  }
-  
-  void CmiSetBcastSource(void *msg, CmiBroadcastSource source) {
-    CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
-    header->collectiveMetaInfo = source;
-  }
-  
-  CmiBroadcastSource CmiGetBcastSource(void *msg) {
-    CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
-    return header->collectiveMetaInfo;
-  }
+}
+
+void CmiSetBcastSource(void *msg, CmiBroadcastSource source) {
+  CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
+  header->collectiveMetaInfo = source;
+}
+
+CmiBroadcastSource CmiGetBcastSource(void *msg) {
+  CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
+  return header->collectiveMetaInfo;
+}
 
 /************* Reductions ***************/
 
@@ -239,7 +239,6 @@ void CmiReductionsInit(void) {
 
     // node reduction must be initialized with a valid lock
     nodered.lock = CmiCreateLock(); // in non-smp this would just be a nullptr
-
   }
   CsvAccess(_node_reduction_info) = noderedinfo;
   CsvAccess(_node_reduction_counter) = 0;
@@ -281,7 +280,6 @@ static inline CmiReductionID getNextID(std::atomic<CmiReductionID> &ctr) {
   return old;
 }
 
-
 unsigned CmiGetReductionIndex(CmiReductionID id) {
   // treating the id as the index into the reduction table
   // utilized in getCreateReduction and clearReduction to find the reduction
@@ -291,7 +289,6 @@ unsigned CmiGetReductionIndex(CmiReductionID id) {
   }
   return id;
 }
-
 
 // PROCESS REDUCTIONS
 static void CmiClearReduction(CmiReductionID id) {
@@ -310,9 +307,7 @@ CmiReductionID CmiGetNextReductionID() {
   return getNextID(CpvAccess(_reduction_counter));
 }
 
-void CmiResetGlobalReduceSeqID(void) {
-  CpvAccess(_reduction_counter) = 0;
-}
+void CmiResetGlobalReduceSeqID(void) { CpvAccess(_reduction_counter) = 0; }
 
 static CmiReduction *CmiGetCreateReduction(CmiReductionID id) {
   // should handle the 2 cases:
@@ -437,7 +432,6 @@ void CmiNodeReduce(void *msg, int size, CmiReduceMergeFn mergeFn) {
   CmiReduction *red = CmiGetCreateNodeReduction(id);
   CmiInternalNodeReduce(msg, size, mergeFn, red);
 
-
   CmiUnlock(nodeRed.lock);
 }
 
@@ -445,9 +439,7 @@ CmiReductionID CmiGetNextNodeReductionID() {
   return getNextID(CsvAccess(_node_reduction_counter));
 }
 
-void CmiResetGlobalNodeReduceSeqID(){
-  CsvAccess(_node_reduction_counter) = 0;
-}
+void CmiResetGlobalNodeReduceSeqID() { CsvAccess(_node_reduction_counter) = 0; }
 
 static CmiReduction *CmiGetCreateNodeReduction(CmiReductionID id) {
   // should handle the 2 cases:
@@ -544,9 +536,7 @@ void CmiNodeReduceHandler(void *msg) {
   reduction->messagesReceived++;
   CmiSendNodeReduce(reduction);
 
-
   CmiUnlock(nodeRed.lock);
-
 }
 
 /************* Groups ***************/

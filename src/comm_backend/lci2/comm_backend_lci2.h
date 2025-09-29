@@ -24,13 +24,14 @@ public:
   bool isRMACapable() override { return true; }
   AmHandler registerAmHandler(CompHandler handler) override;
   void issueAm(int rank, const void *local_buf, size_t size, mr_t mr,
-               CompHandler localComp, AmHandler remoteComp, void *user_context) override;
+               CompHandler localComp, AmHandler remoteComp,
+               void *user_context) override;
   void issueRget(int rank, const void *local_buf, size_t size, mr_t local_mr,
-                 uintptr_t remote_disp, void *rmr,
-                 CompHandler localComp, void *user_context) override;
+                 uintptr_t remote_disp, void *rmr, CompHandler localComp,
+                 void *user_context) override;
   void issueRput(int rank, const void *local_buf, size_t size, mr_t local_mr,
-                 uintptr_t remote_disp, void *rmr,
-                 CompHandler localComp, void *user_context) override;
+                 uintptr_t remote_disp, void *rmr, CompHandler localComp,
+                 void *user_context) override;
   bool progress(void) override;
   void barrier(void) override;
   mr_t registerMemory(void *addr, size_t size) override;

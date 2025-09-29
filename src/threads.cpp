@@ -358,17 +358,17 @@ void CthAwaken(CthThread th) {
   awakenfn(token, strategy, 0, 0); // If this crashes, disable ASLR.
 }
 
-void CthAwakenPrio(CthThread th, int s, int pb, unsigned int *prio)
-{
+void CthAwakenPrio(CthThread th, int s, int pb, unsigned int *prio) {
   CthAwkFn awakenfn = B(th)->awakenfn;
-  if (awakenfn == 0) CthNoStrategy();
+  if (awakenfn == 0)
+    CthNoStrategy();
 #if CMK_TRACE_ENABLED
-#if ! CMK_TRACE_IN_CHARM
-  if(CpvAccess(traceOn))
+#if !CMK_TRACE_IN_CHARM
+  if (CpvAccess(traceOn))
     traceAwaken(th);
 #endif
 #endif
-  CthThreadToken * token = B(th)->token;
+  CthThreadToken *token = B(th)->token;
   awakenfn(token, s, pb, prio); // If this crashes, disable ASLR.
   B(th)->scheduled++;
 }
@@ -497,15 +497,14 @@ void CthRegistered(size_t maxOffset) {
 /* possible hack? CW */
 char *CthGetData(CthThread t) { return B(t)->data; }
 
-void CthSetEventInfo(CthThread t, int event, int srcPE) 
-{
+void CthSetEventInfo(CthThread t, int event, int srcPE) {
   B(t)->eventID = event;
   B(t)->srcPE = srcPE;
 }
 
-void CthFree(CthThread t)
-{
-  if (t==NULL) return;
+void CthFree(CthThread t) {
+  if (t == NULL)
+    return;
 
   if (t != CthSelf()) {
     CthThreadFree(t);
