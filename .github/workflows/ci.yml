@@ -1,4 +1,4 @@
-name: LCI2
+name: Reconverse CI
 
 on:
   push:
@@ -27,7 +27,7 @@ jobs:
           mpirun --version
           fi_info --version
 
-      - name: Configure
+      - name: With the LCI communication backend
         shell: bash
         run: |
             cmake \
@@ -36,17 +36,20 @@ jobs:
                 -DCMAKE_BUILD_TYPE=Debug \
                 -DRECONVERSE_AUTOFETCH_LCI2=ON \
                 -DRECONVERSE_TEST_LAUNCHER="mpirun;--oversubscribe" \
-                -DLCI_NETWORK_BACKENDS=ofi \
                 -DLCT_PMI_BACKEND_ENABLE_MPI=ON \
                 .
-
-      - name: Build
-        shell: bash
-        run: |
             cmake --build build --target all
+            ctest --extra-verbose --timeout 60
 
-      - name: Test
+      - name: With the LCW communication backend
         shell: bash
         run: |
-            cd build
+            cmake \
+                -Bbuild \
+                -GNinja \
+                -DCMAKE_BUILD_TYPE=Debug \
+                -DRECONVERSE_AUTOFETCH_LCW=ON \
+                -DRECONVERSE_TEST_LAUNCHER="mpirun;--oversubscribe" \
+                .
+            cmake --build build --target all
             ctest --extra-verbose --timeout 60
