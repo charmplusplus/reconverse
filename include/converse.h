@@ -302,7 +302,7 @@ int CmiMyRank();
 int CmiNumPes();
 int CmiNumNodes();
 // FIXME
-//#define CmiPhysicalNodeID(node) (node)
+// #define CmiPhysicalNodeID(node) (node)
 extern int CmiPhysicalNodeID(int pe);
 int CmiNodeOf(int pe);
 int CmiRankOf(int pe);
@@ -836,12 +836,12 @@ enum ncpyFreeNcpyOpInfoMode {
 #define CMK_SPANTREE_MAXSPAN 4
 #define CST_W (CMK_SPANTREE_MAXSPAN)
 #define CST_NN (CmiNumNodes())
-#define CmiNodeSpanTreeParent(n) ((n) ? (((n)-1) / CST_W) : (-1))
+#define CmiNodeSpanTreeParent(n) ((n) ? (((n) - 1) / CST_W) : (-1))
 #define CmiNodeSpanTreeChildren(n, c)                                          \
   do {                                                                         \
     int _i;                                                                    \
     for (_i = 0; _i < CST_W; _i++) {                                           \
-      int _x = (n)*CST_W + _i + 1;                                             \
+      int _x = (n) * CST_W + _i + 1;                                           \
       if (_x < CST_NN)                                                         \
         (c)[_i] = _x;                                                          \
     }                                                                          \
@@ -849,7 +849,7 @@ enum ncpyFreeNcpyOpInfoMode {
 #define CmiNumNodeSpanTreeChildren(n)                                          \
   ((((n) + 1) * CST_W < CST_NN)                                                \
        ? CST_W                                                                 \
-       : ((((n)*CST_W + 1) >= CST_NN) ? 0 : ((CST_NN - 1) - (n)*CST_W)))
+       : ((((n) * CST_W + 1) >= CST_NN) ? 0 : ((CST_NN - 1) - (n) * CST_W)))
 #define CST_R(p) (CmiRankOf(p))
 #define CST_NF(n) (CmiNodeFirst(n))
 #define CST_SP(n) (CmiNodeSpanTreeParent(n))
@@ -920,32 +920,42 @@ void registerTraceInit(void (*fn)(char **argv));
 
 int CmiDeliverMsgs(int maxmsgs);
 
-#define CmiMemoryReadFence()                 std::atomic_thread_fence(std::memory_order_seq_cst)
-#define CmiMemoryWriteFence()                std::atomic_thread_fence(std::memory_order_seq_cst)
+#define CmiMemoryReadFence() std::atomic_thread_fence(std::memory_order_seq_cst)
+#define CmiMemoryWriteFence()                                                  \
+  std::atomic_thread_fence(std::memory_order_seq_cst)
 
 extern CmiNodeLock CmiMemLock_lock;
-#define CmiMemLock() do{if (CmiMemLock_lock) CmiLock(CmiMemLock_lock);} while (0)
+#define CmiMemLock()                                                           \
+  do {                                                                         \
+    if (CmiMemLock_lock)                                                       \
+      CmiLock(CmiMemLock_lock);                                                \
+  } while (0)
 
-#define CmiMemUnlock() do{if (CmiMemLock_lock) CmiUnlock(CmiMemLock_lock);} while (0)
+#define CmiMemUnlock()                                                         \
+  do {                                                                         \
+    if (CmiMemLock_lock)                                                       \
+      CmiUnlock(CmiMemLock_lock);                                              \
+  } while (0)
 
 template <typename T> struct CmiIsAtomic : std::false_type {};
 template <typename T> struct CmiIsAtomic<std::atomic<T>> : std::true_type {};
 
 template <typename T>
 typename std::enable_if<CmiIsAtomic<T>::value, typename T::value_type>::type
-CmiAtomicFetchAndIncImpl(T& input) {
-    return std::atomic_fetch_add(&input, typename T::value_type(1));
+CmiAtomicFetchAndIncImpl(T &input) {
+  return std::atomic_fetch_add(&input, typename T::value_type(1));
 }
 
 template <typename T>
 typename std::enable_if<!CmiIsAtomic<T>::value, T>::type
-CmiAtomicFetchAndIncImpl(T& input) {
-    T old = input;
-    ++input;
-    return old;
+CmiAtomicFetchAndIncImpl(T &input) {
+  T old = input;
+  ++input;
+  return old;
 }
 
-#define CmiMemoryAtomicFetchAndInc(input, output) ((output) = CmiAtomicFetchAndIncImpl(input))
+#define CmiMemoryAtomicFetchAndInc(input, output)                              \
+  ((output) = CmiAtomicFetchAndIncImpl(input))
 
 #define CmiEnableUrgentSend(yn) /* intentionally left empty */
 
@@ -953,30 +963,29 @@ typedef struct CmmTableStruct *CmmTable;
 
 #define CmmWildCard (-1)
 
-//typedef void (*CmmPupMessageFn)(pup_er p,void **msg);
-//CmmTable CmmPup(pup_er p, CmmTable t, CmmPupMessageFn msgpup);
+// typedef void (*CmmPupMessageFn)(pup_er p,void **msg);
+// CmmTable CmmPup(pup_er p, CmmTable t, CmmPupMessageFn msgpup);
 
-CmmTable   CmmNew(void);
-void       CmmFree(CmmTable t);
-void	   CmmFreeAll(CmmTable t);
-void       CmmPut(CmmTable t, int ntags, int *tags, void *msg);
-void      *CmmFind(CmmTable t, int ntags, int *tags, int *returntags, int del);
-int        CmmEntries(CmmTable t);
-int 	   CmmGetLastTag(CmmTable t, int ntags, int *tags);
-#define    CmmGet(t,nt,tg,rt)   (CmmFind((t),(nt),(tg),(rt),1))
-#define    CmmProbe(t,nt,tg,rt) (CmmFind((t),(nt),(tg),(rt),0))
-
+CmmTable CmmNew(void);
+void CmmFree(CmmTable t);
+void CmmFreeAll(CmmTable t);
+void CmmPut(CmmTable t, int ntags, int *tags, void *msg);
+void *CmmFind(CmmTable t, int ntags, int *tags, int *returntags, int del);
+int CmmEntries(CmmTable t);
+int CmmGetLastTag(CmmTable t, int ntags, int *tags);
+#define CmmGet(t, nt, tg, rt) (CmmFind((t), (nt), (tg), (rt), 1))
+#define CmmProbe(t, nt, tg, rt) (CmmFind((t), (nt), (tg), (rt), 0))
 
 #ifndef CMI_CACHE_LINE_SIZE
 #ifdef __cpp_lib_hardware_interference_size
-# define CMI_CACHE_LINE_SIZE std::hardware_destructive_interference_size
+#define CMI_CACHE_LINE_SIZE std::hardware_destructive_interference_size
 #elif CMK_PPC64 || (defined __APPLE__ && defined __arm64__)
-# define CMI_CACHE_LINE_SIZE 128
+#define CMI_CACHE_LINE_SIZE 128
 #else
-# define CMI_CACHE_LINE_SIZE 64
+#define CMI_CACHE_LINE_SIZE 64
 #endif
 #endif
-//partitions
+// partitions
 
 typedef enum Partition_Type {
   PARTITION_SINGLETON,

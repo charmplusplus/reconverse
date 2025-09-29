@@ -57,12 +57,14 @@ void issueAm(int rank, const void *local_buf, size_t size, mr_t mr,
  * @brief Issue a remote get operation. Thread-safe.
  */
 void issueRget(int rank, const void *local_buf, size_t size, mr_t local_mr,
-               uintptr_t remote_disp, void *rmr, CompHandler localComp, void *user_context);
+               uintptr_t remote_disp, void *rmr, CompHandler localComp,
+               void *user_context);
 /**
  * @brief Issue a remote put operation. Thread-safe.
  */
 void issueRput(int rank, const void *local_buf, size_t size, mr_t local_mr,
-               uintptr_t remote_disp, void *rmr, CompHandler localComp, void *user_context);
+               uintptr_t remote_disp, void *rmr, CompHandler localComp,
+               void *user_context);
 /**
  * @brief Make progress on the communication backend. Thread-safe.
  */

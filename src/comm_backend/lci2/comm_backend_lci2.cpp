@@ -87,8 +87,9 @@ AmHandler CommBackendLCI2::registerAmHandler(CompHandler handler) {
   return g_handlers.size() - 1;
 }
 
-void CommBackendLCI2::issueAm(int rank, const void *local_buf, size_t size, mr_t mr,
-                              CompHandler localComp, AmHandler remoteComp, void *user_context) {
+void CommBackendLCI2::issueAm(int rank, const void *local_buf, size_t size,
+                              mr_t mr, CompHandler localComp,
+                              AmHandler remoteComp, void *user_context) {
   auto args = new localCallbackArgs{localComp, user_context};
   lci::status_t status;
   do {

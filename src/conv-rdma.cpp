@@ -146,8 +146,8 @@ void CmiIssueRputCopyBased(NcpyOperationInfo *ncpyOpInfo) {
 
   // Invoke the source ack
   ncpyOpInfo->ackMode = CMK_SRC_ACK; // only invoke the source ack
-  // We need to ensure consistent behavior no matter what ncpyDirectAckHandlerFn actually does
-  // so we cannot rely on the charm layer to free the ncpyOpInfo
+  // We need to ensure consistent behavior no matter what ncpyDirectAckHandlerFn
+  // actually does so we cannot rely on the charm layer to free the ncpyOpInfo
   auto realFreeMe = ncpyOpInfo->freeMe;
   ncpyOpInfo->freeMe = CMK_DONT_FREE_NCPYOPINFO;
   ncpyDirectAckHandlerFn(ncpyOpInfo);
@@ -367,7 +367,7 @@ void CommRputLocalHandler(comm_backend::Status status) {
   ncpyOpInfo->freeMe = CMK_DONT_FREE_NCPYOPINFO;
   ncpyDirectAckHandlerFn(ncpyOpInfo);
   if (realFreeMe == CMK_FREE_NCPYOPINFO)
-    CmiFree(ncpyOpInfo);  
+    CmiFree(ncpyOpInfo);
 }
 
 // Invoked by the local completion of the Rget operation
@@ -384,12 +384,12 @@ void CommRgetLocalHandler(comm_backend::Status status) {
 /* Perform an RDMA Get operation into the local destination address from the
  * remote source address*/
 void CmiIssueRget(NcpyOperationInfo *ncpyOpInfo) {
-// #if CMK_USE_LRTS && CMK_ONESIDED_IMPL
-//   // Use network RDMA for a PE on a remote host
-//   LrtsIssueRget(ncpyOpInfo);
-// #else
-//   CmiIssueRgetCopyBased(ncpyOpInfo);
-// #endif
+  // #if CMK_USE_LRTS && CMK_ONESIDED_IMPL
+  //   // Use network RDMA for a PE on a remote host
+  //   LrtsIssueRget(ncpyOpInfo);
+  // #else
+  //   CmiIssueRgetCopyBased(ncpyOpInfo);
+  // #endif
   int target_node = CmiNodeOf(ncpyOpInfo->srcPe);
   if (target_node == CmiMyNode()) {
     // loopback messages
@@ -415,39 +415,40 @@ void CmiIssueRget(NcpyOperationInfo *ncpyOpInfo) {
 /* Perform an RDMA Put operation into the remote destination address from the
  * local source address */
 void CmiIssueRput(NcpyOperationInfo *ncpyOpInfo) {
-// #if CMK_USE_LRTS && CMK_ONESIDED_IMPL
-//   // Use network RDMA for a PE on a remote host
-//   LrtsIssueRput(ncpyOpInfo);
-// #else
-//   CmiIssueRputCopyBased(ncpyOpInfo);
-// #endif
-int target_node = CmiNodeOf(ncpyOpInfo->destPe);
-if (target_node == CmiMyNode()) {
-  // loopback messages
-  memcpy((void *)ncpyOpInfo->destPtr, ncpyOpInfo->srcPtr, ncpyOpInfo->srcSize);
-  comm_backend::Status status;
-  status.local_buf = ncpyOpInfo->srcPtr;
-  status.size = ncpyOpInfo->srcSize;
-  status.user_context = ncpyOpInfo;
-  CommRputLocalHandler(status);
-} else if (!CmiUseCopyBasedRDMA) {
-  auto mr = *(comm_backend::mr_t *)ncpyOpInfo->srcLayerInfo;
-  void *rmr = ncpyOpInfo->destLayerInfo + sizeof(comm_backend::mr_t);
-  // FIXME: we assume the offset to the registered base address is 0 here
-  comm_backend::issueRput(CmiNodeOf(ncpyOpInfo->destPe), ncpyOpInfo->srcPtr,
-                          ncpyOpInfo->srcSize, mr, 0, rmr, CommRputLocalHandler,
-                          ncpyOpInfo);
-} else {
-  CmiIssueRputCopyBased(ncpyOpInfo);
-}
+  // #if CMK_USE_LRTS && CMK_ONESIDED_IMPL
+  //   // Use network RDMA for a PE on a remote host
+  //   LrtsIssueRput(ncpyOpInfo);
+  // #else
+  //   CmiIssueRputCopyBased(ncpyOpInfo);
+  // #endif
+  int target_node = CmiNodeOf(ncpyOpInfo->destPe);
+  if (target_node == CmiMyNode()) {
+    // loopback messages
+    memcpy((void *)ncpyOpInfo->destPtr, ncpyOpInfo->srcPtr,
+           ncpyOpInfo->srcSize);
+    comm_backend::Status status;
+    status.local_buf = ncpyOpInfo->srcPtr;
+    status.size = ncpyOpInfo->srcSize;
+    status.user_context = ncpyOpInfo;
+    CommRputLocalHandler(status);
+  } else if (!CmiUseCopyBasedRDMA) {
+    auto mr = *(comm_backend::mr_t *)ncpyOpInfo->srcLayerInfo;
+    void *rmr = ncpyOpInfo->destLayerInfo + sizeof(comm_backend::mr_t);
+    // FIXME: we assume the offset to the registered base address is 0 here
+    comm_backend::issueRput(CmiNodeOf(ncpyOpInfo->destPe), ncpyOpInfo->srcPtr,
+                            ncpyOpInfo->srcSize, mr, 0, rmr,
+                            CommRputLocalHandler, ncpyOpInfo);
+  } else {
+    CmiIssueRputCopyBased(ncpyOpInfo);
+  }
 }
 
 /* De-register registered memory for pointer */
 void CmiDeregisterMem(const void *ptr, void *info, int pe,
                       unsigned short int mode) {
-// #if CMK_USE_LRTS && CMK_ONESIDED_IMPL
-//   LrtsDeregisterMem(ptr, info, pe, mode);
-// #endif
+  // #if CMK_USE_LRTS && CMK_ONESIDED_IMPL
+  //   LrtsDeregisterMem(ptr, info, pe, mode);
+  // #endif
   if (!CmiUseCopyBasedRDMA) {
     comm_backend::deregisterMemory(*(comm_backend::mr_t *)info);
   }
@@ -455,18 +456,19 @@ void CmiDeregisterMem(const void *ptr, void *info, int pe,
 
 // FIXME: This really should be implemented in the charm layer
 void CmiInvokeRemoteDeregAckHandler(int pe, NcpyOperationInfo *ncpyOpInfo) {
-// #if CMK_USE_LRTS && CMK_ONESIDED_IMPL
-//   LrtsInvokeRemoteDeregAckHandler(pe, ncpyOpInfo);
-// #endif
-  if(ncpyOpInfo->opMode == CMK_BCAST_EM_API)
+  // #if CMK_USE_LRTS && CMK_ONESIDED_IMPL
+  //   LrtsInvokeRemoteDeregAckHandler(pe, ncpyOpInfo);
+  // #endif
+  if (ncpyOpInfo->opMode == CMK_BCAST_EM_API)
     return;
   bool freeInfo;
-  if(ncpyOpInfo->opMode == CMK_DIRECT_API) {
+  if (ncpyOpInfo->opMode == CMK_DIRECT_API) {
     freeInfo = true;
-  } else if(ncpyOpInfo->opMode == CMK_EM_API) {
+  } else if (ncpyOpInfo->opMode == CMK_EM_API) {
     freeInfo = false;
   } else {
-    CmiAbort("CmiInvokeRemoteDeregAckHandler: ncpyOpInfo->opMode is not valid for dereg\n");
+    CmiAbort("CmiInvokeRemoteDeregAckHandler: ncpyOpInfo->opMode is not valid "
+             "for dereg\n");
   }
 
   int ncpyOpInfoSize = ncpyOpInfo->ncpyOpInfoSize;
@@ -479,8 +481,8 @@ void CmiInvokeRemoteDeregAckHandler(int pe, NcpyOperationInfo *ncpyOpInfo) {
          ncpyOpInfoSize);
 
   CmiSetHandler(remoteDeregMsg, remote_dereg_handler_idx);
-  CmiSyncSendAndFree(pe,
-                     sizeof(ConverseRdmaMsg) + ncpyOpInfoSize, remoteDeregMsg);
+  CmiSyncSendAndFree(pe, sizeof(ConverseRdmaMsg) + ncpyOpInfoSize,
+                     remoteDeregMsg);
 
   // free original ncpyOpinfo
   if (freeInfo)
@@ -504,7 +506,8 @@ void CmiSetRdmaBufferInfo(void *info, const void *ptr, int size,
     info = (char *)info + sizeof(mr);
     size_t info_size_left = CMK_NOCOPY_DIRECT_BYTES - sizeof(mr);
     size_t rmr_size = comm_backend::getRMR(mr, info, info_size_left);
-    CmiAssertMsg(rmr_size <= info_size_left, "CMK_NOCOPY_DIRECT_BYTES is too small");
+    CmiAssertMsg(rmr_size <= info_size_left,
+                 "CMK_NOCOPY_DIRECT_BYTES is too small");
   }
 }
 

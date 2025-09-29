@@ -103,9 +103,8 @@ void CldEnqueue(int pe, void *msg, int infofn) {
     /* CsdEnqueueGeneral is not thread or SIGIO safe */
     // CmiPrintf("   myself processor %d ==> %d, length=%d Timer:%f , priori=%d
     // \n", CmiMyPe(), pe, len, CmiWallTimer(), *prioptr);
-    //CsdEnqueueGeneral(msg, queueing, priobits, prioptr);
-    CmiPushPE(CmiMyPe(), len,
-              msg);
+    // CsdEnqueueGeneral(msg, queueing, priobits, prioptr);
+    CmiPushPE(CmiMyPe(), len, msg);
   } else {
     ifn(msg, &pfn, &len, &queueing, &priobits, &prioptr);
     if (pfn && CmiNodeOf(pe) != CmiMyNode()) {

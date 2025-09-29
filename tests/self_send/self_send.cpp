@@ -126,10 +126,10 @@ CmiStartFn mymain(int argc, char *argv[]) {
   CpvInitialize(double, endTime);
 
   // Set runtime cpuaffinity
-//   CmiInitCPUAffinity(argv);
+  //   CmiInitCPUAffinity(argv);
 
   // Initialize CPU topology
-//   CmiInitCPUTopology(argv);
+  //   CmiInitCPUTopology(argv);
 
   // Wait for all PEs of the node to complete topology init
   CmiNodeAllBarrier();
@@ -168,10 +168,10 @@ CmiStartFn mymain(int argc, char *argv[]) {
               iterations, CpvAccess(msgSize));
   }
 
-    CpvAccess(startTime) = CmiWallTimer();
-    char *initiateMsg = (char *)CmiAlloc(CmiMsgHeaderSizeBytes);
-    CmiSetHandler(initiateMsg, CpvAccess(initiateHandler));
-    CmiSyncBroadcastAllAndFree(CmiMsgHeaderSizeBytes, initiateMsg);
+  CpvAccess(startTime) = CmiWallTimer();
+  char *initiateMsg = (char *)CmiAlloc(CmiMsgHeaderSizeBytes);
+  CmiSetHandler(initiateMsg, CpvAccess(initiateHandler));
+  CmiSyncBroadcastAllAndFree(CmiMsgHeaderSizeBytes, initiateMsg);
   return 0;
 }
 
