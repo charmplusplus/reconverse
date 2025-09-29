@@ -41,6 +41,12 @@ static int cpuPhyNodeAffinityRecvHandlerIdx;
 // CmiNumCores
 static hwloc_topology_t topology, legacy_topology;
 
+int CmiNumCores(void)
+{
+  // PU count is the intended output here rather than literal cores
+  return CmiHwlocTopologyLocal.total_num_pus;
+}
+
 static int search_pemap(char *pecoremap, int pe)
 {
   int *map = (int *)malloc(CmiNumPesGlobal()*sizeof(int));
@@ -487,5 +493,7 @@ void CmiCheckAffinity(void)
 #else
 // Dummy function if RECONVERSE_ENABLE_CPU_AFFINITY not set
 void CmiInitCPUAffinity(char **argv) {}
+
+void CmiCheckAffinity(void) {}
 
 #endif

@@ -1,4 +1,4 @@
-# reconverse-pingpong
+# reconverse
 Basic implementation of a new communication layer for Charm++
 
 ## Build Reconverse
