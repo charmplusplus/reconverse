@@ -29,6 +29,9 @@ int Cmi_numnodes;   // represents the number of physical nodes/systems machine
 int Cmi_nodestart;
 std::vector<CmiHandlerInfo> **CmiHandlerTable; // array of handler vectors
 ConverseNodeQueue<void *> *CmiNodeQueue;
+CpvDeclare(Queue, CsdSchedQueue);
+CsvDeclare(Queue, CsdNodeQueue);
+CsvDeclare(CmiNodeLock, CsdNodeQueueLock);
 double Cmi_startTime;
 CmiSpanningTreeInfo *_topoTree = NULL;
 int CharmLibInterOperate;
@@ -279,6 +282,13 @@ void CmiInitState(int rank) {
   CpvAccess(interopExitFlag) = 0;
   CmiOnesidedDirectInit();
   CcdModuleInit();
+  CpvInitialize(Queue, CsdSchedQueue);
+  CsvInitialize(CmiLock, CsdNodeQueueLock);
+  CsvInitialize(Queue, CsdNodeQueue);
+  if (CmiMyRank() ==0) {
+	  CsvAccess(CsdNodeQueueLock) = CmiCreateLock();
+  }
+  CmiNodeBarrier();
 }
 
 ConverseQueue<void *> *CmiGetQueue(int rank) { return Cmi_queues[rank]; }

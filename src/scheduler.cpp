@@ -122,6 +122,39 @@ void CsdSchedulePoll() {
       }
     }
 
+    // poll node prio queue
+    else if (!CsvAccess(CsdNodeQueue).empty()) {
+      CmiLock(CsvAccess(CsdNodeQueueLock));
+      auto result = CsvAccess(CsdNodeQueue).top();
+      CsvAccess(CsdNodeQueue).pop();
+      CmiUnlock(CsvAccess(CsdNodeQueueLock));
+      void *msg = result.message;
+      // process event
+      CmiHandleMessage(msg);
+
+      // release idle if necessary
+      if (CmiGetIdle()) {
+        CmiSetIdle(false);
+        CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
+      }
+    }
+
+    //poll thread prio queue
+    else if (!CpvAccess(CsdSchedQueue).empty()) {
+      auto result = CpvAccess(CsdSchedQueue).top();
+      CpvAccess(CsdSchedQueue).pop();
+      void *msg = result.message;
+
+      // process event
+      CmiHandleMessage(msg);
+
+      // release idle if necessary
+      if (CmiGetIdle()) {
+        CmiSetIdle(false);
+        CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
+      }
+    }
+
     else {
       comm_backend::progress();
       break; //break when queues are empty
@@ -140,12 +173,26 @@ int CsdScheduler(int maxmsgs){
   
 }
 
-void CsdEnqueueGeneral(void *Message, int strategy, int priobits, int *prioptr){
-  CmiPushPE(CmiMyPe(), sizeof(Message), Message);
+void CqsEnqueueGeneral(Queue q, void *Message, int strategy, int priobits,
+                         unsigned int *prioptr){
+          int iprio;
+          long long lprio;
+          switch (strategy){ //for now everything is FIFO
+            case CQS_QUEUEING_FIFO:
+            case CQS_QUEUEING_LIFO:
+              q.push(MessagePriorityPair((void*)Message, 0));
+              break;
+            case CQS_QUEUEING_IFIFO:
+            case CQS_QUEUEING_ILIFO:
+              iprio=prioptr[0]+(1U<<(8*sizeof(unsigned int)-1));
+              q.push(MessagePriorityPair((void*)Message, iprio));
+              break;
+            case CQS_QUEUEING_LFIFO:
+            case CQS_QUEUEING_LLIFO:
+              lprio = ((long long*)prioptr)[0] + (1ULL<<(8*sizeof(long long)-1));
+              q.push(MessagePriorityPair((void*)Message, lprio));
+              break;
+            default:
+              CmiAbort("CqsEnqueueGeneral: invalid queueing strategy (bitvectors not supported yet)\n");
+          }
 }
-
-void CsdNodeEnqueueGeneral(void *Message, int strategy, int priobits, unsigned int *prioptr){
-  CmiGetNodeQueue()->push(Message);
-}
-
-// TODO: implement CsdEnqueue/Dequeue (why are these necessary?)
