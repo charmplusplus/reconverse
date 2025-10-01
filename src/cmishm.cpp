@@ -122,8 +122,8 @@ static void openAllShared_(CmiIpcManager* meta) {
 }
 
 inline std::size_t whichBin_(std::size_t size) {
-   const auto* begin = kCutOffPoints;
-   const auto* end   = kCutOffPoints + kNumCutOffPoints;
+   const auto* begin = kCutOffPoints.data();
+   const auto* end   = kCutOffPoints.data() + kNumCutOffPoints;
    const auto* it = std::lower_bound(begin, end, size);
    return static_cast<std::size_t>(it - begin);  // returns kNumCutOffPoints if none
 }
