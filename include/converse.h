@@ -393,7 +393,10 @@ struct MessagePriorityComparator {
   }
 };
 
-typedef std::priority_queue<MessagePriorityPair, std::vector<MessagePriorityPair>, MessagePriorityComparator> Queue;
+typedef std::priority_queue<MessagePriorityPair, std::vector<MessagePriorityPair>, MessagePriorityComparator> *Queue;
+
+#define QueueInit() new std::priority_queue<MessagePriorityPair, std::vector<MessagePriorityPair>, MessagePriorityComparator>()
+
 CpvExtern(Queue, CsdSchedQueue);
 CsvExtern(Queue, CsdNodeQueue);
 CsvExtern(CmiNodeLock, CsdNodeQueueLock);

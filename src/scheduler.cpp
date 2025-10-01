@@ -49,6 +49,39 @@ void CsdScheduler() {
       }
     }
 
+        // poll node prio queue
+    else if (!CsvAccess(CsdNodeQueue)->empty()) {
+      CmiLock(CsvAccess(CsdNodeQueueLock));
+      auto result = CsvAccess(CsdNodeQueue)->top();
+      CsvAccess(CsdNodeQueue)->pop();
+      CmiUnlock(CsvAccess(CsdNodeQueueLock));
+      void *msg = result.message;
+      // process event
+      CmiHandleMessage(msg);
+
+      // release idle if necessary
+      if (CmiGetIdle()) {
+        CmiSetIdle(false);
+        CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
+      }
+    }
+
+    //poll thread prio queue
+    else if (!CpvAccess(CsdSchedQueue)->empty()) {
+      auto result = CpvAccess(CsdSchedQueue)->top();
+      CpvAccess(CsdSchedQueue)->pop();
+      void *msg = result.message;
+
+      // process event
+      CmiHandleMessage(msg);
+
+      // release idle if necessary
+      if (CmiGetIdle()) {
+        CmiSetIdle(false);
+        CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
+      }
+    }
+
     // the processor is idle
     else {
       // if not already idle, set idle and raise condition
@@ -123,10 +156,10 @@ void CsdSchedulePoll() {
     }
 
     // poll node prio queue
-    else if (!CsvAccess(CsdNodeQueue).empty()) {
+    else if (!CsvAccess(CsdNodeQueue)->empty()) {
       CmiLock(CsvAccess(CsdNodeQueueLock));
-      auto result = CsvAccess(CsdNodeQueue).top();
-      CsvAccess(CsdNodeQueue).pop();
+      auto result = CsvAccess(CsdNodeQueue)->top();
+      CsvAccess(CsdNodeQueue)->pop();
       CmiUnlock(CsvAccess(CsdNodeQueueLock));
       void *msg = result.message;
       // process event
@@ -140,9 +173,9 @@ void CsdSchedulePoll() {
     }
 
     //poll thread prio queue
-    else if (!CpvAccess(CsdSchedQueue).empty()) {
-      auto result = CpvAccess(CsdSchedQueue).top();
-      CpvAccess(CsdSchedQueue).pop();
+    else if (!CpvAccess(CsdSchedQueue)->empty()) {
+      auto result = CpvAccess(CsdSchedQueue)->top();
+      CpvAccess(CsdSchedQueue)->pop();
       void *msg = result.message;
 
       // process event
@@ -180,17 +213,17 @@ void CqsEnqueueGeneral(Queue q, void *Message, int strategy, int priobits,
           switch (strategy){ //for now everything is FIFO
             case CQS_QUEUEING_FIFO:
             case CQS_QUEUEING_LIFO:
-              q.push(MessagePriorityPair((void*)Message, 0));
+              q->push(MessagePriorityPair((void*)Message, 0));
               break;
             case CQS_QUEUEING_IFIFO:
             case CQS_QUEUEING_ILIFO:
               iprio=prioptr[0]+(1U<<(8*sizeof(unsigned int)-1));
-              q.push(MessagePriorityPair((void*)Message, iprio));
+              q->push(MessagePriorityPair((void*)Message, iprio));
               break;
             case CQS_QUEUEING_LFIFO:
             case CQS_QUEUEING_LLIFO:
               lprio = ((long long*)prioptr)[0] + (1ULL<<(8*sizeof(long long)-1));
-              q.push(MessagePriorityPair((void*)Message, lprio));
+              q->push(MessagePriorityPair((void*)Message, lprio));
               break;
             default:
               CmiAbort("CqsEnqueueGeneral: invalid queueing strategy (bitvectors not supported yet)\n");
