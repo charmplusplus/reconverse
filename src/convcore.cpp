@@ -287,7 +287,7 @@ void CmiInitState(int rank) {
   CsvInitialize(CmiLock, CsdNodeQueueLock);
   CsvInitialize(Queue, CsdNodeQueue);
   if (CmiMyRank() ==0) {
-	  CsvAccess(CsdNodeQueueLock) = CmiCreateLock();
+    CsvAccess(CsdNodeQueueLock) = CmiCreateLock();
     CsvAccess(CsdNodeQueue) = QueueInit();
   }
   CmiNodeBarrier();
