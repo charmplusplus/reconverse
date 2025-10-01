@@ -121,15 +121,11 @@ static void openAllShared_(CmiIpcManager* meta) {
   DEBUGF(("%d> finished opening all shared\n", meta->mine));
 }
 
-// NOTE ( there may be a faster way to do this? )
 inline std::size_t whichBin_(std::size_t size) {
-  std::size_t bin;
-  for (bin = 0; bin < kNumCutOffPoints; bin++) {
-    if (size <= kCutOffPoints[bin]) {
-      break;
-    }
-  }
-  return bin;
+   const auto* begin = kCutOffPoints;
+   const auto* end   = kCutOffPoints + kNumCutOffPoints;
+   const auto* it = std::lower_bound(begin, end, size);
+   return static_cast<std::size_t>(it - begin);  // returns kNumCutOffPoints if none
 }
 
 static void awakenSleepers_(void) {
