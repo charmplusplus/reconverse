@@ -41,6 +41,10 @@ int getMyNodeId();
  */
 int getNumNodes();
 /**
+ * @brief Check if the backend supports RMA operations. Thread-safe.
+ */
+bool isRMACapable();
+/**
  * @brief Register an active message handler. Not thread-safe.
  */
 AmHandler registerAmHandler(CompHandler handler);
