@@ -379,12 +379,12 @@ int CsdScheduler(int maxmsgs);
                           // unsigned int *prioptr);
 
 // Message-priority pair for the queue
-typedef struct MessagePriorityPair {
+struct MessagePriorityPair {
   void* message;
   long long priority;
   
   MessagePriorityPair(void* msg, long long prio) : message(msg), priority(prio) {}
-} MessagePriorityPair;
+};
 
 // Comparator for increasing order of priority values
 struct MessagePriorityComparator {
