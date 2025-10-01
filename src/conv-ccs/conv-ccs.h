@@ -10,7 +10,7 @@ but it can use the CcsSendReply function.
 #include "sockRoutines.h"
 #include "ccs-server.h" /*for CcsSecAttr*/
 
-#include "ckhashtable.h"
+//#include "ckhashtable.h"
 
 #ifdef __cplusplus
 extern "C" {

@@ -9,13 +9,13 @@
 #include <limits.h>
 
 #include "converse.h"
-#include "ckhashtable.h"
+//#include "ckhashtable.h"
 #include "pup.h"
 #include "pup_toNetwork.h"
-#include "debug-conv++.h"
+//#include "debug-conv++.h"
 #include "conv-ccs.h"
 #include "sockRoutines.h"
-#include "queueing.h"
+//#include "queueing.h"
 #include "ccs-builtins.h"
 
 #ifdef __MINGW_H
@@ -338,28 +338,6 @@ public:
 #endif /*CMK_CCS_AVAILABLE*/
 /*We have to include these virtual functions, even when CCS is
 disabled, to avoid bizarre link-time errors.*/
-
-// C++ and C client API
-void CpdListRegister(CpdListAccessor *acc)
-#if CMK_CCS_AVAILABLE
-{
-  CpvAccess(cpdListTable)->put(acc->getPath())=acc;
-}
-#else
-{ }
-#endif
-
-void CpdListRegister_c(const char *path,
-            CpdListLengthFn_c len,void *lenParam,
-            CpdListItemsFn_c items,void *itemsParam,int checkBoundary)
-#if CMK_CCS_AVAILABLE
-{
-  CpdListRegister(new CpdListAccessor_c(path,
-	     len,lenParam,items,itemsParam,checkBoundary!=0?true:false));
-}
-#else
-{ }
-#endif
 
 #if CMK_CCS_AVAILABLE
 

@@ -7,7 +7,7 @@
 #include "conv-ccs.h"
 #include "ccs-server.h"
 #include "sockRoutines.h"
-#include "queueing.h"
+//#include "queueing.h"
 
 #ifdef _WIN32
 # include <io.h>

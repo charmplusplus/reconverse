@@ -1,5 +1,5 @@
 #include <unistd.h>
-#include "middle.h"
+//#include "middle.h"
 
 #include "ccs-server.h"
 #include "conv-ccs.h"
@@ -142,80 +142,9 @@ CpvDeclare(void *, debugQueue);
 CpvCExtern(int, freezeModeFlag);
 CpvDeclare(int, freezeModeFlag);
 
-/*
- Start the freeze-- call will not return until unfrozen
- via a CCS request.
- */
-void CpdFreeze(void)
-{
-  pid_t pid = 0;
-#if CMK_HAS_GETPID
-  pid = getpid();
-#endif
-  CpdNotify(CPD_FREEZE,pid);
-  if (CpvAccess(freezeModeFlag)) return; /*Already frozen*/
-  CpvAccess(freezeModeFlag) = 1;
-  CpdFreezeModeScheduler();
-}
-
-void CpdUnFreeze(void)
-{
-  CpvAccess(freezeModeFlag) = 0;
-}
-
-int CpdIsFrozen(void) {
-  return CpvAccess(freezeModeFlag);
-}
 
 
 void PrintDebugStackTrace(void *);
 void * MemoryToSlot(void *ptr);
 int Slot_StackTrace(void *s, void ***stack);
 int Slot_ChareOwner(void *s);
-
-#include <stdarg.h>
-void CpdNotify(int type, ...) {
-  void *ptr; int integer, i;
-  pid_t pid=0;
-  int levels=64;
-  void *stackPtrs[64];
-  void *sl;
-  va_list list;
-  va_start(list, type);
-  switch (type) {
-  case CPD_ABORT:
-    CmiPrintf("CPD: %d Abort %s\n",CmiMyPe(), va_arg(list, char*));
-    break;
-  case CPD_SIGNAL:
-    CmiPrintf("CPD: %d Signal %d\n",CmiMyPe(), va_arg(list, int));
-    break;
-  case CPD_FREEZE:
-#if CMK_HAS_GETPID
-    pid = getpid();
-#endif
-    CmiPrintf("CPD: %d Freeze %d\n", CmiMyPe(), (int)pid);
-    break;
-  case CPD_BREAKPOINT:
-    CmiPrintf("CPD: %d BP %s\n",CmiMyPe(), va_arg(list, char*));
-    break;
-  case CPD_CROSSCORRUPTION:
-    ptr = va_arg(list, void*);
-    integer = va_arg(list, int);
-    CmiPrintf("CPD: %d Cross %p %d ",CmiMyPe(), ptr, integer);
-    sl = MemoryToSlot(ptr);
-    if (sl != NULL) {
-      int stackLen; void **stackTrace;
-      stackLen = Slot_StackTrace(sl, &stackTrace);
-      CmiPrintf("%d %d ",Slot_ChareOwner(sl),stackLen);
-      for (i=0; i<stackLen; ++i) CmiPrintf("%p ",stackTrace[i]);
-    } else {
-      CmiPrintf("0 ");
-    }
-    CmiBacktraceRecord(stackPtrs,1,&levels);
-    CmiPrintf("%d ",levels);
-    for (i=0; i<levels; ++i) CmiPrintf("%p ",stackPtrs[i]);
-    CmiPrintf("\n");
-    break;
-  }
-  va_end(list);
-}

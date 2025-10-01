@@ -3,9 +3,11 @@ target_sources(reconverse PRIVATE conv-conds.cpp convcore.cpp random.cpp
                 scheduler.cpp cpuaffinity.cpp collectives.cpp
                 comm_backend/comm_backend_internal.cpp threads.cpp cldb.rand.cpp cldb.cpp cmirdmautils.cpp 
                 conv-rdma.cpp conv-topology.cpp msgmgr.cpp
-                pup/pup_xlater.C pup/pup_toNetwork.C pup/pup_c.C 
-                pup/pup_paged.C pup/pup_toNetwork4.C pup/pup_util.C 
-                pup/pup_cmialloc.C)
+                pup/pup_xlater.cpp pup/pup_toNetwork.cpp pup/pup_c.cpp 
+                pup/pup_paged.cpp pup/pup_toNetwork4.cpp pup/pup_util.cpp 
+                pup/pup_cmialloc.cpp
+                conv-ccs/conv-ccs.cpp conv-ccs/ccs-server.cpp conv-ccs/ccs-client.cpp 
+                conv-ccs/ccs-auth.cpp conv-ccs/ccs-builtins.cpp conv-ccs/middle-ccs.cpp)
 target_include_directories(
   reconverse PRIVATE $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}>
                      $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
