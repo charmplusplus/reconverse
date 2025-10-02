@@ -47,7 +47,7 @@ public:
 template<typename MessageType>
 class AtomicAccessControl {
     // what default size?
-    moodycamel::ConcurrentQueue<MessageType> q{256};
+    moodycamel::ConcurrentQueue<MessageType> q{8192};
 
     public:
     void push(MessageType message) {
