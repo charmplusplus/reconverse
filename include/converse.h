@@ -133,6 +133,7 @@ extern CmiSpanningTreeInfo *_topoTree;
 typedef CMK_MULTICAST_GROUP_TYPE CmiGroup;
 
 #define CmiMsgHeaderSizeBytes sizeof(CmiMessageHeader)
+#define CmiExtHeaderSizeBytes CmiMsgHeaderSizeBytes
 #define CmiReservedHeaderSize CmiMsgHeaderSizeBytes
 
 typedef void (*CmiStartFn)(int argc, char **argv);
