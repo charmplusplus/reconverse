@@ -3,22 +3,19 @@
 #ifndef CONVERSE_H
 #define CONVERSE_H
 
+#ifdef __cplusplus
 #include <atomic>
 #include <cinttypes>
 #include <cstdio>
 #include <cstdlib>
-#include <pthread.h>
-
-using CmiInt1 = std::int8_t;
-using CmiInt2 = std::int16_t;
-using CmiInt4 = std::int32_t;
-using CmiInt8 = std::int64_t;
-using CmiUint1 = std::uint8_t;
-using CmiUint2 = std::uint16_t;
-using CmiUint4 = std::uint32_t;
-using CmiUint8 = std::uint64_t;
-
+#else
 #include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#endif
+#include <pthread.h>
+#include <stdint.h>
+
 typedef int8_t CMK_TYPEDEF_INT1;
 typedef int16_t CMK_TYPEDEF_INT2;
 typedef int32_t CMK_TYPEDEF_INT4;
@@ -37,6 +34,10 @@ typedef CMK_TYPEDEF_UINT1 CmiUInt1;
 typedef CMK_TYPEDEF_UINT2 CmiUInt2;
 typedef CMK_TYPEDEF_UINT4 CmiUInt4;
 typedef CMK_TYPEDEF_UINT8 CmiUInt8;
+typedef CMK_TYPEDEF_UINT1 CmiUint1;
+typedef CMK_TYPEDEF_UINT2 CmiUint2;
+typedef CMK_TYPEDEF_UINT4 CmiUint4;
+typedef CMK_TYPEDEF_UINT8 CmiUint8;
 typedef __int128_t CmiInt16;
 typedef __uint128_t CmiUInt16;
 
@@ -49,6 +50,7 @@ typedef __uint128_t CmiUInt16;
 #define CpvDeclare(t, v) t *CMK_TAG(Cpv_, v)
 #define CpvStaticDeclare(t, v) static t *CMK_TAG(Cpv_, v)
 
+#ifdef __cplusplus
 #define CpvInitialize(t, v)                                                    \
   do {                                                                         \
     if (CmiMyRank()) {                                                         \
@@ -58,6 +60,17 @@ typedef __uint128_t CmiUInt16;
       CmiNodeBarrier();                                                        \
     }                                                                          \
   } while (0)
+#else
+#define CpvInitialize(t, v)                                                    \
+  do {                                                                         \
+    if (CmiMyRank()) {                                                         \
+      CmiNodeBarrier();                                                        \
+    } else {                                                                   \
+      CMK_TAG(Cpv_, v) = (t*)malloc(sizeof(t) * CmiMyNodeSize());             \
+      CmiNodeBarrier();                                                        \
+    }                                                                          \
+  } while (0)
+#endif
 ;
 
 #define CpvAccess(v) CMK_TAG(Cpv_, v)[CmiMyRank()]
@@ -65,7 +78,11 @@ typedef __uint128_t CmiUInt16;
 #define CpvExtern(t, v) extern t *CMK_TAG(Cpv_, v)
 #define CpvInitialized(v) (0 != CMK_TAG(Cpv_, v))
 
+#ifdef __cplusplus
 #define CpvCExtern(t, v) extern "C" t *CMK_TAG(Cpv_, v)
+#else
+#define CpvCExtern(t, v) extern t *CMK_TAG(Cpv_, v)
+#endif
 
 #define CsvDeclare(t, v) t v
 #define CsvStaticDeclare(t, v) static t v
@@ -98,7 +115,12 @@ typedef void (*CldInfoFn)(void *msg, CldPackFn *packer, int *len, int *queueing,
 
 typedef int (*CldEstimator)(void);
 
+#ifdef __cplusplus
 #define CmiMessageDestPENode static_cast<CmiUint4>(-1)
+#else
+#define CmiMessageDestPENode ((CmiUint4)(-1))
+#endif
+
 typedef struct Header {
   CmiInt2 handlerId;
   CmiUint4 destPE; // global ID of destination PE
@@ -109,7 +131,11 @@ typedef struct Header {
   // used for special ops (bcast, reduction, multicast) when the handler field
   // is repurposed
   CmiInt2 swapHandlerId;
+#ifdef __cplusplus
   bool nokeep;
+#else
+  int nokeep; // using int instead of bool for C compatibility
+#endif
   CmiUint1 zcMsgType; // 0: normal, 1: zero-copy
 } CmiMessageHeader;
 
@@ -137,12 +163,18 @@ typedef CMK_MULTICAST_GROUP_TYPE CmiGroup;
 #define CmiReservedHeaderSize CmiMsgHeaderSizeBytes
 
 typedef void (*CmiStartFn)(int argc, char **argv);
+#ifdef __cplusplus
 void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched = 0,
                   int initret = 0);
+#else
+void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
+                  int initret);
+#endif
 
 static CmiStartFn Cmi_startfn;
 extern int CharmLibInterOperate;
 
+#ifdef __cplusplus
 struct alignas(ALIGN_BYTES) CmiChunkHeader {
   int size;
 
@@ -160,6 +192,18 @@ public:
   int incRef() { return ref.fetch_add(1, std::memory_order_release); }
   int decRef() { return ref.fetch_sub(1, std::memory_order_release); }
 };
+#else
+struct CmiChunkHeader {
+  int size;
+  int ref; // basic int for C compilation
+} __attribute__((aligned(ALIGN_BYTES)));
+
+/* C functions for reference counting */
+static inline int CmiChunkHeader_getRef(struct CmiChunkHeader* hdr) { return hdr->ref; }
+static inline void CmiChunkHeader_setRef(struct CmiChunkHeader* hdr, int r) { hdr->ref = r; }
+static inline int CmiChunkHeader_incRef(struct CmiChunkHeader* hdr) { return __sync_fetch_and_add(&hdr->ref, 1); }
+static inline int CmiChunkHeader_decRef(struct CmiChunkHeader* hdr) { return __sync_fetch_and_sub(&hdr->ref, 1); }
+#endif
 
 // threads library
 
@@ -382,16 +426,23 @@ void CmiResetGlobalReduceSeqID();
 void CmiResetGlobalNodeReduceSeqID();
 
 // Exit functions
+
 void CmiExit(int status);
-#define ConverseExit(...) CmiExit(__VA_ARGS__ + 0)
+#ifdef __cplusplus
+extern "C" {
+#endif
 void CmiAbort(const char *format, ...);
+#ifdef __cplusplus
+}
+#endif
 
 // Utility functions
 int CmiPrintf(const char *format, ...);
 int CmiGetArgc(char **argv);
-void CmiAbort(const char *format, ...);
 int CmiScanf(const char *format, ...);
 int CmiError(const char *format, ...);
+
+#define ConverseExit(...) CmiExit(__VA_ARGS__ + 0)
 #define CmiMemcpy(dest, src, size) memcpy((dest), (src), (size))
 
 #define setMemoryTypeChare(p) /* empty memory debugging method */
@@ -908,27 +959,38 @@ void CmiForwardMsgToPeers(int size, char *msg);
 
 void LBTopoInit();
 
+#ifdef __cplusplus
 extern "C" {
+#endif
 
 size_t CmiFwrite(const void *ptr, size_t size, size_t nmemb, FILE *f);
 CmiInt8 CmiPwrite(int fd, const char *buf, size_t bytes, size_t offset);
 int CmiOpen(const char *pathname, int flags, int mode);
 FILE *CmiFopen(const char *path, const char *mode);
 int CmiFclose(FILE *fp);
+
+#ifdef __cplusplus
 }
+#endif
 
 void registerTraceInit(void (*fn)(char **argv));
 
 int CmiDeliverMsgs(int maxmsgs);
 
+#ifdef __cplusplus
 #define CmiMemoryReadFence()                 std::atomic_thread_fence(std::memory_order_seq_cst)
 #define CmiMemoryWriteFence()                std::atomic_thread_fence(std::memory_order_seq_cst)
+#else
+#define CmiMemoryReadFence()                 __sync_synchronize()
+#define CmiMemoryWriteFence()                __sync_synchronize()
+#endif
 
 extern CmiNodeLock CmiMemLock_lock;
 #define CmiMemLock() do{if (CmiMemLock_lock) CmiLock(CmiMemLock_lock);} while (0)
 
 #define CmiMemUnlock() do{if (CmiMemLock_lock) CmiUnlock(CmiMemLock_lock);} while (0)
 
+#ifdef __cplusplus
 template <typename T> struct CmiIsAtomic : std::false_type {};
 template <typename T> struct CmiIsAtomic<std::atomic<T>> : std::true_type {};
 
@@ -947,6 +1009,9 @@ CmiAtomicFetchAndIncImpl(T& input) {
 }
 
 #define CmiMemoryAtomicFetchAndInc(input, output) ((output) = CmiAtomicFetchAndIncImpl(input))
+#else
+#define CmiMemoryAtomicFetchAndInc(input, output) ((output) = __sync_fetch_and_add(&(input), 1))
+#endif
 
 #define CmiEnableUrgentSend(yn) /* intentionally left empty */
 

@@ -713,6 +713,7 @@ void CmiAbortHelper(const char *source, const char *message,
             CmiMyPe(), source, message);
 }
 
+extern "C" {
 void CmiAbort(const char *format, ...) {
   char newmsg[256];
   va_list args;
@@ -723,6 +724,7 @@ void CmiAbort(const char *format, ...) {
 
   CmiExitHelper(1);
   abort();
+}
 }
 
 int CmiScanf(const char *format, ...) {
