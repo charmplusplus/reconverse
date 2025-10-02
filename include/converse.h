@@ -369,6 +369,7 @@ void CmiSyncSendAndFree(int destPE, int messageSize, void *msg);
 void CmiSyncListSend(int npes, const int *pes, int len, void *msg);
 void CmiSyncListSendAndFree(int npes, const int *pes, int len, void *msg);
 void CmiPushPE(int destPE, void *msg);
+void CmiPushNode(void *msg);
 
 void CmiSyncSendFn(int destPE, int messageSize, char *msg);
 void CmiFreeSendFn(int destPE, int messageSize, char *msg);
@@ -450,6 +451,7 @@ int CmiError(const char *format, ...);
 
 void CmiInitCPUTopology(char **argv);
 void CmiInitCPUAffinity(char **argv);
+int CmiOnCore(void);
 
 void __CmiEnforceMsgHelper(const char *expr, const char *fileName, int lineNum,
                            const char *msg, ...);
