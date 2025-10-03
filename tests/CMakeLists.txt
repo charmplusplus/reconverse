@@ -16,6 +16,7 @@ add_subdirectory(reduction_node)
 add_subdirectory(cth)
 add_subdirectory(self_send)
 add_subdirectory(ctv)
+add_subdirectory(pup_test)
 
 # Add a test that configures, builds, and runs standalone_project
 add_test(NAME standalone_project_build_and_test
