@@ -52,4 +52,4 @@ jobs:
                 -DRECONVERSE_TEST_LAUNCHER="mpirun;--oversubscribe" \
                 .
             cmake --build build --target all
-            ctest --extra-verbose --timeout 60
+            ctest --test-dir build --extra-verbose --timeout 60
