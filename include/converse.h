@@ -218,8 +218,8 @@ struct CmiChunkHeader {
 /* C functions for reference counting */
 static inline int CmiChunkHeader_getRef(struct CmiChunkHeader* hdr) { return hdr->ref; }
 static inline void CmiChunkHeader_setRef(struct CmiChunkHeader* hdr, int r) { hdr->ref = r; }
-static inline int CmiChunkHeader_incRef(struct CmiChunkHeader* hdr) { return __sync_fetch_and_add(&hdr->ref, 1); }
-static inline int CmiChunkHeader_decRef(struct CmiChunkHeader* hdr) { return __sync_fetch_and_sub(&hdr->ref, 1); }
+static inline int CmiChunkHeader_incRef(struct CmiChunkHeader* hdr) { return __atomic_fetch_add(&hdr->ref, 1, __ATOMIC_RELEASE); }
+static inline int CmiChunkHeader_decRef(struct CmiChunkHeader* hdr) { return __atomic_fetch_sub(&hdr->ref, 1, __ATOMIC_RELEASE); }
 #endif
 
 // threads library
