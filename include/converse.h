@@ -120,6 +120,26 @@ extern CmiNodeLock CmiMemLock_lock;
 #define ALIGN_DEFAULT(x) CMIALIGN(x, ALIGN_BYTES)
 #define CMIPADDING(x, n) (CMIALIGN((x), (n)) - (size_t)(x))
 
+// Portable alignment specifier for structs
+#ifdef __cplusplus
+#define CMI_ALIGNAS(n) alignas(n)
+#elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 202311L
+// C23 has alignas
+#define CMI_ALIGNAS(n) alignas(n)
+#elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+// C11 has _Alignas
+#define CMI_ALIGNAS(n) _Alignas(n)
+#elif defined(__GNUC__) || defined(__clang__)
+// GCC/Clang attribute
+#define CMI_ALIGNAS(n) __attribute__((aligned(n)))
+#elif defined(_MSC_VER)
+// MSVC
+#define CMI_ALIGNAS(n) __declspec(align(n))
+#else
+// Fallback - no alignment (may cause issues on some platforms)
+#define CMI_ALIGNAS(n)
+#endif
+
 // End of NOTE
 
 typedef void (*CmiHandler)(void *msg);
@@ -210,10 +230,10 @@ public:
   int decRef() { return ref.fetch_sub(1, std::memory_order_release); }
 };
 #else
-struct CmiChunkHeader {
+struct CMI_ALIGNAS(ALIGN_BYTES) CmiChunkHeader {
   int size;
   int ref; // basic int for C compilation
-} __attribute__((aligned(ALIGN_BYTES)));
+};
 
 /* C functions for reference counting */
 static inline int CmiChunkHeader_getRef(struct CmiChunkHeader* hdr) { return hdr->ref; }
