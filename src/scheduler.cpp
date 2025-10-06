@@ -50,55 +50,61 @@ void CsdScheduler() {
     }
 
         // poll node prio queue
-    else if (!CsvAccess(CsdNodeQueue)->empty()) {
-      CmiLock(CsvAccess(CsdNodeQueueLock));
-      auto result = CsvAccess(CsdNodeQueue)->top();
-      CsvAccess(CsdNodeQueue)->pop();
-      CmiUnlock(CsvAccess(CsdNodeQueueLock));
-      void *msg = result.message;
-      // process event
-      CmiHandleMessage(msg);
-
-      // release idle if necessary
-      if (CmiGetIdle()) {
-        CmiSetIdle(false);
-        CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
-      }
-    }
-
-    //poll thread prio queue
-    else if (!CpvAccess(CsdSchedQueue)->empty()) {
-      auto result = CpvAccess(CsdSchedQueue)->top();
-      CpvAccess(CsdSchedQueue)->pop();
-      void *msg = result.message;
-
-      // process event
-      CmiHandleMessage(msg);
-
-      // release idle if necessary
-      if (CmiGetIdle()) {
-        CmiSetIdle(false);
-        CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
-      }
-    }
-
-    // the processor is idle
     else {
-      // if not already idle, set idle and raise condition
-      if (!CmiGetIdle()) {
-        CmiSetIdle(true);
-        CmiSetIdleTime(CmiWallTimer());
-        CcdRaiseCondition(CcdPROCESSOR_BEGIN_IDLE);
-      }
-      // if already idle, call still idle and (maybe) long idle
+      // Try to acquire lock without blocking
+      if (CmiTryLock(CsvAccess(CsdNodeQueueLock)) == 0) {
+        if (!CsvAccess(CsdNodeQueue)->empty()) {
+          auto result = CsvAccess(CsdNodeQueue)->top();
+          CsvAccess(CsdNodeQueue)->pop();
+          CmiUnlock(CsvAccess(CsdNodeQueueLock));
+          void *msg = result.message;
+          // process event
+          CmiHandleMessage(msg);
+
+          // release idle if necessary
+          if (CmiGetIdle()) {
+            CmiSetIdle(false);
+            CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
+          }
+        } 
+        else {
+          CmiUnlock(CsvAccess(CsdNodeQueueLock));
+        }        
+      } 
       else {
-        CcdRaiseCondition(CcdPROCESSOR_STILL_IDLE);
-        if (CmiWallTimer() - CmiGetIdleTime() > 10.0) {
-          CcdRaiseCondition(CcdPROCESSOR_LONG_IDLE);
+        // Could not acquire node queue lock, skip to thread prio queue
+        if (!CpvAccess(CsdSchedQueue)->empty()) {
+          auto result = CpvAccess(CsdSchedQueue)->top();
+          CpvAccess(CsdSchedQueue)->pop();
+          void *msg = result.message;
+
+          // process event
+          CmiHandleMessage(msg);
+
+          // release idle if necessary
+          if (CmiGetIdle()) {
+            CmiSetIdle(false);
+            CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
+          }
+        } else {
+          // the processor is idle
+          // if not already idle, set idle and raise condition
+          if (!CmiGetIdle()) {
+            CmiSetIdle(true);
+            CmiSetIdleTime(CmiWallTimer());
+            CcdRaiseCondition(CcdPROCESSOR_BEGIN_IDLE);
+          }
+          // if already idle, call still idle and (maybe) long idle
+          else {
+            CcdRaiseCondition(CcdPROCESSOR_STILL_IDLE);
+            if (CmiWallTimer() - CmiGetIdleTime() > 10.0) {
+              CcdRaiseCondition(CcdPROCESSOR_LONG_IDLE);
+            }
+          }
+          // poll the communication layer
+          comm_backend::progress();
         }
       }
-      // poll the communication layer
-      comm_backend::progress();
     }
 
     CcdCallBacks();
@@ -108,7 +114,7 @@ void CsdScheduler() {
 }
 
 /**
- * Similar to CsdScheduker, but return when the queues
+ * Similar to CsdScheduler, but return when the queues
  * are empty, not when the scheduler is stopped.
  */
 void CsdSchedulePoll() {
@@ -156,45 +162,49 @@ void CsdSchedulePoll() {
     }
 
     // poll node prio queue
-    else if (!CsvAccess(CsdNodeQueue)->empty()) {
-      CmiLock(CsvAccess(CsdNodeQueueLock));
-      auto result = CsvAccess(CsdNodeQueue)->top();
-      CsvAccess(CsdNodeQueue)->pop();
-      CmiUnlock(CsvAccess(CsdNodeQueueLock));
-      void *msg = result.message;
-      // process event
-      CmiHandleMessage(msg);
-
-      // release idle if necessary
-      if (CmiGetIdle()) {
-        CmiSetIdle(false);
-        CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
-      }
-    }
-
-    //poll thread prio queue
-    else if (!CpvAccess(CsdSchedQueue)->empty()) {
-      auto result = CpvAccess(CsdSchedQueue)->top();
-      CpvAccess(CsdSchedQueue)->pop();
-      void *msg = result.message;
-
-      // process event
-      CmiHandleMessage(msg);
-
-      // release idle if necessary
-      if (CmiGetIdle()) {
-        CmiSetIdle(false);
-        CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
-      }
-    }
-
     else {
-      comm_backend::progress();
-      break; //break when queues are empty
+      // Try to acquire lock without blocking
+      if (CmiTryLock(CsvAccess(CsdNodeQueueLock)) == 0) {
+        if (!CsvAccess(CsdNodeQueue)->empty()) {
+          auto result = CsvAccess(CsdNodeQueue)->top();
+          CsvAccess(CsdNodeQueue)->pop();
+          CmiUnlock(CsvAccess(CsdNodeQueueLock));
+          void *msg = result.message;
+          // process event
+          CmiHandleMessage(msg);
+
+          // release idle if necessary
+          if (CmiGetIdle()) {
+            CmiSetIdle(false);
+            CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
+          }
+        } 
+        else {
+          CmiUnlock(CsvAccess(CsdNodeQueueLock));
+        }
+      } 
+      else {
+        // Could not acquire node queue lock, skip to thread prio queue
+        if (!CpvAccess(CsdSchedQueue)->empty()) {
+          auto result = CpvAccess(CsdSchedQueue)->top();
+          CpvAccess(CsdSchedQueue)->pop();
+          void *msg = result.message;
+
+          // process event
+          CmiHandleMessage(msg);
+
+          // release idle if necessary
+          if (CmiGetIdle()) {
+            CmiSetIdle(false);
+            CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
+          }
+        } else {
+          comm_backend::progress();
+          break; //break when queues are empty
+        }
+      }
     }
-
   }
-
 }
 
 int CsdScheduler(int maxmsgs){
