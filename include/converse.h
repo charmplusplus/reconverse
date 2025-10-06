@@ -212,7 +212,11 @@ public:
 #else
 struct CmiChunkHeader {
   int size;
-  int ref; // basic int for C compilation
+#if __STDC_VERSION__ >= 201112L
+  _Atomic int ref; // atomic int for C11 and later
+#else
+  volatile int ref; // volatile int for pre-C11 (not truly atomic, but signals intent)
+#endif
 } __attribute__((aligned(ALIGN_BYTES)));
 
 /* C functions for reference counting */
