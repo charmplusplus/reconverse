@@ -69,6 +69,38 @@ void CsdScheduler() {
         } 
         else {
           CmiUnlock(CsvAccess(CsdNodeQueueLock));
+          //empty queue so check thread prio queue
+          if (!CpvAccess(CsdSchedQueue)->empty()) {
+          auto result = CpvAccess(CsdSchedQueue)->top();
+          CpvAccess(CsdSchedQueue)->pop();
+          void *msg = result.message;
+
+          // process event
+          CmiHandleMessage(msg);
+
+          // release idle if necessary
+          if (CmiGetIdle()) {
+            CmiSetIdle(false);
+            CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
+          }
+        } else {
+          // the processor is idle
+          // if not already idle, set idle and raise condition
+          if (!CmiGetIdle()) {
+            CmiSetIdle(true);
+            CmiSetIdleTime(CmiWallTimer());
+            CcdRaiseCondition(CcdPROCESSOR_BEGIN_IDLE);
+          }
+          // if already idle, call still idle and (maybe) long idle
+          else {
+            CcdRaiseCondition(CcdPROCESSOR_STILL_IDLE);
+            if (CmiWallTimer() - CmiGetIdleTime() > 10.0) {
+              CcdRaiseCondition(CcdPROCESSOR_LONG_IDLE);
+            }
+          }
+          // poll the communication layer
+          comm_backend::progress();
+        }
         }        
       } 
       else {
@@ -181,6 +213,23 @@ void CsdSchedulePoll() {
         } 
         else {
           CmiUnlock(CsvAccess(CsdNodeQueueLock));
+          if (!CpvAccess(CsdSchedQueue)->empty()) {
+          auto result = CpvAccess(CsdSchedQueue)->top();
+          CpvAccess(CsdSchedQueue)->pop();
+          void *msg = result.message;
+
+          // process event
+          CmiHandleMessage(msg);
+
+          // release idle if necessary
+          if (CmiGetIdle()) {
+            CmiSetIdle(false);
+            CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
+          }
+        } else {
+          comm_backend::progress();
+          break; //break when queues are empty
+        }
         }
       } 
       else {
