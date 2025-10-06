@@ -40,32 +40,65 @@ typedef CMK_TYPEDEF_UINT8 CmiUInt8;
 typedef __int128_t CmiInt16;
 typedef __uint128_t CmiUInt16;
 
-// NOTE: these are solely for backwards compatibility
-// Do not use in reconverse impl
+typedef pthread_mutex_t *CmiNodeLock;
+typedef CmiNodeLock CmiImmediateLockType;
+extern int _immediateLock;
+extern int _immediateFlag;
+extern CmiNodeLock _smp_mutex;
+
+extern CmiNodeLock CmiMemLock_lock;
+#define CmiMemLock() do{if (CmiMemLock_lock) CmiLock(CmiMemLock_lock);} while (0)
+
+#define CmiMemUnlock() do{if (CmiMemLock_lock) CmiUnlock(CmiMemLock_lock);} while (0)
 
 #define CMK_TAG(x, y) x##y##_
 #define CMK_CONCAT(x, y) x##y
 
-#define CpvDeclare(t, v) t *CMK_TAG(Cpv_, v)
-#define CpvStaticDeclare(t, v) static t *CMK_TAG(Cpv_, v)
+#ifdef __cplusplus
+/* In C++, use new so t's constructor gets called */
+# define CpvInit_Alloc(t,n) new t[n]()
+# define CpvInit_Alloc_scalar(t) new t()
+#else
+# define CpvInit_Alloc(t,n) (t *)calloc(n,sizeof(t))
+# define CpvInit_Alloc_scalar(t) (t *)calloc(1,sizeof(t))
+#endif
 
-#define CpvInitialize(t, v)                                                    \
-  do {                                                                         \
-    if (CmiMyRank()) {                                                         \
-      CmiNodeBarrier();                                                        \
-    } else {                                                                   \
-      CMK_TAG(Cpv_, v) = new t[CmiMyNodeSize()];                               \
-      CmiNodeBarrier();                                                        \
-    }                                                                          \
-  } while (0)
-;
+#define CpvDeclare(t,v) __thread t* CMK_TAG(Cpv_,v) = NULL;   \
+                        int CMK_TAG(Cpv_inited_,v) = 0;  \
+                        t ** CMK_TAG(Cpv_addr_,v)
+#define CpvExtern(t,v)  extern __thread t* CMK_TAG(Cpv_,v);  \
+                        extern int CMK_TAG(Cpv_inited_,v);  \
+                        extern t ** CMK_TAG(Cpv_addr_,v)
+#ifdef __cplusplus
+#define CpvCExtern(t,v) extern "C" __thread t* CMK_TAG(Cpv_,v);  \
+                        extern "C" int CMK_TAG(Cpv_inited_,v);  \
+                        extern "C" t ** CMK_TAG(Cpv_addr_,v)
+#else
+#define CpvCExtern(t,v)    CpvExtern(t,v)
+#endif
+#define CpvStaticDeclare(t,v) static __thread t* CMK_TAG(Cpv_,v) = NULL;   \
+                        static int CMK_TAG(Cpv_inited_,v) = 0;  \
+                        static t ** CMK_TAG(Cpv_addr_,v)
 
-#define CpvAccess(v) CMK_TAG(Cpv_, v)[CmiMyRank()]
-#define CpvAccessOther(v, r) CMK_TAG(Cpv_, v)[r]
-#define CpvExtern(t, v) extern t *CMK_TAG(Cpv_, v)
+#define CpvInitialize(t,v)\
+    do {                                                               \
+      CmiMemLock();                                                    \
+      if (!(CMK_TAG(Cpv_inited_,v))) {                                \
+        t** cpvinitobj = CpvInit_Alloc(t*, CmiMyNodeSize());         \
+        CMK_TAG(Cpv_addr_,v) = cpvinitobj;                             \
+        CMK_TAG(Cpv_inited_,v) = 1;                                    \
+        CmiMemUnlock();                                                \
+      }                                                                \
+      else                                                             \
+        CmiMemUnlock();                                                \
+      t* cpvobj = CpvInit_Alloc_scalar(t);                             \
+      CMK_TAG(Cpv_,v) = cpvobj;                                        \
+      CMK_TAG(Cpv_addr_,v)[CmiMyRank()] = CMK_TAG(Cpv_,v);             \
+    } while(0)
+
+#define CpvAccess(v) (*CMK_TAG(Cpv_,v))
+#define CpvAccessOther(v, r) (*(CMK_TAG(Cpv_addr_,v)[r]))
 #define CpvInitialized(v) (0 != CMK_TAG(Cpv_, v))
-
-#define CpvCExtern(t, v) extern "C" t *CMK_TAG(Cpv_, v)
 
 #define CsvDeclare(t, v) t v
 #define CsvStaticDeclare(t, v) static t v
@@ -566,11 +599,6 @@ int CmiArgGivingUsage(void);
 void CmiDeprecateArgInt(char **argv, const char *arg, const char *desc,
                         const char *warning);
 
-typedef pthread_mutex_t *CmiNodeLock;
-typedef CmiNodeLock CmiImmediateLockType;
-extern int _immediateLock;
-extern int _immediateFlag;
-extern CmiNodeLock _smp_mutex;
 
 #define CmiCreateImmediateLock() (0)
 #define CmiImmediateLock(ignored)                                              \
@@ -923,11 +951,6 @@ int CmiDeliverMsgs(int maxmsgs);
 
 #define CmiMemoryReadFence()                 std::atomic_thread_fence(std::memory_order_seq_cst)
 #define CmiMemoryWriteFence()                std::atomic_thread_fence(std::memory_order_seq_cst)
-
-extern CmiNodeLock CmiMemLock_lock;
-#define CmiMemLock() do{if (CmiMemLock_lock) CmiLock(CmiMemLock_lock);} while (0)
-
-#define CmiMemUnlock() do{if (CmiMemLock_lock) CmiUnlock(CmiMemLock_lock);} while (0)
 
 template <typename T> struct CmiIsAtomic : std::false_type {};
 template <typename T> struct CmiIsAtomic<std::atomic<T>> : std::true_type {};
