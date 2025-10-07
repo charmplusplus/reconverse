@@ -8,4 +8,22 @@
 #cmakedefine CMK_SMP
 #cmakedefine CMK_CPV_IS_SMP
 
+// PUP-related CMK macros
+#define CMK_SIGNEDCHAR_DIFF_CHAR 1
+#define CMK_PUP_LONG_LONG long long
+#define CMK_LONG_DOUBLE_DEFINED 1
+#define CMK_HAS_INT16 1
+#cmakedefine01 CMK_SIZET_64BIT
+
+// Define CLINKAGE for C linkage
+#ifdef __cplusplus
+#define CLINKAGE extern "C"
+#else
+#define CLINKAGE
+#endif
+
+// Define FLINKAGE for Fortran linkage (stub implementation)
+#define FLINKAGE extern "C"
+#define FTN_NAME(name1, name2) name2
+
 #endif
