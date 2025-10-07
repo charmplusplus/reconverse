@@ -8,6 +8,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <pthread.h>
+#include <atomic>
+#include <limits>
+#include <utility>
 
 using CmiInt1 = std::int8_t;
 using CmiInt2 = std::int16_t;
@@ -233,6 +236,8 @@ void CthFree(CthThread t);
 
 void CthResume(CthThread t);
 
+int CthIsSuspendable(CthThread t);
+
 void CthSuspend(void);
 
 void CthAwaken(CthThread th);
@@ -358,6 +363,7 @@ void CmiSyncSendAndFree(int destPE, int messageSize, void *msg);
 void CmiSyncListSend(int npes, const int *pes, int len, void *msg);
 void CmiSyncListSendAndFree(int npes, const int *pes, int len, void *msg);
 void CmiPushPE(int destPE, void *msg);
+void CmiPushNode(void *msg);
 
 void CmiSyncSendFn(int destPE, int messageSize, char *msg);
 void CmiFreeSendFn(int destPE, int messageSize, char *msg);
@@ -433,15 +439,25 @@ int CmiError(const char *format, ...);
 void CmiInitCPUTopology(char **argv);
 void CmiInitCPUAffinity(char **argv);
 
-void __CmiEnforceMsgHelper(const char *expr, const char *fileName, int lineNum,
-                           const char *msg, ...);
+#define __CMK_STRING(x) #x
+#define __CMK_XSTRING(x) __CMK_STRING(x)
 
-#define CmiEnforce(condition)                                                  \
-  do {                                                                         \
-    if (!(condition)) {                                                        \
-      __CmiEnforceMsgHelper(#condition, __FILE__, __LINE__, "");               \
-    }                                                                          \
-  } while (0)
+void __CmiEnforceHelper(const char* expr, const char* fileName, const char* lineNum);
+void __CmiEnforceMsgHelper(const char* expr, const char* fileName,
+			   const char* lineNum, const char* msg, ...);
+
+#define CmiEnforce(expr)                                             \
+  ((void)(CMI_LIKELY(expr) ? 0                                       \
+                 : (__CmiEnforceHelper(__CMK_STRING(expr), __FILE__, \
+                                       __CMK_XSTRING(__LINE__)),     \
+                    0)))
+
+#define CmiEnforceMsg(expr, ...)                                              \
+  ((void)(CMI_LIKELY(expr)                                                    \
+              ? 0                                                             \
+              : (__CmiEnforceMsgHelper(__CMK_STRING(expr), __FILE__,          \
+                                       __CMK_XSTRING(__LINE__), __VA_ARGS__), \
+                 0)))
 
 double getCurrentTime(void);
 double CmiWallTimer(void);
@@ -1068,5 +1084,104 @@ void CmiInterSyncNodeSendAndFreeFn(int destNode, int partition, int messageSize,
                                    char *msg);
 
 /* end of variables and functions for partition */
+
+#define CMI_IPC_CUTOFF_ARG "ipccutoff"
+#define CMI_IPC_CUTOFF_DESC "max message size for cmi-shmem (in bytes)"
+#define CMI_IPC_POOL_SIZE_ARG "ipcpoolsize"
+#define CMI_IPC_POOL_SIZE_DESC "size of cmi-shmem pool (in bytes)"
+
+struct CmiIpcManager;
+
+namespace cmi {
+namespace ipc {
+// recommended cutoff for block sizes
+CpvExtern(std::size_t, kRecommendedCutoff);
+// used to represent an empty linked list
+constexpr auto nil = std::uintptr_t(0);
+// used to represent the tail of a linked list
+constexpr auto max = std::numeric_limits<std::uintptr_t>::max();
+// used to indicate a message bound for a node
+constexpr auto nodeDatagram = std::numeric_limits<CmiUInt2>::max();
+// default number of attempts to alloc before timing out
+constexpr auto defaultTimeout = 4;
+}  // namespace ipc
+}  // namespace cmi
+
+// alignas is used for padding here, rather than for alignment of the
+// CmiIpcBlock itself.
+struct alignas(ALIGN_BYTES) CmiIpcBlock {
+public:
+  // "home" rank of the block
+  int src;
+  int dst;
+  std::uintptr_t orig;
+  std::uintptr_t next;
+  std::size_t size;
+
+  CmiIpcBlock(std::size_t size_, std::uintptr_t orig_)
+      : orig(orig_), next(cmi::ipc::nil), size(size_) {}
+};
+
+enum CmiIpcAllocStatus {
+  CMI_IPC_OUT_OF_MEMORY,
+  CMI_IPC_REMOTE_DESTINATION,
+  CMI_IPC_SUCCESS,
+  CMI_IPC_TIMEOUT
+};
+
+// sets up ipc environment
+void CmiIpcInit(char** argv);
+
+// creates an ipc manager, waking the thread when it's done
+// ( this must be called in the same order on all pes! )
+CmiIpcManager* CmiMakeIpcManager(CthThread th);
+
+// push/pop blocks from the manager's send/recv queue
+bool CmiPushIpcBlock(CmiIpcManager*, CmiIpcBlock*);
+CmiIpcBlock* CmiPopIpcBlock(CmiIpcManager*);
+
+// tries to allocate a block, returning null if unsucessful
+// (fails when other PEs are contending resources)
+// second value of pair indicates failure cause
+std::pair<CmiIpcBlock*, CmiIpcAllocStatus> CmiAllocIpcBlock(CmiIpcManager*, int node, std::size_t size);
+
+// frees a block -- enabling it to be used again
+void CmiFreeIpcBlock(CmiIpcManager*, CmiIpcBlock*);
+
+// currently a no-op but may be eventually usable
+// intended to "capture" blocks from remote pes
+inline void CmiCacheIpcBlock(CmiIpcBlock*) { return; }
+
+// identifies whether a void* is the payload of a block
+// belonging to the given node
+CmiIpcBlock* CmiIsIpcBlock(CmiIpcManager*, void*, int node);
+
+// if (init) is true -- initializes the
+// memory segment for use as a message
+void* CmiIpcBlockToMsg(CmiIpcBlock*, bool init);
+
+// equivalent to calling above with (init = false)
+inline void* CmiIpcBlockToMsg(CmiIpcBlock* block) {
+  auto res = (char*)block + sizeof(CmiIpcBlock) + sizeof(CmiChunkHeader);
+  return (void*)res;
+}
+
+inline CmiIpcBlock* CmiMsgToIpcBlock(CmiIpcManager* manager, void* msg) {
+  return CmiIsIpcBlock(manager, (char*)msg - sizeof(CmiChunkHeader), CmiMyNode());
+}
+
+CmiIpcBlock* CmiMsgToIpcBlock(CmiIpcManager*, char* msg, std::size_t len, int node,
+                           int rank = cmi::ipc::nodeDatagram,
+                           int timeout = cmi::ipc::defaultTimeout);
+
+// deliver a block as a message
+void CmiDeliverIpcBlockMsg(CmiIpcBlock*);
+
+inline const std::size_t& CmiRecommendedIpcBlockCutoff(void) {
+  using namespace cmi::ipc;
+  return CpvAccess(kRecommendedCutoff);
+}
+
+CsvExtern(CmiIpcManager*, coreIpcManager_);
 
 #endif // CONVERSE_H

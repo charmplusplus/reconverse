@@ -7,5 +7,6 @@
 #cmakedefine SPANTREE
 #cmakedefine CMK_SMP
 #cmakedefine CMK_CPV_IS_SMP
+#cmakedefine CMK_USE_SHMEM
 
 #endif
