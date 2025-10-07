@@ -222,6 +222,8 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
 
   if (plusPeSet)
     Cmi_mynodesize = Cmi_npes / Cmi_numnodes;
+  if (!plusPeSet && !plusPSet)
+    Cmi_mynodesize = 1;
   Cmi_nodestart = Cmi_mynode * Cmi_mynodesize;
   // register am handlers
   g_amHandler = comm_backend::registerAmHandler(CommRemoteHandler);
