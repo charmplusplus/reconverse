@@ -5,16 +5,15 @@
 
 #ifdef __cplusplus
 #include <atomic>
-#include <cinttypes>
-#include <cstdio>
-#include <cstdlib>
 #else
-#include <stdint.h>
-#include <stdio.h>
-#include <stdlib.h>
+#include <stdatomic.h>
 #endif
 #include <pthread.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <stdint.h>
+#include <stdbool.h>
+#include <inttypes.h>
 
 typedef int8_t CMK_TYPEDEF_INT1;
 typedef int16_t CMK_TYPEDEF_INT2;
@@ -34,10 +33,6 @@ typedef CMK_TYPEDEF_UINT1 CmiUInt1;
 typedef CMK_TYPEDEF_UINT2 CmiUInt2;
 typedef CMK_TYPEDEF_UINT4 CmiUInt4;
 typedef CMK_TYPEDEF_UINT8 CmiUInt8;
-typedef CMK_TYPEDEF_UINT1 CmiUint1;
-typedef CMK_TYPEDEF_UINT2 CmiUint2;
-typedef CMK_TYPEDEF_UINT4 CmiUint4;
-typedef CMK_TYPEDEF_UINT8 CmiUint8;
 typedef __int128_t CmiInt16;
 typedef __uint128_t CmiUInt16;
 
@@ -153,27 +148,23 @@ typedef void (*CldInfoFn)(void *msg, CldPackFn *packer, int *len, int *queueing,
 typedef int (*CldEstimator)(void);
 
 #ifdef __cplusplus
-#define CmiMessageDestPENode static_cast<CmiUint4>(-1)
+#define CmiMessageDestPENode static_cast<CmiUInt4>(-1)
 #else
-#define CmiMessageDestPENode ((CmiUint4)(-1))
+#define CmiMessageDestPENode ((CmiUInt4)(-1))
 #endif
 
 typedef struct Header {
   CmiInt2 handlerId;
-  CmiUint4 destPE; // global ID of destination PE
+  CmiUInt4 destPE; // global ID of destination PE
   int messageSize;
   // used for bcast (bcast source pe/node), multicast (group id), reductions
   // (reduction id)
-  CmiUint4 collectiveMetaInfo;
+  CmiUInt4 collectiveMetaInfo;
   // used for special ops (bcast, reduction, multicast) when the handler field
   // is repurposed
   CmiInt2 swapHandlerId;
-#ifdef __cplusplus
   bool nokeep;
-#else
-  int nokeep; // using int instead of bool for C compatibility
-#endif
-  CmiUint1 zcMsgType; // 0: normal, 1: zero-copy
+  CmiUInt1 zcMsgType; // 0: normal, 1: zero-copy
 } CmiMessageHeader;
 
 typedef CmiMessageHeader CmiMsgHeaderBasic;
