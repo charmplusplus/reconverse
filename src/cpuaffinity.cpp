@@ -490,6 +490,7 @@ void CmiCheckAffinity(void)
   }
   #endif
 }
+
 #else
 // Dummy function if RECONVERSE_ENABLE_CPU_AFFINITY not set
 void CmiInitCPUAffinity(char **argv) {}
@@ -497,3 +498,9 @@ void CmiInitCPUAffinity(char **argv) {}
 void CmiCheckAffinity(void) {}
 
 #endif
+
+int CmiOnCore(void)
+{
+  printf("WARNING: CmiOnCore IS NOT SUPPORTED ON THIS PLATFORM\n");
+  return -1;
+}

@@ -358,6 +358,10 @@ void CmiPushPE(int destPE, void *msg) {
   CmiPushPE(destPE, messageSize, msg);
 }
 
+void CmiPushNode(void *msg) {
+  CmiNodeQueue->push(msg);
+}
+
 void *CmiAlloc(int size) {
   if (size <= 0) {
     CmiPrintf("CmiAlloc: size <= 0\n");
