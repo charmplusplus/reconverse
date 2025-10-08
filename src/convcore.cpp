@@ -225,6 +225,8 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
 
   if (plusPeSet)
     Cmi_mynodesize = Cmi_npes / Cmi_numnodes;
+  if (!plusPeSet && !plusPSet)
+    Cmi_mynodesize = 1;
   Cmi_nodestart = Cmi_mynode * Cmi_mynodesize;
   // register am handlers
   g_amHandler = comm_backend::registerAmHandler(CommRemoteHandler);
@@ -366,6 +368,10 @@ void CmiPushPE(int destPE, void *msg) {
   CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
   int messageSize = header->messageSize;
   CmiPushPE(destPE, messageSize, msg);
+}
+
+void CmiPushNode(void *msg) {
+  CmiNodeQueue->push(msg);
 }
 
 void *CmiAlloc(int size) {

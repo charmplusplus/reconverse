@@ -3,23 +3,19 @@
 #ifndef CONVERSE_H
 #define CONVERSE_H
 
+#ifdef __cplusplus
 #include <atomic>
-#include <cinttypes>
-#include <cstdio>
-#include <cstdlib>
 #include <queue>
+#else
+#include <stdatomic.h>
+#endif
 #include <pthread.h>
-
-using CmiInt1 = std::int8_t;
-using CmiInt2 = std::int16_t;
-using CmiInt4 = std::int32_t;
-using CmiInt8 = std::int64_t;
-using CmiUint1 = std::uint8_t;
-using CmiUint2 = std::uint16_t;
-using CmiUint4 = std::uint32_t;
-using CmiUint8 = std::uint64_t;
-
+#include <stdio.h>
+#include <stdlib.h>
 #include <stdint.h>
+#include <stdbool.h>
+#include <inttypes.h>
+
 typedef int8_t CMK_TYPEDEF_INT1;
 typedef int16_t CMK_TYPEDEF_INT2;
 typedef int32_t CMK_TYPEDEF_INT4;
@@ -41,32 +37,65 @@ typedef CMK_TYPEDEF_UINT8 CmiUInt8;
 typedef __int128_t CmiInt16;
 typedef __uint128_t CmiUInt16;
 
-// NOTE: these are solely for backwards compatibility
-// Do not use in reconverse impl
+typedef pthread_mutex_t *CmiNodeLock;
+typedef CmiNodeLock CmiImmediateLockType;
+extern int _immediateLock;
+extern int _immediateFlag;
+extern CmiNodeLock _smp_mutex;
+
+extern CmiNodeLock CmiMemLock_lock;
+#define CmiMemLock() do{if (CmiMemLock_lock) CmiLock(CmiMemLock_lock);} while (0)
+
+#define CmiMemUnlock() do{if (CmiMemLock_lock) CmiUnlock(CmiMemLock_lock);} while (0)
 
 #define CMK_TAG(x, y) x##y##_
 #define CMK_CONCAT(x, y) x##y
 
-#define CpvDeclare(t, v) t *CMK_TAG(Cpv_, v)
-#define CpvStaticDeclare(t, v) static t *CMK_TAG(Cpv_, v)
+#ifdef __cplusplus
+/* In C++, use new so t's constructor gets called */
+# define CpvInit_Alloc(t,n) new t[n]()
+# define CpvInit_Alloc_scalar(t) new t()
+#else
+# define CpvInit_Alloc(t,n) (t *)calloc(n,sizeof(t))
+# define CpvInit_Alloc_scalar(t) (t *)calloc(1,sizeof(t))
+#endif
 
-#define CpvInitialize(t, v)                                                    \
-  do {                                                                         \
-    if (CmiMyRank()) {                                                         \
-      CmiNodeBarrier();                                                        \
-    } else {                                                                   \
-      CMK_TAG(Cpv_, v) = new t[CmiMyNodeSize()];                               \
-      CmiNodeBarrier();                                                        \
-    }                                                                          \
-  } while (0)
-;
+#define CpvDeclare(t,v) __thread t* CMK_TAG(Cpv_,v) = NULL;   \
+                        int CMK_TAG(Cpv_inited_,v) = 0;  \
+                        t ** CMK_TAG(Cpv_addr_,v)
+#define CpvExtern(t,v)  extern __thread t* CMK_TAG(Cpv_,v);  \
+                        extern int CMK_TAG(Cpv_inited_,v);  \
+                        extern t ** CMK_TAG(Cpv_addr_,v)
+#ifdef __cplusplus
+#define CpvCExtern(t,v) extern "C" __thread t* CMK_TAG(Cpv_,v);  \
+                        extern "C" int CMK_TAG(Cpv_inited_,v);  \
+                        extern "C" t ** CMK_TAG(Cpv_addr_,v)
+#else
+#define CpvCExtern(t,v)    CpvExtern(t,v)
+#endif
+#define CpvStaticDeclare(t,v) static __thread t* CMK_TAG(Cpv_,v) = NULL;   \
+                        static int CMK_TAG(Cpv_inited_,v) = 0;  \
+                        static t ** CMK_TAG(Cpv_addr_,v)
 
-#define CpvAccess(v) CMK_TAG(Cpv_, v)[CmiMyRank()]
-#define CpvAccessOther(v, r) CMK_TAG(Cpv_, v)[r]
-#define CpvExtern(t, v) extern t *CMK_TAG(Cpv_, v)
+#define CpvInitialize(t,v)\
+    do {                                                               \
+      CmiMemLock();                                                    \
+      if (!(CMK_TAG(Cpv_inited_,v))) {                                \
+        t** cpvinitobj = CpvInit_Alloc(t*, CmiMyNodeSize());         \
+        CMK_TAG(Cpv_addr_,v) = cpvinitobj;                             \
+        CMK_TAG(Cpv_inited_,v) = 1;                                    \
+        CmiMemUnlock();                                                \
+      }                                                                \
+      else                                                             \
+        CmiMemUnlock();                                                \
+      t* cpvobj = CpvInit_Alloc_scalar(t);                             \
+      CMK_TAG(Cpv_,v) = cpvobj;                                        \
+      CMK_TAG(Cpv_addr_,v)[CmiMyRank()] = CMK_TAG(Cpv_,v);             \
+    } while(0)
+
+#define CpvAccess(v) (*CMK_TAG(Cpv_,v))
+#define CpvAccessOther(v, r) (*(CMK_TAG(Cpv_addr_,v)[r]))
 #define CpvInitialized(v) (0 != CMK_TAG(Cpv_, v))
-
-#define CpvCExtern(t, v) extern "C" t *CMK_TAG(Cpv_, v)
 
 #define CsvDeclare(t, v) t v
 #define CsvStaticDeclare(t, v) static t v
@@ -87,6 +116,26 @@ typedef __uint128_t CmiUInt16;
 #define ALIGN_DEFAULT(x) CMIALIGN(x, ALIGN_BYTES)
 #define CMIPADDING(x, n) (CMIALIGN((x), (n)) - (size_t)(x))
 
+// Portable alignment specifier for structs
+#ifdef __cplusplus
+#define CMI_ALIGNAS(n) alignas(n)
+#elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 202311L
+// C23 has alignas
+#define CMI_ALIGNAS(n) alignas(n)
+#elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+// C11 has _Alignas
+#define CMI_ALIGNAS(n) _Alignas(n)
+#elif defined(__GNUC__) || defined(__clang__)
+// GCC/Clang attribute
+#define CMI_ALIGNAS(n) __attribute__((aligned(n)))
+#elif defined(_MSC_VER)
+// MSVC
+#define CMI_ALIGNAS(n) __declspec(align(n))
+#else
+// Fallback - no alignment (may cause issues on some platforms)
+#define CMI_ALIGNAS(n)
+#endif
+
 // End of NOTE
 
 typedef void (*CmiHandler)(void *msg);
@@ -99,19 +148,24 @@ typedef void (*CldInfoFn)(void *msg, CldPackFn *packer, int *len, int *queueing,
 
 typedef int (*CldEstimator)(void);
 
-#define CmiMessageDestPENode static_cast<CmiUint4>(-1)
+#ifdef __cplusplus
+#define CmiMessageDestPENode static_cast<CmiUInt4>(-1)
+#else
+#define CmiMessageDestPENode ((CmiUInt4)(-1))
+#endif
+
 typedef struct Header {
   CmiInt2 handlerId;
-  CmiUint4 destPE; // global ID of destination PE
+  CmiUInt4 destPE; // global ID of destination PE
   int messageSize;
   // used for bcast (bcast source pe/node), multicast (group id), reductions
   // (reduction id)
-  CmiUint4 collectiveMetaInfo;
+  CmiUInt4 collectiveMetaInfo;
   // used for special ops (bcast, reduction, multicast) when the handler field
   // is repurposed
   CmiInt2 swapHandlerId;
   bool nokeep;
-  CmiUint1 zcMsgType; // 0: normal, 1: zero-copy
+  CmiUInt1 zcMsgType; // 0: normal, 1: zero-copy
 } CmiMessageHeader;
 
 typedef CmiMessageHeader CmiMsgHeaderBasic;
@@ -138,12 +192,18 @@ typedef CMK_MULTICAST_GROUP_TYPE CmiGroup;
 #define CmiReservedHeaderSize CmiMsgHeaderSizeBytes
 
 typedef void (*CmiStartFn)(int argc, char **argv);
+#ifdef __cplusplus
 void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched = 0,
                   int initret = 0);
+#else
+void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
+                  int initret);
+#endif
 
 static CmiStartFn Cmi_startfn;
 extern int CharmLibInterOperate;
 
+#ifdef __cplusplus
 struct alignas(ALIGN_BYTES) CmiChunkHeader {
   int size;
 
@@ -161,6 +221,18 @@ public:
   int incRef() { return ref.fetch_add(1, std::memory_order_release); }
   int decRef() { return ref.fetch_sub(1, std::memory_order_release); }
 };
+#else
+struct CMI_ALIGNAS(ALIGN_BYTES) CmiChunkHeader {
+  int size;
+  int ref; // basic int for C compilation
+};
+
+/* C functions for reference counting */
+static inline int CmiChunkHeader_getRef(struct CmiChunkHeader* hdr) { return hdr->ref; }
+static inline void CmiChunkHeader_setRef(struct CmiChunkHeader* hdr, int r) { hdr->ref = r; }
+static inline int CmiChunkHeader_incRef(struct CmiChunkHeader* hdr) { return __atomic_fetch_add(&hdr->ref, 1, __ATOMIC_RELEASE); }
+static inline int CmiChunkHeader_decRef(struct CmiChunkHeader* hdr) { return __atomic_fetch_sub(&hdr->ref, 1, __ATOMIC_RELEASE); }
+#endif
 
 // threads library
 
@@ -326,6 +398,7 @@ void CmiSyncSendAndFree(int destPE, int messageSize, void *msg);
 void CmiSyncListSend(int npes, const int *pes, int len, void *msg);
 void CmiSyncListSendAndFree(int npes, const int *pes, int len, void *msg);
 void CmiPushPE(int destPE, void *msg);
+void CmiPushNode(void *msg);
 
 void CmiSyncSendFn(int destPE, int messageSize, char *msg);
 void CmiFreeSendFn(int destPE, int messageSize, char *msg);
@@ -366,18 +439,13 @@ void CmiNodeBarrier();
 void CmiNodeAllBarrier();
 #define CmiBarrier() CmiNodeBarrier()
 
-typedef pthread_mutex_t *CmiNodeLock;
-typedef CmiNodeLock CmiImmediateLockType;
-extern int _immediateLock;
-extern int _immediateFlag;
-extern CmiNodeLock _smp_mutex;
-
 // scheduler
 void CsdExitScheduler();
 int CsdScheduler(int maxmsgs);
-//void CsdEnqueueGeneral(void *Message, int strategy, int priobits, int *prioptr);
-//void CsdNodeEnqueueGeneral(void *Message, int strategy, int priobits,
-                          // unsigned int *prioptr);
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 // Message-priority pair for the queue
 struct MessagePriorityPair {
@@ -411,6 +479,10 @@ void CqsEnqueueGeneral(Queue q, void *Message, int strategy, int priobits,
           CmiUnlock(CsvAccess(CsdNodeQueueLock)); \
         } while(0)
 
+#ifdef __cplusplus
+}
+#endif
+
 void CmiAssignOnce(int *variable, int value);
 
 // Reduction functions
@@ -421,16 +493,23 @@ void CmiResetGlobalReduceSeqID();
 void CmiResetGlobalNodeReduceSeqID();
 
 // Exit functions
+
 void CmiExit(int status);
-#define ConverseExit(...) CmiExit(__VA_ARGS__ + 0)
+#ifdef __cplusplus
+extern "C" {
+#endif
 void CmiAbort(const char *format, ...);
+#ifdef __cplusplus
+}
+#endif
 
 // Utility functions
 int CmiPrintf(const char *format, ...);
 int CmiGetArgc(char **argv);
-void CmiAbort(const char *format, ...);
 int CmiScanf(const char *format, ...);
 int CmiError(const char *format, ...);
+
+#define ConverseExit(...) CmiExit(__VA_ARGS__ + 0)
 #define CmiMemcpy(dest, src, size) memcpy((dest), (src), (size))
 
 #define setMemoryTypeChare(p) /* empty memory debugging method */
@@ -438,6 +517,7 @@ int CmiError(const char *format, ...);
 
 void CmiInitCPUTopology(char **argv);
 void CmiInitCPUAffinity(char **argv);
+int CmiOnCore(void);
 
 void __CmiEnforceMsgHelper(const char *expr, const char *fileName, int lineNum,
                            const char *msg, ...);
@@ -941,27 +1021,33 @@ void CmiForwardMsgToPeers(int size, char *msg);
 
 void LBTopoInit();
 
+#ifdef __cplusplus
 extern "C" {
+#endif
 
 size_t CmiFwrite(const void *ptr, size_t size, size_t nmemb, FILE *f);
 CmiInt8 CmiPwrite(int fd, const char *buf, size_t bytes, size_t offset);
 int CmiOpen(const char *pathname, int flags, int mode);
 FILE *CmiFopen(const char *path, const char *mode);
 int CmiFclose(FILE *fp);
+
+#ifdef __cplusplus
 }
+#endif
 
 void registerTraceInit(void (*fn)(char **argv));
 
 int CmiDeliverMsgs(int maxmsgs);
 
+#ifdef __cplusplus
 #define CmiMemoryReadFence()                 std::atomic_thread_fence(std::memory_order_seq_cst)
 #define CmiMemoryWriteFence()                std::atomic_thread_fence(std::memory_order_seq_cst)
+#else
+#define CmiMemoryReadFence()                 __sync_synchronize()
+#define CmiMemoryWriteFence()                __sync_synchronize()
+#endif
 
-extern CmiNodeLock CmiMemLock_lock;
-#define CmiMemLock() do{if (CmiMemLock_lock) CmiLock(CmiMemLock_lock);} while (0)
-
-#define CmiMemUnlock() do{if (CmiMemLock_lock) CmiUnlock(CmiMemLock_lock);} while (0)
-
+#ifdef __cplusplus
 template <typename T> struct CmiIsAtomic : std::false_type {};
 template <typename T> struct CmiIsAtomic<std::atomic<T>> : std::true_type {};
 
@@ -980,6 +1066,9 @@ CmiAtomicFetchAndIncImpl(T& input) {
 }
 
 #define CmiMemoryAtomicFetchAndInc(input, output) ((output) = CmiAtomicFetchAndIncImpl(input))
+#else
+#define CmiMemoryAtomicFetchAndInc(input, output) ((output) = __sync_fetch_and_add(&(input), 1))
+#endif
 
 #define CmiEnableUrgentSend(yn) /* intentionally left empty */
 
