@@ -5,6 +5,7 @@
 
 #ifdef __cplusplus
 #include <atomic>
+#include <queue>
 #else
 #include <stdatomic.h>
 #endif
@@ -441,9 +442,46 @@ void CmiNodeAllBarrier();
 // scheduler
 void CsdExitScheduler();
 int CsdScheduler(int maxmsgs);
-void CsdEnqueueGeneral(void *Message, int strategy, int priobits, int *prioptr);
-void CsdNodeEnqueueGeneral(void *Message, int strategy, int priobits,
-                           unsigned int *prioptr);
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+// Message-priority pair for the queue
+struct MessagePriorityPair {
+  void* message;
+  long long priority;
+  
+  MessagePriorityPair(void* msg, long long prio) : message(msg), priority(prio) {}
+};
+
+// Comparator for increasing order of priority values
+struct MessagePriorityComparator {
+  bool operator()(const MessagePriorityPair& a, const MessagePriorityPair& b) const {
+    return a.priority > b.priority; // Note: inverted for min-heap behavior
+  }
+};
+
+typedef std::priority_queue<MessagePriorityPair, std::vector<MessagePriorityPair>, MessagePriorityComparator> *Queue;
+
+#define QueueInit() new std::priority_queue<MessagePriorityPair, std::vector<MessagePriorityPair>, MessagePriorityComparator>()
+
+CpvExtern(Queue, CsdSchedQueue);
+CsvExtern(Queue, CsdNodeQueue);
+CsvExtern(CmiNodeLock, CsdNodeQueueLock);
+void CqsEnqueueGeneral(Queue q, void *Message, int strategy, int priobits,
+                         unsigned int *prioptr);
+#define CsdEnqueueGeneral(msg, strategy, priobits, prioptr) \
+  (CqsEnqueueGeneral((Queue)CpvAccess(CsdSchedQueue),(msg),(strategy),(priobits),(prioptr)))
+#define CsdNodeEnqueueGeneral(msg, strategy, priobits, prioptr) do { \
+          CmiLock(CsvAccess(CsdNodeQueueLock)); \
+          CqsEnqueueGeneral((Queue)CsvAccess(CsdNodeQueue),(msg),(strategy),(priobits),(prioptr)); \
+          CmiUnlock(CsvAccess(CsdNodeQueueLock)); \
+        } while(0)
+
+#ifdef __cplusplus
+}
+#endif
 
 void CmiAssignOnce(int *variable, int value);
 
