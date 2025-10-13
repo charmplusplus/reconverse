@@ -462,9 +462,26 @@ struct MessagePriorityComparator {
   }
 };
 
-typedef std::priority_queue<MessagePriorityPair, std::vector<MessagePriorityPair>, MessagePriorityComparator> *Queue;
+struct QueueImpl
+{
+  void *pq_neg; // negative priorities
+  void *pq_zero; // zero priority
+  void *pq_pos; // positive priorities
+};
 
-#define QueueInit() new std::priority_queue<MessagePriorityPair, std::vector<MessagePriorityPair>, MessagePriorityComparator>()
+typedef QueueImpl* Queue;
+
+void QueueInit(Queue q);
+void QueueDestroy(Queue q);
+int QueueEmpty(Queue q);
+int QueueSize(Queue q);
+void QueuePush(Queue q, void* message, long long priority);
+void QueuePop(Queue q);
+void* QueueTop(Queue q);
+
+//typedef std::priority_queue<MessagePriorityPair, std::vector<MessagePriorityPair>, MessagePriorityComparator> *Queue;
+
+//#define QueueInit() new std::priority_queue<MessagePriorityPair, std::vector<MessagePriorityPair>, MessagePriorityComparator>()
 
 CpvExtern(Queue, CsdSchedQueue);
 CsvExtern(Queue, CsdNodeQueue);

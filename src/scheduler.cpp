@@ -53,11 +53,10 @@ void CsdScheduler() {
     else {
       // Try to acquire lock without blocking
       if (CmiTryLock(CsvAccess(CsdNodeQueueLock)) == 0) {
-        if (!CsvAccess(CsdNodeQueue)->empty()) {
-          auto result = CsvAccess(CsdNodeQueue)->top();
-          CsvAccess(CsdNodeQueue)->pop();
+        if (!QueueEmpty(CsvAccess(CsdNodeQueue))) {
+          void* msg = QueueTop(CsvAccess(CsdNodeQueue));
+          QueuePop(CsvAccess(CsdNodeQueue));
           CmiUnlock(CsvAccess(CsdNodeQueueLock));
-          void *msg = result.message;
           // process event
           CmiHandleMessage(msg);
 
@@ -70,10 +69,9 @@ void CsdScheduler() {
         else {
           CmiUnlock(CsvAccess(CsdNodeQueueLock));
           //empty queue so check thread prio queue
-          if (!CpvAccess(CsdSchedQueue)->empty()) {
-          auto result = CpvAccess(CsdSchedQueue)->top();
-          CpvAccess(CsdSchedQueue)->pop();
-          void *msg = result.message;
+          if (!QueueEmpty(CpvAccess(CsdSchedQueue))) {
+          void *msg = QueueTop(CpvAccess(CsdSchedQueue));
+          QueuePop(CpvAccess(CsdSchedQueue));
 
           // process event
           CmiHandleMessage(msg);
@@ -105,10 +103,9 @@ void CsdScheduler() {
       } 
       else {
         // Could not acquire node queue lock, skip to thread prio queue
-        if (!CpvAccess(CsdSchedQueue)->empty()) {
-          auto result = CpvAccess(CsdSchedQueue)->top();
-          CpvAccess(CsdSchedQueue)->pop();
-          void *msg = result.message;
+        if (!QueueEmpty(CpvAccess(CsdSchedQueue))) {
+          void *msg = QueueTop(CpvAccess(CsdSchedQueue));
+          QueuePop(CpvAccess(CsdSchedQueue));
 
           // process event
           CmiHandleMessage(msg);
@@ -197,11 +194,10 @@ void CsdSchedulePoll() {
     else {
       // Try to acquire lock without blocking
       if (CmiTryLock(CsvAccess(CsdNodeQueueLock)) == 0) {
-        if (!CsvAccess(CsdNodeQueue)->empty()) {
-          auto result = CsvAccess(CsdNodeQueue)->top();
-          CsvAccess(CsdNodeQueue)->pop();
+        if (!QueueEmpty(CsvAccess(CsdNodeQueue))) {
+          void *msg = QueueTop(CsvAccess(CsdNodeQueue));
+          QueuePop(CsvAccess(CsdNodeQueue));
           CmiUnlock(CsvAccess(CsdNodeQueueLock));
-          void *msg = result.message;
           // process event
           CmiHandleMessage(msg);
 
@@ -213,10 +209,9 @@ void CsdSchedulePoll() {
         } 
         else {
           CmiUnlock(CsvAccess(CsdNodeQueueLock));
-          if (!CpvAccess(CsdSchedQueue)->empty()) {
-          auto result = CpvAccess(CsdSchedQueue)->top();
-          CpvAccess(CsdSchedQueue)->pop();
-          void *msg = result.message;
+          if (!QueueEmpty(CpvAccess(CsdSchedQueue))) {
+          void *msg = QueueTop(CpvAccess(CsdSchedQueue));
+          QueuePop(CpvAccess(CsdSchedQueue));
 
           // process event
           CmiHandleMessage(msg);
@@ -234,10 +229,9 @@ void CsdSchedulePoll() {
       } 
       else {
         // Could not acquire node queue lock, skip to thread prio queue
-        if (!CpvAccess(CsdSchedQueue)->empty()) {
-          auto result = CpvAccess(CsdSchedQueue)->top();
-          CpvAccess(CsdSchedQueue)->pop();
-          void *msg = result.message;
+        if (!QueueEmpty(CpvAccess(CsdSchedQueue))) {
+          void *msg = QueueTop(CpvAccess(CsdSchedQueue));
+          QueuePop(CpvAccess(CsdSchedQueue));
 
           // process event
           CmiHandleMessage(msg);
@@ -272,17 +266,17 @@ void CqsEnqueueGeneral(Queue q, void *Message, int strategy, int priobits,
           switch (strategy){ //for now everything is FIFO
             case CQS_QUEUEING_FIFO:
             case CQS_QUEUEING_LIFO:
-              q->push(MessagePriorityPair((void*)Message, 0));
+              QueuePush(q, Message, 0);
               break;
             case CQS_QUEUEING_IFIFO:
             case CQS_QUEUEING_ILIFO:
               iprio=prioptr[0]+(1U<<(8*sizeof(unsigned int)-1));
-              q->push(MessagePriorityPair((void*)Message, iprio));
+              QueuePush(q, Message, iprio);
               break;
             case CQS_QUEUEING_LFIFO:
             case CQS_QUEUEING_LLIFO:
               lprio = ((long long*)prioptr)[0] + (1ULL<<(8*sizeof(long long)-1));
-              q->push(MessagePriorityPair((void*)Message, lprio));
+              QueuePush(q, Message, lprio);
               break;
             default:
               CmiAbort("CqsEnqueueGeneral: invalid queueing strategy (bitvectors not supported yet)\n");
