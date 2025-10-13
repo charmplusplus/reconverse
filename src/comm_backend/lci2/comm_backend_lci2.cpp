@@ -40,6 +40,9 @@ void CommBackendLCI2::init(char **argv) {
   int num_devices = 1;
   CmiGetArgInt(argv, "+lci_ndevices", (int *)&num_devices);
   CmiAssert(num_devices >= 1);
+  auto g_attr = lci::get_g_default_attr();
+  g_attr.npackets = num_devices * g_attr.npackets;
+  lci::set_g_default_attr(g_attr);
   m_devices.resize(num_devices);
   for (int i = 0; i < num_devices; i++) {
     m_devices[i] = lci::alloc_device();
