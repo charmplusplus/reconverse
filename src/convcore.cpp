@@ -126,7 +126,11 @@ void converseRunPe(int rank) {
   collectiveInit();
   // Cmi_multicastHandler = CmiRegisterHandler(CmiMulticastHandler);
 
-  // barrier to ensure all global structs are initialized
+  // A global barrier to ensure all global structs are initialized
+  CmiNodeBarrier();
+  if (rank == 0) {
+    comm_backend::barrier();
+  }
   CmiNodeBarrier();
 
   CthInit(NULL);
