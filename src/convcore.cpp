@@ -289,10 +289,12 @@ void CmiInitState(int rank) {
   CmiOnesidedDirectInit();
   CcdModuleInit();
   CpvInitialize(Queue, CsdSchedQueue);
+  CpvAccess(CsdSchedQueue) = (Queue)malloc(sizeof(QueueImpl));
   QueueInit(CpvAccess(CsdSchedQueue));
   CsvInitialize(Queue, CsdNodeQueue);
   if (CmiMyRank() == 0) {
     CsvAccess(CsdNodeQueueLock) = CmiCreateLock();
+    CsvAccess(CsdNodeQueue) = (Queue)malloc(sizeof(QueueImpl));
     QueueInit(CsvAccess(CsdNodeQueue));
   }
   CmiNodeBarrier();

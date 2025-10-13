@@ -348,8 +348,6 @@ enum ncpyRegModes {
 enum ncpyDeregModes { CMK_BUFFER_DEREG = 4, CMK_BUFFER_NODEREG = 5 };
 
 // handler tools
-typedef void (*CmiHandler)(void *msg);
-typedef void (*CmiHandlerEx)(void *msg, void *userPtr);
 int CmiRegisterHandler(CmiHandler h);
 int CmiRegisterHandlerEx(CmiHandlerEx h, void *userPtr);
 CmiHandler CmiHandlerToFunction(int handlerId);
@@ -444,9 +442,6 @@ void CsdExitScheduler();
 int CsdScheduler(int maxmsgs);
 
 #ifdef __cplusplus
-extern "C" {
-#endif
-
 // Message-priority pair for the queue
 struct MessagePriorityPair {
   void* message;
@@ -462,14 +457,14 @@ struct MessagePriorityComparator {
   }
 };
 
-struct QueueImpl
+#endif
+
+typedef struct QueueImpl
 {
   void *pq_neg; // negative priorities
   void *pq_zero; // zero priority
   void *pq_pos; // positive priorities
-};
-
-typedef QueueImpl* Queue;
+} *Queue;
 
 void QueueInit(Queue q);
 void QueueDestroy(Queue q);
@@ -495,10 +490,6 @@ void CqsEnqueueGeneral(Queue q, void *Message, int strategy, int priobits,
           CqsEnqueueGeneral((Queue)CsvAccess(CsdNodeQueue),(msg),(strategy),(priobits),(prioptr)); \
           CmiUnlock(CsvAccess(CsdNodeQueueLock)); \
         } while(0)
-
-#ifdef __cplusplus
-}
-#endif
 
 void CmiAssignOnce(int *variable, int value);
 
