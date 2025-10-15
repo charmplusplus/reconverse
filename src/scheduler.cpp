@@ -14,6 +14,8 @@ void CsdScheduler() {
   // get node level queue
   ConverseNodeQueue<void *> *nodeQueue = CmiGetNodeQueue();
 
+  int loop_counter = 0;
+
   while (CmiStopFlag() == 0) {
 
     CcdRaiseCondition(CcdSCHEDLOOP);
@@ -65,7 +67,11 @@ void CsdScheduler() {
         }
       }
     }
-    comm_backend::progress();
+    if((CmiMyRank() % 4 == 0) && (loop_counter++ == 3))
+    {
+      loop_counter = 0;
+      comm_backend::progress();
+    }
 
     CcdCallBacks();
 
