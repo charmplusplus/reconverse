@@ -54,6 +54,8 @@ int _Cmi_numpes_global;
 int _Cmi_mynode_global;
 int _Cmi_numnodes_global;
 int Cmi_nodestartGlobal;
+int backend_poll_freq;
+int backend_poll_thread;
 
 void (*CmiTraceFn)(char **argv) = nullptr;
 
@@ -235,6 +237,13 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
 #ifdef RECONVERSE_ENABLE_CPU_AFFINITY
   CmiInitHwlocTopology();
 #endif
+
+  backend_poll_freq = 1; // default to poll every iteration
+  CmiGetArgInt(argv, "+backend_poll_freq", &backend_poll_freq);
+  if (backend_poll_freq < 1) backend_poll_freq = 1;
+  backend_poll_thread = 1; // default to every thread
+  CmiGetArgInt(argv, "+backend_poll_thread", &backend_poll_thread);
+  if (backend_poll_thread < 1) backend_poll_thread = 1;
 
   Cmi_argv = argv;
   Cmi_startfn = fn;
