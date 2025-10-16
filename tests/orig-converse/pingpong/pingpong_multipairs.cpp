@@ -9,9 +9,12 @@
 #include <converse.h>
 #include <stdlib.h>
 
-enum { nCycles = 4004 };
 enum { skip = 4 };
-enum { maxMsgSize = 1 << 22 };
+
+CpvDeclare(int, nCycles);
+CpvDeclare(int, minMsgSize);
+CpvDeclare(int, maxMsgSize);
+CpvDeclare(int, factor);
 
 CpvDeclare(int, recvNum);
 CpvDeclare(double, sumTime);
@@ -38,9 +41,18 @@ void startRing(char *msg_2) {
   CpvAccess(cycleNum) = -1;
 
   CmiFree(msg_2);
-  // Increase message in powers of 4. Also add a converse header to that
-  CpvAccess(msgSize) =
-      (CpvAccess(msgSize) - CmiMsgHeaderSizeBytes) * 2 + CmiMsgHeaderSizeBytes;
+
+  int payloadSize;
+  if (CpvAccess(msgSize) == 0) {
+    payloadSize = CpvAccess(minMsgSize);
+  } else {
+    payloadSize =
+        (CpvAccess(msgSize) - CmiMsgHeaderSizeBytes) * CpvAccess(factor);
+  }
+  if (payloadSize > CpvAccess(maxMsgSize))
+    payloadSize = CpvAccess(maxMsgSize);
+
+  CpvAccess(msgSize) = payloadSize + CmiMsgHeaderSizeBytes;
 
   char *msg = (char *)CmiAlloc(CpvAccess(msgSize));
   *((int *)(msg + CmiMsgHeaderSizeBytes)) = CpvAccess(msgSize);
@@ -53,14 +65,14 @@ void reduceHandlerFunc(char *msg) {
   CpvAccess(sumTime) += *((double *)(msg + (CmiMsgHeaderSizeBytes)));
   if (CpvAccess(recvNum) == HALF) {
     double us_time =
-        (CpvAccess(sumTime)) / (2. * (nCycles - skip) * HALF) * 1e6;
+        (CpvAccess(sumTime)) / (2. * (CpvAccess(nCycles) - skip) * HALF) * 1e6;
     size_t msgSizeDiff = CpvAccess(msgSize) - CmiMsgHeaderSizeBytes;
     CmiPrintf("%zu\t\t  %.2lf   %.2f\n", msgSizeDiff, us_time,
               msgSizeDiff / us_time);
     CpvAccess(sumTime) = 0;
     CpvAccess(recvNum) = 0;
 
-    if (CpvAccess(msgSize) < maxMsgSize) {
+    if ((CpvAccess(msgSize) - CmiMsgHeaderSizeBytes) < CpvAccess(maxMsgSize)) {
       for (int i = 0; i < HALF; i++) {
         void *sendmsg = CmiAlloc(CmiMsgHeaderSizeBytes);
         CmiSetHandler(sendmsg, CpvAccess(startRingHandler));
@@ -84,7 +96,7 @@ void ringFinished(char *msg) {
 #if 0
   // Print the time for that message size
   CmiPrintf("\t\t  %.2lf\n",
-    (1e6*(CpvAccess(endTime)-CpvAccess(startTime)))/(2.*nCycles));
+    (1e6*(CpvAccess(endTime)-CpvAccess(startTime)))/(2.*CpvAccess(nCycles)));
   //Have we finished all message sizes?
 #endif
   int mysize = CmiMsgHeaderSizeBytes + sizeof(double);
@@ -107,7 +119,7 @@ CmiHandler node0HandlerFunc(char *msg) {
   if (CpvAccess(cycleNum) == skip)
     CpvAccess(startTime) = CmiWallTimer();
 
-  if (CpvAccess(cycleNum) == nCycles) {
+  if (CpvAccess(cycleNum) == CpvAccess(nCycles)) {
     CpvAccess(endTime) = CmiWallTimer();
     ringFinished(msg);
   } else {
@@ -142,7 +154,7 @@ CmiHandler node1HandlerFunc(char *msg) {
 // Converse handler for beginning operation
 CmiHandler startOperationHandlerFunc(char *msg) {
 #if USE_PERSISTENT
-  h = CmiCreatePersistent(otherPe, maxMsgSize + 1024);
+  h = CmiCreatePersistent(otherPe, CpvAccess(maxMsgSize) + CmiMsgHeaderSizeBytes + 1024);
 #endif
   if (CmiMyPe() == 0) {
     CmiPrintf("Multiple pair send/recv\n bytes \t\t latency(us)\t "
@@ -164,7 +176,17 @@ CmiStartFn mymain(int argc, char *argv[]) {
   CpvInitialize(int, cycleNum);
   CpvAccess(recvNum) = 0;
   CpvAccess(sumTime) = 0;
-  CpvAccess(msgSize) = 4 + CmiMsgHeaderSizeBytes;
+  CpvAccess(msgSize) = 0;
+
+  CpvInitialize(int, nCycles);
+  CpvInitialize(int, minMsgSize);
+  CpvInitialize(int, maxMsgSize);
+  CpvInitialize(int, factor);
+
+  CpvAccess(nCycles) = 4004;
+  CpvAccess(minMsgSize) = 4;
+  CpvAccess(maxMsgSize) = 1 << 22;
+  CpvAccess(factor) = 2;
 
   CpvInitialize(int, reduceHandler);
   CpvAccess(reduceHandler) = CmiRegisterHandler((CmiHandler)reduceHandlerFunc);
@@ -193,6 +215,53 @@ CmiStartFn mymain(int argc, char *argv[]) {
 
   // Wait for all PEs of the node to complete topology init
   CmiNodeAllBarrier();
+
+  argc = CmiGetArgc(argv);
+  if (argc >= 5) {
+    CpvAccess(nCycles) = atoi(argv[1]);
+    CpvAccess(minMsgSize) = atoi(argv[2]);
+    CpvAccess(maxMsgSize) = atoi(argv[3]);
+    CpvAccess(factor) = atoi(argv[4]);
+  } else if (argc != 1) {
+    if (CmiMyPe() == 0)
+      CmiAbort("Usage: ./pingpong_multipairs <ncycles> <minsize> <maxsize> <increase factor>\nExample: ./pingpong_multipairs 4004 4 4194304 2\n");
+    else
+      CmiAbort("Invalid arguments provided to pingpong_multipairs");
+  }
+
+  if (CpvAccess(minMsgSize) <= 0 || CpvAccess(maxMsgSize) <= 0) {
+    if (CmiMyPe() == 0)
+      CmiAbort("Message sizes must be positive");
+    else
+      CmiAbort("Invalid message size configuration");
+  }
+  if (CpvAccess(minMsgSize) > CpvAccess(maxMsgSize)) {
+    if (CmiMyPe() == 0)
+      CmiAbort("minMsgSize (%d) must not exceed maxMsgSize (%d)\n",
+               CpvAccess(minMsgSize), CpvAccess(maxMsgSize));
+    else
+      CmiAbort("Invalid message size range");
+  }
+  if (CpvAccess(nCycles) <= skip) {
+    if (CmiMyPe() == 0)
+      CmiAbort("nCycles (%d) must be greater than skip (%d)\n",
+               CpvAccess(nCycles), skip);
+    else
+      CmiAbort("Invalid iteration count");
+  }
+  if (CpvAccess(factor) < 2) {
+    if (CmiMyPe() == 0)
+      CmiAbort("increase factor must be >= 2 (received %d)\n",
+               CpvAccess(factor));
+    else
+      CmiAbort("Invalid increase factor");
+  }
+
+  if (CmiMyPe() == 0) {
+    CmiPrintf("Multiple pair send/recv with iterations = %d, minMsgSize = %d, maxMsgSize = %d, increase factor = %d\n",
+              CpvAccess(nCycles), CpvAccess(minMsgSize),
+              CpvAccess(maxMsgSize), CpvAccess(factor));
+  }
 
 #if CMK_CONVERSE_MPI && CMK_SMP
   if (CmiMyPe() == 0 && CmiNumPhysicalNodes() == 1 &&
