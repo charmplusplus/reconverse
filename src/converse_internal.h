@@ -58,6 +58,10 @@ typedef struct State {
   int stopFlag = 0;
 } CmiState;
 
+extern int backend_poll_freq; // poll every backend_poll_freq iterations of the
+                             // scheduler loop
+extern int backend_poll_thread; // every backend_poll_thread threads will call progress
+
 // state relevant functionality
 CmiState *CmiGetState(void);
 void CmiInitState(int pe);
