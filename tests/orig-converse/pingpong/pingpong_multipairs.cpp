@@ -228,6 +228,12 @@ CmiStartFn mymain(int argc, char *argv[]) {
     else
       CmiAbort("Invalid arguments provided to pingpong_multipairs");
   }
+  if (CmiNumPes() % 2 != 0) {
+    if (CmiMyPe() == 0)
+      CmiAbort("This program requires an even number of processors\n");
+    else
+      CmiAbort("Invalid processor count");
+  }
 
   if (CpvAccess(minMsgSize) <= 0 || CpvAccess(maxMsgSize) <= 0) {
     if (CmiMyPe() == 0)
