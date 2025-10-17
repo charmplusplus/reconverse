@@ -14,6 +14,8 @@ void CsdScheduler() {
   // get node level queue
   ConverseNodeQueue<void *> *nodeQueue = CmiGetNodeQueue();
 
+  int loop_counter = 0;
+
   while (CmiStopFlag() == 0) {
 
     CcdRaiseCondition(CcdSCHEDLOOP);
@@ -96,8 +98,6 @@ void CsdScheduler() {
               CcdRaiseCondition(CcdPROCESSOR_LONG_IDLE);
             }
           }
-          // poll the communication layer
-          comm_backend::progress();
         }
         }        
       } 
@@ -130,15 +130,17 @@ void CsdScheduler() {
               CcdRaiseCondition(CcdPROCESSOR_LONG_IDLE);
             }
           }
-          // poll the communication layer
-          comm_backend::progress();
         }
       }
+    }
+    if((CmiMyRank() % backend_poll_thread == 0) && (loop_counter++ == (backend_poll_freq - 1)))
+    {
+      loop_counter = 0;
+      comm_backend::progress();
     }
 
     CcdCallBacks();
 
-    // TODO: suspend? or spin?
   }
 }
 
