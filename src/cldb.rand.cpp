@@ -15,9 +15,7 @@ void CldHandler(char *msg) {
   CldRestoreHandler((char *)msg);
   ifn = (CldInfoFn)CmiHandlerToFunction(CmiGetInfo(msg));
   ifn(msg, &pfn, &len, &queueing, &priobits, &prioptr);
-  // CsdEnqueueGeneral(msg, queueing, priobits, prioptr);
-  CmiPushPE(CmiMyPe(), len,
-            msg); // use priority queue when we add priority queue
+  CsdEnqueueGeneral(msg, queueing, priobits, prioptr);
 }
 
 void CldNodeHandler(char *msg) {
@@ -103,9 +101,7 @@ void CldEnqueue(int pe, void *msg, int infofn) {
     /* CsdEnqueueGeneral is not thread or SIGIO safe */
     // CmiPrintf("   myself processor %d ==> %d, length=%d Timer:%f , priori=%d
     // \n", CmiMyPe(), pe, len, CmiWallTimer(), *prioptr);
-    //CsdEnqueueGeneral(msg, queueing, priobits, prioptr);
-    CmiPushPE(CmiMyPe(), len,
-              msg);
+    CsdEnqueueGeneral(msg, queueing, priobits, prioptr);
   } else {
     ifn(msg, &pfn, &len, &queueing, &priobits, &prioptr);
     if (pfn && CmiNodeOf(pe) != CmiMyNode()) {
