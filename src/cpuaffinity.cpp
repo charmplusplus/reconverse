@@ -9,6 +9,7 @@
  * new options +pemap +commmap takes complex pattern of a list of cores
 */
 
+#include <syscall.h>
 #include "converse_internal.h"
 
 #ifdef RECONVERSE_ENABLE_CPU_AFFINITY
@@ -40,6 +41,8 @@ static int cpuPhyNodeAffinityRecvHandlerIdx;
 // legacy_topology includes resources disallowed by the system, to implement
 // CmiNumCores
 static hwloc_topology_t topology, legacy_topology;
+
+CpvDeclare(void *, myProcStatFP);
 
 static int search_pemap(char *pecoremap, int pe)
 {
@@ -390,6 +393,13 @@ void CmiInitCPUAffinity(char **argv) {
     else {
       CmiPrintf("Charm++> +setcpuaffinity implementation in progress\n");
     }
+
+    char fname[64];
+    CpvInitialize(void *, myProcStatFP);
+    CmiLock(_smp_mutex);
+    snprintf(fname, sizeof(fname), "/proc/%d/task/%ld/stat", getpid(), syscall(SYS_gettid));
+    CpvAccess(myProcStatFP) = (void *)fopen(fname, "r");
+    CmiUnlock(_smp_mutex);
     #endif
     CmiNodeAllBarrier();
 }
@@ -484,6 +494,26 @@ void CmiCheckAffinity(void)
   }
   #endif
 }
+
+int CmiOnCore()
+{
+#define TASK_CPU_POS (39)
+  int n;
+  char str[128];
+  FILE *fp = (FILE *)CpvAccess(myProcStatFP);
+  if (fp == NULL){
+    printf("WARNING: CmiOnCore IS NOT SUPPORTED ON THIS PLATFORM\n");
+    return -1;
+  }
+  fseek(fp, 0, SEEK_SET);
+  for (n=0; n<TASK_CPU_POS; n++)  {
+    if (fscanf(fp, "%127s", str) != 1) {
+      CmiAbort("CPU affinity> reading from /proc/<PID>/[task/<TID>]/stat failed!");
+    }
+  }
+  return atoi(str);
+}
+
 #else
 // Dummy function if RECONVERSE_ENABLE_CPU_AFFINITY not set
 void CmiInitCPUAffinity(char **argv) {}
