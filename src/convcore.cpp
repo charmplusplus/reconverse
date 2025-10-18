@@ -47,6 +47,7 @@ int quietMode;
 int quietModeRequested;
 int userDrivenMode;
 int _replaySystem = 0;
+static int CmiMemoryIs_flag=0;
 
 CmiNodeLock CmiMemLock_lock;
 CpvDeclare(int, isHelperOn);
@@ -295,6 +296,7 @@ void CmiInitState(int rank) {
                 newZCPupGets); // Check if this is necessary
   CpvInitialize(int, interopExitFlag);
   CpvAccess(interopExitFlag) = 0;
+  if(rank == 0) CmiMemoryIs_flag |= CMI_MEMORY_IS_OS;
   CmiOnesidedDirectInit();
   CcdModuleInit();
   CpvInitialize(Queue, CsdSchedQueue);
@@ -1163,6 +1165,11 @@ void StartInteropScheduler() {
 }
 
 void StopInteropScheduler() { CpvAccess(interopExitFlag) = 1; }
+
+int CmiMemoryIs(int flag)
+{
+	return (CmiMemoryIs_flag&flag)==flag;
+}
 
 static char *CopyMsg(char *msg, int len) {
   char *copy = (char *)CmiAlloc(len);
