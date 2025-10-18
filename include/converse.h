@@ -366,6 +366,14 @@ void CmiMemoryMarkBlock(void *blk);
 extern void
     *memory_stack_top; // TODO: replace this with actual memory implementation
 
+#define CMI_MEMORY_IS_ISOMALLOC   (1<<1)
+#define CMI_MEMORY_IS_PARANOID    (1<<2)
+#define CMI_MEMORY_IS_GNU         (1<<3)
+#define CMI_MEMORY_IS_GNUOLD      (1<<4)
+#define CMI_MEMORY_IS_OS          (1<<5)
+#define CMI_MEMORY_IS_CHARMDEBUG  (1<<6)
+int CmiMemoryIs(int flag); /* return state of this flag */
+
 // state getters
 int CmiMyPe();
 int CmiMyNode();
@@ -593,6 +601,7 @@ double CrnDrandRange(double, double);
 #define CcdUSERMAX 127
 
 // convcond functions
+#define CCD_COND_FN_EXISTS 1 //needed for namd WorkDistrib.C
 typedef void (*CcdCondFn)(void *userParam);
 typedef void (*CcdVoidFn)(void *userParam, double curWallTime);
 void CcdModuleInit();
