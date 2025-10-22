@@ -206,9 +206,17 @@ void CmiInitHwlocTopology(void) {
   // Legacy: Determine the system's total PU count
 
   hwloc_topology_init(&legacy_topology);
+#if HWLOC_API_VERSION >= 0x00020000
+  // HWLOC 2.0+ supports HWLOC_TOPOLOGY_FLAG_INCLUDE_DISALLOWED
   hwloc_topology_set_flags(legacy_topology,
                            hwloc_topology_get_flags(legacy_topology) |
                                HWLOC_TOPOLOGY_FLAG_INCLUDE_DISALLOWED);
+#else
+  // For HWLOC 1.x, use HWLOC_TOPOLOGY_FLAG_WHOLE_SYSTEM to include all PUs
+  hwloc_topology_set_flags(legacy_topology,
+                           hwloc_topology_get_flags(legacy_topology) |
+                               HWLOC_TOPOLOGY_FLAG_WHOLE_SYSTEM);
+#endif
   hwloc_topology_load(legacy_topology);
 
   depth = hwloc_get_type_depth(legacy_topology, HWLOC_OBJ_PU);
