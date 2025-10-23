@@ -48,6 +48,8 @@ int quietModeRequested;
 int userDrivenMode;
 int _replaySystem = 0;
 static int CmiMemoryIs_flag=0;
+int Cmi_usched;
+int Cmi_initret;
 
 CmiNodeLock CmiMemLock_lock;
 CpvDeclare(int, isHelperOn);
@@ -113,7 +115,7 @@ void CmiCallHandler(int handler, void *msg) {
   }
 }
 
-void converseRunPe(int rank) {
+void converseRunPe(int rank, int everReturn) {
   char **CmiMyArgv;
   CmiMyArgv = CmiCopyArgs(Cmi_argv);
 
@@ -145,21 +147,31 @@ void converseRunPe(int rank) {
   if (CmiTraceFn)
     CmiTraceFn(Cmi_argv);
 
+  // Early return for rank 0 if everReturn is set (like original Converse)
+  if (everReturn && rank == 0) {
+    // Don't call start function or scheduler, just return
+    CmiFreeArgs(CmiMyArgv);
+    return;
+  }
+
   // call initial function and start scheduler
   Cmi_startfn(CmiGetArgc(CmiMyArgv), CmiMyArgv);
-  CsdScheduler();
+
+  // Only call scheduler if Cmi_usched is 0 (like original Converse)
+  if (Cmi_usched == 0) {
+    CsdScheduler();
+  }
 
   // Wait for all PEs on this node to finish
   CmiNodeBarrier();
 
   // Finalize comm_backend
   comm_backend::exitThread();
-  // free args
   CmiFreeArgs(CmiMyArgv);
 }
 
 void CmiStartThreads() {
-  // allocate global arrayss
+  // allocate global arrays
   Cmi_queues = new ConverseQueue<void *> *[Cmi_mynodesize];
   CmiHandlerTable = new std::vector<CmiHandlerInfo> *[Cmi_mynodesize];
   CmiNodeQueue = new ConverseNodeQueue<void *>();
@@ -170,12 +182,27 @@ void CmiStartThreads() {
   // make sure the queues are allocated before PEs start sending messages around
   comm_backend::barrier();
 
+  // Create threads for ranks 1 and up, run rank 0 on main thread (like original Converse)
   std::vector<std::thread> threads;
-  for (int i = 0; i < Cmi_mynodesize; i++) {
-    std::thread t(converseRunPe, i);
+  for (int i = 1; i < Cmi_mynodesize; i++) {
+    std::thread t(converseRunPe, i, Cmi_initret);
     threads.push_back(std::move(t));
   }
 
+  // Run rank 0 on the main thread (like original Converse thread 0)
+  converseRunPe(0, Cmi_initret);
+
+  // If initret is 1, return immediately without waiting for other threads (like original Converse)
+  if (Cmi_initret == 1) {
+    // Detach threads so they can run independently
+    for (auto &thread : threads) {
+      thread.detach();
+    }
+    return;
+  }
+
+  // If rank 0 returned early due to everReturn, we still need to wait for other threads
+  // and do cleanup (this matches original Converse behavior)
   for (auto &thread : threads) {
     thread.join();
   }
@@ -252,6 +279,8 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
   Cmi_argv = argv;
   Cmi_startfn = fn;
   CharmLibInterOperate = 0;
+  Cmi_usched = usched;
+  Cmi_initret = initret;
 
 #ifdef CMK_HAS_PARTITION
   CmiCreatePartitions(argv);
