@@ -525,7 +525,7 @@ int CmiGetArgc(char **argv);
 int CmiScanf(const char *format, ...);
 int CmiError(const char *format, ...);
 
-#define ConverseExit(...) CmiExit(__VA_ARGS__ + 0)
+void ConverseExit(int status=0);
 #define CmiMemcpy(dest, src, size) memcpy((dest), (src), (size))
 
 #define setMemoryTypeChare(p) /* empty memory debugging method */

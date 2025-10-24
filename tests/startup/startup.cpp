@@ -10,7 +10,10 @@ struct Message {
   CmiMessageHeader header;
 };
 
-void stop_handler(void *vmsg) { CsdExitScheduler(); }
+void stop_handler(void *vmsg) { 
+  CsdExitScheduler(); 
+  return;
+}
 
 void nodeQueueTest(void *msg) {
   printf("NODE QUEUE TEST on pe %d\n", CmiMyPe());
@@ -24,7 +27,7 @@ void nodeQueueTest(void *msg) {
 }
 
 void ping_handler(void *vmsg) {
-  printf("PING HANDLER CALLED\n");
+  printf("PING HANDLER CALLED on pe %d\n", CmiMyPe());
   Message *msg = new Message;
   msg->header.handlerId = CpvAccess(nodeHandlerId);
   msg->header.messageSize = sizeof(Message);
@@ -57,7 +60,7 @@ CmiStartFn mymain(int argc, char **argv) {
     msg->header.handlerId = handlerId;
     msg->header.messageSize = sizeof(Message);
 
-    int sendToPE = 0;
+    int sendToPE = CmiMyPe();
 
     // Send from my pe-i on node-0 to q+i on node-1
     CmiSyncSendAndFree(sendToPE, msg->header.messageSize, msg);
