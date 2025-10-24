@@ -26,6 +26,7 @@ void CsdScheduler() {
       if (result) {
         void *msg = result.value();
         // process event
+        CmiPrintf("[%d] CsdScheduler processing node queue message\n", CmiMyPe());
         CmiHandleMessage(msg);
 
         // release idle if necessary
@@ -254,6 +255,8 @@ void CsdSchedulePoll() {
 
 int CsdScheduler(int maxmsgs){
   if (maxmsgs < 0) {
+    //reset stop flag
+    CmiGetState()->stopFlag = 0;
     CsdScheduler(); //equivalent to CsdScheduleForever in old converse
   }
   else CsdSchedulePoll(); //not implementing CsdScheduleCount
