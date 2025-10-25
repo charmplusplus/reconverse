@@ -26,7 +26,6 @@ void CsdScheduler() {
       if (result) {
         void *msg = result.value();
         // process event
-        CmiPrintf("[%d] CsdScheduler processing node queue message\n", CmiMyPe());
         CmiHandleMessage(msg);
 
         // release idle if necessary
