@@ -29,6 +29,8 @@ int Cmi_numnodes;   // represents the number of physical nodes/systems machine
 int Cmi_nodestart;
 std::vector<CmiHandlerInfo> **CmiHandlerTable; // array of handler vectors
 std::atomic<int> numPEsReadyForExit {0};
+std::atomic<int> numPEsExitedComm {0};
+std::atomic<int> numPEsReadyToExit {0};
 ConverseNodeQueue<void *> *CmiNodeQueue;
 CpvDeclare(Queue, CsdSchedQueue);
 CsvDeclare(Queue, CsdNodeQueue);
@@ -185,8 +187,15 @@ void ConverseExit(int exitcode)
   std::atomic_fetch_add_explicit(&numPEsReadyForExit, 1, std::memory_order_release);
   // we need everyone to spin unlike old converse to be able to exit threads
   while (std::atomic_load_explicit(&numPEsReadyForExit, std::memory_order_acquire) != CmiMyNodeSize()) {}
+  
+  // All threads call exitThread() for their own cleanup
   comm_backend::exitThread();
-  // only rank 0 does cleanup
+  
+  // Add a second barrier to ensure all threads have completed exitThread()
+  std::atomic_fetch_add_explicit(&numPEsExitedComm, 1, std::memory_order_release);
+  while (std::atomic_load_explicit(&numPEsExitedComm, std::memory_order_acquire) != CmiMyNodeSize()) {}
+  
+  // only rank 0 does cleanup and exits
   if (CmiMyRank() == 0) {
     comm_backend::barrier();
     comm_backend::exit();
@@ -197,6 +206,12 @@ void ConverseExit(int exitcode)
     CmiNodeQueue = nullptr;
     CmiHandlerTable = nullptr;
     exit(exitcode);
+  } else {
+    // Non-rank-0 threads block here indefinitely
+    // Rank 0's exit() call will terminate the entire process
+    while (true) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
   }
 }
 
