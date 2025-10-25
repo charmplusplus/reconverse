@@ -434,15 +434,14 @@ static void CmiClearNodeReduction(CmiReductionID id) {
 
 // lock and unlock are used to support SMP
 void CmiNodeReduce(void *msg, int size, CmiReduceMergeFn mergeFn) {
+  const CmiReductionID id = CmiGetNextNodeReductionID();
 
   CmiNodeReduction nodeRed =
-      CsvAccess(_node_reduction_info)[CmiGetReductionIndex(CmiGetRedID(msg))];
+      CsvAccess(_node_reduction_info)[CmiGetReductionIndex(id)];
   CmiLock(nodeRed.lock);
 
-  const CmiReductionID id = CmiGetNextNodeReductionID();
   CmiReduction *red = CmiGetCreateNodeReduction(id);
   CmiInternalNodeReduce(msg, size, mergeFn, red);
-
 
   CmiUnlock(nodeRed.lock);
 }
