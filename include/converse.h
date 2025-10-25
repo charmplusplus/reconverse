@@ -525,7 +525,11 @@ int CmiGetArgc(char **argv);
 int CmiScanf(const char *format, ...);
 int CmiError(const char *format, ...);
 
+#ifdef __cplusplus
 void ConverseExit(int status=0);
+#else
+void ConverseExit(int status);
+#endif
 #define CmiMemcpy(dest, src, size) memcpy((dest), (src), (size))
 
 #define setMemoryTypeChare(p) /* empty memory debugging method */
