@@ -384,6 +384,10 @@ void CmiInitCPUAffinity(char **argv) {
     if (done) {
         return;
     }
+    if (CmiMyRank() ==0) {
+     aff_is_set = affinity_flag;
+     CPU_ZERO(&core_usage);
+  }
     //set cmi affinity
     if (!affinity_flag) {
       if (CmiMyPe() == 0) CmiPrintf("Charm++> cpu affinity NOT enabled.\n");
