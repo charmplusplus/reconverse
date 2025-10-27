@@ -29,7 +29,6 @@ int Cmi_numnodes;   // represents the number of physical nodes/systems machine
 int Cmi_nodestart;
 std::vector<CmiHandlerInfo> **CmiHandlerTable; // array of handler vectors
 std::atomic<int> numPEsReadyForExit {0};
-std::atomic<int> numPEsExitedComm {0};
 std::atomic<int> numPEsReadyToExit {0};
 ConverseNodeQueue<void *> *CmiNodeQueue;
 CpvDeclare(Queue, CsdSchedQueue);
@@ -190,10 +189,6 @@ void ConverseExit(int exitcode)
   
   // All threads call exitThread() for their own cleanup
   comm_backend::exitThread();
-  
-  // Add a second barrier to ensure all threads have completed exitThread()
-  std::atomic_fetch_add_explicit(&numPEsExitedComm, 1, std::memory_order_release);
-  while (std::atomic_load_explicit(&numPEsExitedComm, std::memory_order_acquire) != CmiMyNodeSize()) {}
   
   // only rank 0 does cleanup and exits
   if (CmiMyRank() == 0) {
