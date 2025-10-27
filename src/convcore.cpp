@@ -29,7 +29,6 @@ int Cmi_numnodes;   // represents the number of physical nodes/systems machine
 int Cmi_nodestart;
 std::vector<CmiHandlerInfo> **CmiHandlerTable; // array of handler vectors
 std::atomic<int> numPEsReadyForExit {0};
-std::atomic<int> numPEsReadyToExit {0};
 ConverseNodeQueue<void *> *CmiNodeQueue;
 CpvDeclare(Queue, CsdSchedQueue);
 CsvDeclare(Queue, CsdNodeQueue);
