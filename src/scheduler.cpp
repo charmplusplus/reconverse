@@ -281,6 +281,8 @@ void CqsEnqueueGeneral(Queue q, void *Message, int strategy, int priobits,
               QueuePush(q, Message, lprio);
               break;
             default:
-              CmiAbort("CqsEnqueueGeneral: invalid queueing strategy (bitvectors not supported yet)\n");
+              // unknown strategy, default to FIFO
+              QueuePush(q, Message, 0);
+              break;
           }
 }
