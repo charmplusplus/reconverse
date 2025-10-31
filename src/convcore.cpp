@@ -28,6 +28,7 @@ int Cmi_mynodesize; // represents the number of PE's/threads on a single
 int Cmi_numnodes;   // represents the number of physical nodes/systems machine
 int Cmi_nodestart;
 std::vector<CmiHandlerInfo> **CmiHandlerTable; // array of handler vectors
+std::atomic<int> numPEsReadyForExit {0};
 ConverseNodeQueue<void *> *CmiNodeQueue;
 CpvDeclare(Queue, CsdSchedQueue);
 CsvDeclare(Queue, CsdNodeQueue);
@@ -48,6 +49,8 @@ int quietModeRequested;
 int userDrivenMode;
 int _replaySystem = 0;
 static int CmiMemoryIs_flag=0;
+int Cmi_usched;
+int Cmi_initret;
 
 CmiNodeLock CmiMemLock_lock;
 CpvDeclare(int, isHelperOn);
@@ -113,7 +116,7 @@ void CmiCallHandler(int handler, void *msg) {
   }
 }
 
-void converseRunPe(int rank) {
+void converseRunPe(int rank, int everReturn) {
   char **CmiMyArgv;
   CmiMyArgv = CmiCopyArgs(Cmi_argv);
 
@@ -145,50 +148,75 @@ void converseRunPe(int rank) {
   if (CmiTraceFn)
     CmiTraceFn(Cmi_argv);
 
-  // call initial function and start scheduler
-  Cmi_startfn(CmiGetArgc(CmiMyArgv), CmiMyArgv);
-  CsdScheduler();
+  /*Converse modes:
+  * usched=0, initret/everReturn=0: normal mode, converse starts scheduler for you
+  * usched=1, initret/everReturn=0: user-driven scheduling, user calls scheduler
+  * in startfn, then exits
+  * usched=1, initret/everReturn=1: ConverseInit returns without calling startfn
+  * on rank 0, still calls startfn on other ranks (used by namd)
+  */
 
+  if(!everReturn)
+  {
+    Cmi_startfn(CmiGetArgc(CmiMyArgv), CmiMyArgv);
+    if (Cmi_usched == 0) {
+      CsdScheduler();
+    }
+    CmiFreeArgs(CmiMyArgv);
+    //todo: add interoperate condition
+    ConverseExit();
+  }
+  else CmiFreeArgs(CmiMyArgv);
+
+  /*
   // Wait for all PEs on this node to finish
   CmiNodeBarrier();
 
   // Finalize comm_backend
   comm_backend::exitThread();
-  // free args
-  CmiFreeArgs(CmiMyArgv);
+  */
+}
+
+//function to exit converse and terminate the program
+//waits for all threads to call, then does cleanup on rank 0
+void ConverseExit(int exitcode)
+{
+  // increment number of PEs ready for exit
+  std::atomic_fetch_add_explicit(&numPEsReadyForExit, 1, std::memory_order_release);
+  // we need everyone to spin unlike old converse to be able to exit threads
+  while (std::atomic_load_explicit(&numPEsReadyForExit, std::memory_order_acquire) != CmiMyNodeSize()) {}
+  
+  // All threads call exitThread() for their own cleanup
+  comm_backend::exitThread();
+  
+  // only rank 0 does cleanup and exits
+  if (CmiMyRank() == 0) {
+    comm_backend::barrier();
+    comm_backend::exit();
+    delete[] Cmi_queues;
+    delete CmiNodeQueue;
+    delete[] CmiHandlerTable;
+    Cmi_queues = nullptr;
+    CmiNodeQueue = nullptr;
+    CmiHandlerTable = nullptr;
+    exit(exitcode);
+  } else {
+    // Non-rank-0 threads block here indefinitely
+    // Rank 0's exit() call will terminate the entire process
+    while (true) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+  }
 }
 
 void CmiStartThreads() {
-  // allocate global arrayss
-  Cmi_queues = new ConverseQueue<void *> *[Cmi_mynodesize];
-  CmiHandlerTable = new std::vector<CmiHandlerInfo> *[Cmi_mynodesize];
-  CmiNodeQueue = new ConverseNodeQueue<void *>();
 
-  _smp_mutex = CmiCreateLock();
-  CmiMemLock_lock = CmiCreateLock();
-
-  // make sure the queues are allocated before PEs start sending messages around
-  comm_backend::barrier();
-
-  std::vector<std::thread> threads;
-  for (int i = 0; i < Cmi_mynodesize; i++) {
-    std::thread t(converseRunPe, i);
-    threads.push_back(std::move(t));
+  // Create threads for ranks 1 and up, run rank 0 on main thread (like original Converse)
+  for (int i = 1; i < Cmi_mynodesize; i++) {
+    std::thread t(converseRunPe, i, 0); // everReturn is 0 for ranks > 0 because these ranks always run the start function
+    t.detach();
   }
 
-  for (auto &thread : threads) {
-    thread.join();
-  }
-
-  // make sure all PEs are done before we free the queues.
-  comm_backend::barrier();
-  comm_backend::exit();
-  delete[] Cmi_queues;
-  delete CmiNodeQueue;
-  delete[] CmiHandlerTable;
-  Cmi_queues = nullptr;
-  CmiNodeQueue = nullptr;
-  CmiHandlerTable = nullptr;
 }
 
 // argument form: ./prog +pe <N>
@@ -252,6 +280,8 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
   Cmi_argv = argv;
   Cmi_startfn = fn;
   CharmLibInterOperate = 0;
+  Cmi_usched = usched;
+  Cmi_initret = initret;
 
 #ifdef CMK_HAS_PARTITION
   CmiCreatePartitions(argv);
@@ -265,7 +295,21 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
   Cmi_nodestartGlobal = _Cmi_mynode_global * Cmi_mynodesize;
   #endif
 
+  // allocate global arrays
+  Cmi_queues = new ConverseQueue<void *> *[Cmi_mynodesize];
+  CmiHandlerTable = new std::vector<CmiHandlerInfo> *[Cmi_mynodesize];
+  CmiNodeQueue = new ConverseNodeQueue<void *>();
+
+  _smp_mutex = CmiCreateLock();
+  CmiMemLock_lock = CmiCreateLock();
+
+  // make sure the queues are allocated before PEs start sending messages around
+  comm_backend::barrier();
+
+  //launch threads on rank 1+
   CmiStartThreads();
+  //run rank 0 on main thread
+  converseRunPe(0, Cmi_initret);
 }
 
 // CMI STATE
