@@ -615,8 +615,9 @@ void CmiSyncListSendFn(int npes, const int *pes, int len, char *msg) {
 
 void CmiSyncListSendAndFree(int npes, const int *pes, int len, void *msg) {
   for (int i = 0; i < npes; i++) {
-    CmiSyncSendAndFree(pes[i], len, msg);
+    CmiSyncSend(pes[i], len, msg);
   }
+  CmiFree(msg);
 }
 
 void CmiFreeListSendFn(int npes, const int *pes, int len, char *msg) {
