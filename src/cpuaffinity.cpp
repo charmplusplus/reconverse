@@ -460,6 +460,36 @@ void CmiInitCPUAffinity(char **argv) {
     CmiNodeAllBarrier();
 }
 
+int CmiSetCPUAffinityLogical(int mycore)
+{
+  int core = mycore;
+  if (core < 0) {
+    core = CmiHwlocTopologyLocal.num_pus + core;
+  }
+  if (core < 0) {
+    CmiError("Error: Invalid parameter to CmiSetCPUAffinityLogical: %d\n", mycore);
+    CmiAbort("CmiSetCPUAffinityLogical failed!");
+  }
+
+  int thread_unitcount = hwloc_get_nbobjs_by_type(topology, HWLOC_OBJ_PU);
+  int thread_assignment = core % thread_unitcount;
+
+  hwloc_obj_t thread_obj = hwloc_get_obj_by_type(topology, HWLOC_OBJ_PU, thread_assignment);
+
+  int result = -1;
+
+  if (thread_obj != nullptr)
+  {
+    result = set_thread_affinity(thread_obj->cpuset);
+    //CpvAccess(myCPUAffToCore) = thread_obj->os_index;
+  }
+
+  if (result == -1)
+    CmiError("Error: CmiSetCPUAffinityLogical failed to bind PE #%d to PU L#%d.\n", CmiMyPe(), mycore);
+
+  return result;
+}
+
 // Uses PU indices assigned by the OS
 int CmiSetCPUAffinity(int mycore) {
   #if defined(CPU_OR)
