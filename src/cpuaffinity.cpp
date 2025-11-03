@@ -135,6 +135,40 @@ static int search_pemap(char *pecoremap, int pe)
   return i;
 }
 
+// Check if provided mapping string uses logical indices as assigned by hwloc.
+// Logical indices are used if the first character of the map string is an L
+// (case-insensitive).
+static int check_logical_indices(char **mapptr) {
+  if ((*mapptr)[0] == 'l' || (*mapptr)[0] == 'L') {
+    (*mapptr)++; // Exclude the L character from the string
+    return 1;
+  }
+
+  return 0;
+}
+
+/*print_thread_affinity from old converse*/
+int CmiPrintCPUAffinity(void) {
+  pthread_t thread = pthread_self();
+
+  hwloc_cpuset_t cpuset = hwloc_bitmap_alloc();
+  // And try to bind ourself there. */
+  if (hwloc_get_cpubind(topology, cpuset, HWLOC_CPUBIND_THREAD) == -1) {
+    int error = errno;
+    CmiPrintf("[%d] thread CPU affinity mask is unknown %s\n", CmiMyPe(), strerror(error));
+    hwloc_bitmap_free(cpuset);
+    return -1;
+  }
+
+  char *str;
+  hwloc_bitmap_asprintf(&str, cpuset);
+  CmiPrintf("[%d] thread CPU affinity mask is %s\n", CmiMyPe(), str);
+  free(str);
+  hwloc_bitmap_free(cpuset);
+  return 0;
+
+}
+
 static void cpuAffSyncWait(std::atomic<bool> & done)
 {
   do
@@ -361,13 +395,16 @@ void CmiInitCPUAffinity(char **argv) {
     #if defined(CPU_OR)
     // check for flags
     int affinity_flag = CmiGetArgFlagDesc(argv,"+setcpuaffinity", "set cpu affinity");
+    int pemap_logical_flag = 0;
+    int show_affinity_flag = 0;
     char *pemap = NULL;
     // 0 if OS-assigned, 1 if logical hwloc assigned
     // for now, stick with os-assigned only
     // also no commap, we have no commthreads
-    int pemap_logical_flag = 0;
     CmiGetArgStringDesc(argv, "+pemap", &pemap, "define pe to core mapping");
     if (pemap!=NULL) affinity_flag = 1;
+    if (pemap != NULL) pemap_logical_flag = check_logical_indices(&pemap);
+    show_affinity_flag = CmiGetArgFlagDesc(argv,"+showcpuaffinity", "print cpu affinity");
     CmiAssignOnce(&cpuPhyNodeAffinityRecvHandlerIdx, CmiRegisterHandler((CmiHandler)cpuPhyNodeAffinityRecvHandler));
     // setting default affinity (always needed, not the same as setting cpu affinity)
     int done = 0;
@@ -379,10 +416,11 @@ void CmiInitCPUAffinity(char **argv) {
     }
     CmiNodeAllBarrier();
     if (CmiMyRank() != 0) {
-        done = set_default_affinity();
+      done = set_default_affinity();
     }
     if (done) {
-        return;
+      if (show_affinity_flag) CmiPrintCPUAffinity();
+      return;
     }
     if (CmiMyRank() ==0) {
      aff_is_set = affinity_flag;
@@ -390,6 +428,7 @@ void CmiInitCPUAffinity(char **argv) {
   }
     //set cmi affinity
     if (!affinity_flag) {
+      if (show_affinity_flag && CmiMyPe() == 0) CmiPrintCPUAffinity();
       if (CmiMyPe() == 0) CmiPrintf("Charm++> cpu affinity NOT enabled.\n");
       return;
     }
@@ -402,7 +441,16 @@ void CmiInitCPUAffinity(char **argv) {
     // if a pemap is provided
     if (pemap != NULL){
       int mycore = search_pemap(pemap, CmiMyPeGlobal());
-      if (CmiSetCPUAffinity(mycore) == -1) CmiAbort("CmiSetCPUAffinity failed!");
+      if (pemap_logical_flag) {
+        if (CmiSetCPUAffinityLogical(mycore) == -1) CmiAbort("CmiSetCPUAffinityLogical failed");
+      }
+      else {
+        if (CmiSetCPUAffinity(mycore) == -1) CmiAbort("CmiSetCPUAffinity failed!");
+      }
+      if (show_affinity_flag) {
+        CmiPrintf("Charm++> set PE %d on node %d to PU %c#%d\n", CmiMyPe(), CmiMyNode(),
+            pemap_logical_flag ? 'L' : 'P', mycore);
+      }
     }
     // if we are just using +setcpuaffinity
     else {
@@ -410,6 +458,36 @@ void CmiInitCPUAffinity(char **argv) {
     }
     #endif
     CmiNodeAllBarrier();
+}
+
+int CmiSetCPUAffinityLogical(int mycore)
+{
+  int core = mycore;
+  if (core < 0) {
+    core = CmiHwlocTopologyLocal.num_pus + core;
+  }
+  if (core < 0) {
+    CmiError("Error: Invalid parameter to CmiSetCPUAffinityLogical: %d\n", mycore);
+    CmiAbort("CmiSetCPUAffinityLogical failed!");
+  }
+
+  int thread_unitcount = hwloc_get_nbobjs_by_type(topology, HWLOC_OBJ_PU);
+  int thread_assignment = core % thread_unitcount;
+
+  hwloc_obj_t thread_obj = hwloc_get_obj_by_type(topology, HWLOC_OBJ_PU, thread_assignment);
+
+  int result = -1;
+
+  if (thread_obj != nullptr)
+  {
+    result = set_thread_affinity(thread_obj->cpuset);
+    //CpvAccess(myCPUAffToCore) = thread_obj->os_index;
+  }
+
+  if (result == -1)
+    CmiError("Error: CmiSetCPUAffinityLogical failed to bind PE #%d to PU L#%d.\n", CmiMyPe(), mycore);
+
+  return result;
 }
 
 // Uses PU indices assigned by the OS
