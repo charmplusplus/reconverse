@@ -9,6 +9,8 @@ on:
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
+    env:
+      LCI_ATTR_BACKEND: ofi
     name: Build and Test
 
     steps:

@@ -16,6 +16,12 @@
 #include <stdbool.h>
 #include <inttypes.h>
 
+#ifdef __cplusplus
+#  define CLINKAGE extern "C"
+#else
+#  define CLINKAGE /*empty*/
+#endif
+
 typedef int8_t CMK_TYPEDEF_INT1;
 typedef int16_t CMK_TYPEDEF_INT2;
 typedef int32_t CMK_TYPEDEF_INT4;
@@ -439,6 +445,11 @@ void CmiSyncMulticast(CmiGroup grp, int size, void *msg);
 void CmiSyncMulticastAndFree(CmiGroup grp, int size, void *msg);
 void CmiSyncMulticastFn(CmiGroup grp, int size, char *msg);
 void CmiFreeMulticastFn(CmiGroup grp, int size, char *msg);
+
+//network functions
+void CmiNetworkProgress();
+// ignore argument since it's only 0 in namd
+#define CmiNetworkProgressAfter(p) CmiNetworkProgressAfter()
 
 // Barrier functions
 void CmiNodeBarrier();
