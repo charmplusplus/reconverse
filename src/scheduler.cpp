@@ -286,3 +286,9 @@ void CqsEnqueueGeneral(Queue q, void *Message, int strategy, int priobits,
               break;
           }
 }
+
+//network progress
+void CmiNetworkProgress(){
+  comm_backend::progress();
+}
+

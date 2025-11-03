@@ -209,7 +209,7 @@ static void ccd_heap_update(double curWallTime) {
   }
 }
 
-void CcdCallBacksReset(void *ignored);
+CLINKAGE void CcdCallBacksReset(void *ignored);
 
 /**
  * Initialize the callback containers
