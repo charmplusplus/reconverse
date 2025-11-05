@@ -10,32 +10,35 @@ struct Message {
   CmiMessageHeader header;
 };
 
-void stop_handler(void *vmsg) { CsdExitScheduler(); }
+void stop_handler(void *vmsg) { 
+  CsdExitScheduler(); 
+  return;
+}
 
 void nodeQueueTest(void *msg) {
-  printf("NODE QUEUE TEST on pe %d\n", CmiMyRank());
+  printf("NODE QUEUE TEST on pe %d\n", CmiMyPe());
   for (int i = 0; i < CmiMyNodeSize(); i++) {
     Message *msg = new Message;
     msg->header.handlerId = CpvAccess(exitHandlerId);
     msg->header.messageSize = sizeof(Message);
 
-    CmiSyncSendAndFree(i, msg->header.messageSize, msg);
+    CmiSyncSendAndFree(i + CmiMyNodeSize() * CmiMyNode(), msg->header.messageSize, msg);
   }
 }
 
 void ping_handler(void *vmsg) {
-  printf("PING HANDLER CALLED\n");
+  printf("PING HANDLER CALLED on pe %d\n", CmiMyPe());
   Message *msg = new Message;
   msg->header.handlerId = CpvAccess(nodeHandlerId);
   msg->header.messageSize = sizeof(Message);
-  CmiSyncNodeSendAndFree(0, msg->header.messageSize, msg);
+  CmiSyncNodeSendAndFree(CmiMyNode(), msg->header.messageSize, msg);
 }
 
 CmiStartFn mymain(int argc, char **argv) {
   CpvInitialize(int, test);
   CpvAccess(test) = 42;
 
-  printf("My PE is %d\n", CmiMyRank());
+  printf("My PE is %d\n", CmiMyPe());
 
   int handlerId = CmiRegisterHandler(ping_handler);
 
@@ -44,7 +47,7 @@ CmiStartFn mymain(int argc, char **argv) {
     Message *msg = (Message *)CmiAlloc(sizeof(Message));
     msg->header.handlerId = handlerId;
     msg->header.messageSize = sizeof(Message);
-    int sendToPE = 1;
+    int sendToPE = 1 + CmiMyNodeSize() * CmiMyNode();
 
     // Send from my pe-i on node-0 to q+i on node-1
     CmiSyncSendAndFree(sendToPE, msg->header.messageSize, msg);
@@ -57,7 +60,7 @@ CmiStartFn mymain(int argc, char **argv) {
     msg->header.handlerId = handlerId;
     msg->header.messageSize = sizeof(Message);
 
-    int sendToPE = 0;
+    int sendToPE = CmiMyPe();
 
     // Send from my pe-i on node-0 to q+i on node-1
     CmiSyncSendAndFree(sendToPE, msg->header.messageSize, msg);
