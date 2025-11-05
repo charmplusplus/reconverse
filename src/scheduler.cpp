@@ -89,8 +89,8 @@ bool pollThreadPrioQueue() {
 
 bool pollProgress()
 {
-  if(CmiMyRank() % backend_poll_thread == 0) return comm_backend::progress();
-  return false;
+  if(CmiMyRank() % backend_poll_thread == 0) comm_backend::progress();
+  return false; //polling progress doesn't count
 }
 
 //will add queue polling functions
