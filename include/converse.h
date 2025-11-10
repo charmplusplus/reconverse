@@ -1216,6 +1216,7 @@ void CmiInterSyncNodeSendAndFreeFn(int destNode, int partition, int messageSize,
 
 struct CmiIpcManager;
 
+#ifdef __cplusplus
 namespace cmi {
 namespace ipc {
 // recommended cutoff for block sizes
@@ -1305,6 +1306,7 @@ inline const std::size_t& CmiRecommendedIpcBlockCutoff(void) {
   using namespace cmi::ipc;
   return CpvAccess(kRecommendedCutoff);
 }
+#endif /* __cplusplus */
 
 CsvExtern(CmiIpcManager*, coreIpcManager_);
 
