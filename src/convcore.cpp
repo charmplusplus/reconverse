@@ -29,6 +29,9 @@ int Cmi_numnodes;   // represents the number of physical nodes/systems machine
 int Cmi_nodestart;
 std::vector<CmiHandlerInfo> **CmiHandlerTable; // array of handler vectors
 ConverseNodeQueue<void *> *CmiNodeQueue;
+CpvDeclare(Queue, CsdSchedQueue);
+CsvDeclare(Queue, CsdNodeQueue);
+CsvDeclare(CmiNodeLock, CsdNodeQueueLock);
 double Cmi_startTime;
 CmiSpanningTreeInfo *_topoTree = NULL;
 int CharmLibInterOperate;
@@ -44,6 +47,7 @@ int quietMode;
 int quietModeRequested;
 int userDrivenMode;
 int _replaySystem = 0;
+static int CmiMemoryIs_flag=0;
 CsvDeclare(CmiIpcManager*, coreIpcManager_);
 
 CmiNodeLock CmiMemLock_lock;
@@ -55,6 +59,8 @@ int _Cmi_numpes_global;
 int _Cmi_mynode_global;
 int _Cmi_numnodes_global;
 int Cmi_nodestartGlobal;
+int backend_poll_freq;
+int backend_poll_thread;
 
 void (*CmiTraceFn)(char **argv) = nullptr;
 
@@ -124,7 +130,11 @@ void converseRunPe(int rank) {
   collectiveInit();
   // Cmi_multicastHandler = CmiRegisterHandler(CmiMulticastHandler);
 
-  // barrier to ensure all global structs are initialized
+  // A global barrier to ensure all global structs are initialized
+  CmiNodeBarrier();
+  if (rank == 0) {
+    comm_backend::barrier();
+  }
   CmiNodeBarrier();
 
   CthInit(NULL);
@@ -223,6 +233,8 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
 
   if (plusPeSet)
     Cmi_mynodesize = Cmi_npes / Cmi_numnodes;
+  if (!plusPeSet && !plusPSet)
+    Cmi_mynodesize = 1;
   Cmi_nodestart = Cmi_mynode * Cmi_mynodesize;
   // register am handlers
   g_amHandler = comm_backend::registerAmHandler(CommRemoteHandler);
@@ -230,6 +242,13 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
 #ifdef RECONVERSE_ENABLE_CPU_AFFINITY
   CmiInitHwlocTopology();
 #endif
+
+  backend_poll_freq = 1; // default to poll every iteration
+  CmiGetArgInt(argv, "+backend_poll_freq", &backend_poll_freq);
+  if (backend_poll_freq < 1) backend_poll_freq = 1;
+  backend_poll_thread = 1; // default to every thread
+  CmiGetArgInt(argv, "+backend_poll_thread", &backend_poll_thread);
+  if (backend_poll_thread < 1) backend_poll_thread = 1;
 
   Cmi_argv = argv;
   Cmi_startfn = fn;
@@ -278,12 +297,23 @@ void CmiInitState(int rank) {
                 newZCPupGets); // Check if this is necessary
   CpvInitialize(int, interopExitFlag);
   CpvAccess(interopExitFlag) = 0;
+  if(rank == 0) CmiMemoryIs_flag |= CMI_MEMORY_IS_OS;
   #ifdef CMK_USE_SHMEM
   CsvInitialize(CmiIpcManager*, coreIpcManager_);
   CsvAccess(coreIpcManager_) = nullptr;
   #endif
   CmiOnesidedDirectInit();
   CcdModuleInit();
+  CpvInitialize(Queue, CsdSchedQueue);
+  CpvAccess(CsdSchedQueue) = (Queue)malloc(sizeof(QueueImpl));
+  QueueInit(CpvAccess(CsdSchedQueue));
+  CsvInitialize(Queue, CsdNodeQueue);
+  if (CmiMyRank() == 0) {
+    CsvAccess(CsdNodeQueueLock) = CmiCreateLock();
+    CsvAccess(CsdNodeQueue) = (Queue)malloc(sizeof(QueueImpl));
+    QueueInit(CsvAccess(CsdNodeQueue));
+  }
+  CmiNodeBarrier();
 }
 
 ConverseQueue<void *> *CmiGetQueue(int rank) { return Cmi_queues[rank]; }
@@ -1176,6 +1206,11 @@ void StartInteropScheduler() {
 }
 
 void StopInteropScheduler() { CpvAccess(interopExitFlag) = 1; }
+
+int CmiMemoryIs(int flag)
+{
+	return (CmiMemoryIs_flag&flag)==flag;
+}
 
 static char *CopyMsg(char *msg, int len) {
   char *copy = (char *)CmiAlloc(len);

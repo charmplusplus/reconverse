@@ -9,6 +9,8 @@ on:
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
+    env:
+      LCI_ATTR_BACKEND: ofi
     name: Build and Test
 
     steps:
@@ -52,4 +54,4 @@ jobs:
                 -DRECONVERSE_TEST_LAUNCHER="mpirun;--oversubscribe" \
                 .
             cmake --build build --target all
-            ctest --extra-verbose --timeout 60
+            ctest --test-dir build --extra-verbose --timeout 60

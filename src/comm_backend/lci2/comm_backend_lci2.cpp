@@ -35,11 +35,24 @@ void remoteCallback(lci::status_t status) {
 }
 
 void CommBackendLCI2::init(char **argv) {
-  lci::g_runtime_init_x().alloc_default_device(false)();
-
   int num_devices = 1;
   CmiGetArgInt(argv, "+lci_ndevices", (int *)&num_devices);
   CmiAssert(num_devices >= 1);
+
+  lci::global_initialize();
+  auto g_attr = lci::get_g_default_attr();
+  // We will make sure the total packet number is always at least twice as large as the total preposted receives.
+  // We also set a minimum of 1024 preposted receives per device and increase the total number of packets if needed.
+  if (g_attr.net_max_recvs * num_devices > g_attr.npackets / 2) {
+    g_attr.net_max_recvs = g_attr.npackets / 2 / num_devices;
+    if (g_attr.net_max_recvs < 1024) {
+      g_attr.net_max_recvs = 1024;
+      g_attr.npackets = 1024 * num_devices * 2;
+    }
+  }
+  lci::set_g_default_attr(g_attr);
+
+  lci::g_runtime_init_x().alloc_default_device(false)();
   m_devices.resize(num_devices);
   for (int i = 0; i < num_devices; i++) {
     m_devices[i] = lci::alloc_device();
@@ -60,6 +73,7 @@ void CommBackendLCI2::exit() {
   lci::free_comp(&m_local_comp);
   lci::free_comp(&m_remote_comp);
   lci::g_runtime_fina();
+  lci::global_finalize();
 }
 
 void CommBackendLCI2::initThread(int thread_id, int num_threads) {
