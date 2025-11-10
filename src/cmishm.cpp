@@ -37,8 +37,8 @@ static std::pair<int, ipc_shared_*> openShared_(int node) {
   auto size = CpvAccess(kSegmentSize) + sizeof(ipc_shared_);
   // generate a name for this pe
   auto slen = snprintf(NULL, 0, CMI_SHARED_FMT, (std::size_t)CsvAccess(node_pid), node);
-  auto name = new char[slen];
-  snprintf(name, slen, CMI_SHARED_FMT, (std::size_t)CsvAccess(node_pid), node);
+  auto name = new char[slen + 1];
+  snprintf(name, slen + 1, CMI_SHARED_FMT, (std::size_t)CsvAccess(node_pid), node);
   DEBUGF(("%d> opening share %s\n", CmiMyPe(), name));
   // try opening the share exclusively
   auto fd = shm_open(name, O_CREAT | O_EXCL | O_RDWR, 0666);
@@ -64,10 +64,17 @@ static std::pair<int, ipc_shared_*> openShared_(int node) {
 
 struct CmiIpcManager : public ipc_metadata_ {
   std::map<int, int> fds;
+  // cached values to avoid touching Cpv/Csv at static teardown
+  std::size_t mapped_size;
+  std::size_t node_pid_val;
 
   CmiIpcManager(std::size_t key) : ipc_metadata_(key) {
     auto firstPe = CmiNodeFirst(CmiMyNode());
     auto thisRank = CmiPhysicalRank(firstPe);
+    // cache map size and node pid while CPV/CSV systems are valid
+    this->mapped_size = CpvAccess(kSegmentSize) + sizeof(ipc_shared_);
+    CsvInitialize(pid_t, node_pid);
+    this->node_pid_val = (std::size_t)CsvAccess(node_pid);
     if (thisRank == 0) {
       if (sendPid_(this) == 1) {
         openAllShared_(this);
@@ -77,21 +84,26 @@ struct CmiIpcManager : public ipc_metadata_ {
   }
 
   virtual ~CmiIpcManager() {
-    auto& size = CpvAccess(kSegmentSize);
+    // use cached mapped size (set at construction) to avoid touching CPV/CSV
+    // during static teardown
+    std::size_t map_size = this->mapped_size;
+
     // for each rank/descriptor pair
     for (auto& pair : this->fds) {
-      auto& proc = pair.first;
-      auto& fd = pair.second;
-      // unmap the memory segment
-      munmap(this->shared[proc], size);
-      // close the file
-      close(fd);
-      // unlinking the shm segment for our pe
+      auto proc = pair.first;
+      auto fd = pair.second;
+      // only unmap if we have a valid pointer and a non-zero mapping size
+      auto it = this->shared.find(proc);
+      if (it != this->shared.end() && it->second != nullptr && map_size > 0) {
+        munmap(it->second, map_size);
+      }
+      // close the file if valid
+      if (fd >= 0) close(fd);
+      // unlinking the shm segment for our pe (use cached node pid)
       if (proc == this->mine) {
-        auto slen =
-            snprintf(NULL, 0, CMI_SHARED_FMT, (std::size_t)CsvAccess(node_pid), proc);
-        auto name = new char[slen];
-        snprintf(name, slen, CMI_SHARED_FMT, (std::size_t)CsvAccess(node_pid), proc);
+        auto slen = snprintf(NULL, 0, CMI_SHARED_FMT, this->node_pid_val, proc);
+        auto name = new char[slen + 1];
+        snprintf(name, slen + 1, CMI_SHARED_FMT, this->node_pid_val, proc);
         shm_unlink(name);
         delete[] name;
       }
