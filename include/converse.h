@@ -6,7 +6,6 @@
 #ifdef __cplusplus
 #include <atomic>
 #include <queue>
-#include <limits>
 #include <utility>
 #else
 #include <stdatomic.h>
@@ -1220,13 +1219,13 @@ struct CmiIpcManager;
 namespace cmi {
 namespace ipc {
 // recommended cutoff for block sizes
-CpvExtern(std::size_t, kRecommendedCutoff);
+CpvExtern(size_t, kRecommendedCutoff);
 // used to represent an empty linked list
-constexpr auto nil = std::uintptr_t(0);
+constexpr auto nil = uintptr_t(0);
 // used to represent the tail of a linked list
-constexpr auto max = std::numeric_limits<std::uintptr_t>::max();
+constexpr auto max = UINTPTR_MAX;
 // used to indicate a message bound for a node
-constexpr auto nodeDatagram = std::numeric_limits<CmiUInt2>::max();
+constexpr auto nodeDatagram = UINT16_MAX;
 // default number of attempts to alloc before timing out
 constexpr auto defaultTimeout = 4;
 }  // namespace ipc
@@ -1239,11 +1238,11 @@ public:
   // "home" rank of the block
   int src;
   int dst;
-  std::uintptr_t orig;
-  std::uintptr_t next;
-  std::size_t size;
+  uintptr_t orig;
+  uintptr_t next;
+  size_t size;
 
-  CmiIpcBlock(std::size_t size_, std::uintptr_t orig_)
+  CmiIpcBlock(size_t size_, uintptr_t orig_)
       : orig(orig_), next(cmi::ipc::nil), size(size_) {}
 };
 
