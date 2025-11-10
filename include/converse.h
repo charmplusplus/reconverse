@@ -1216,6 +1216,10 @@ void CmiInterSyncNodeSendAndFreeFn(int destNode, int partition, int messageSize,
 
 struct CmiIpcManager;
 
+#ifndef __cplusplus
+typedef struct CmiIpcManager CmiIpcManager;
+#endif
+
 #ifdef __cplusplus
 namespace cmi {
 namespace ipc {
