@@ -159,10 +159,11 @@ void converseRunPe(int rank) {
 }
 
 void CmiStartThreads() {
-  // allocate global arrayss
+  // allocate global arrays
   Cmi_queues = new ConverseQueue<void *> *[Cmi_mynodesize];
   CmiHandlerTable = new std::vector<CmiHandlerInfo> *[Cmi_mynodesize];
   CmiNodeQueue = new ConverseNodeQueue<void *>();
+  CmiQueueRegisterInit();
 
   _smp_mutex = CmiCreateLock();
   CmiMemLock_lock = CmiCreateLock();
