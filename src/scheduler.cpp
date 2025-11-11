@@ -20,6 +20,13 @@ void CsdScheduler() {
 
     CcdRaiseCondition(CcdSCHEDLOOP);
 
+    #ifdef CMK_USE_SHMEM
+        CmiIpcBlock* block = CmiPopIpcBlock(CsvAccess(coreIpcManager_));
+        if (block != nullptr) {
+          CmiDeliverIpcBlockMsg(block);
+        }
+    #endif
+
     // poll node queue
     if (!nodeQueue->empty()) {
       auto result = nodeQueue->pop();
