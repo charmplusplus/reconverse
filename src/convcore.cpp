@@ -214,7 +214,7 @@ void CmiStartThreads() {
 
   // Create threads for ranks 1 and up, run rank 0 on main thread (like original Converse)
   for (int i = 1; i < Cmi_mynodesize; i++) {
-    std::thread t(converseRunPe, i, 0); // everReturn is 0 for ranks > 0 because these ranks always run the start function
+    std::thread t(converseRunPe, i, 0); // everReturn is 0 for ranks > 0, meaning these ranks will call the start function and not return from ConverseInit
     t.detach();
   }
 
