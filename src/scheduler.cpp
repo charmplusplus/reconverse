@@ -261,6 +261,8 @@ void CsdSchedulePoll() {
 
 int CsdScheduler(int maxmsgs){
   if (maxmsgs < 0) {
+    //reset stop flag
+    CmiGetState()->stopFlag = 0;
     CsdScheduler(); //equivalent to CsdScheduleForever in old converse
   }
   else CsdSchedulePoll(); //not implementing CsdScheduleCount
