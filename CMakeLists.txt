@@ -37,8 +37,8 @@ option(RECONVERSE_TRY_ENABLE_COMM_LCI2 "whether to enable the LCIv2 backend" ON)
 option(RECONVERSE_AUTOFETCH_LCI2
         "whether to autofetch LCIv2 if LCI2 cannot be found" OFF)
 set(RECONVERSE_AUTOFETCH_LCI2_TAG
-    "163cb084f9c1892792c36e21e31e07998bd7a088"
-    CACHE STRING "The tag to fetch for LCIv2") # master branch as of 2025-10-13
+    "5c526672b7a9548013d8b45d8ebf06d5cac36e66"
+    CACHE STRING "The tag to fetch for LCIv2") # master branch as of 2025-11-7
 
 option(RECONVERSE_TRY_ENABLE_COMM_LCW "whether to enable the LCW backend" ON)
 option(RECONVERSE_AUTOFETCH_LCW
@@ -52,6 +52,7 @@ option(SPANTREE "whether to enable spanning tree collectives" OFF) #should turn 
 # Reconverse uses SMP always, but turn on this option for backwards compatibility (see pingpong_multipairs for example)
 option(CMK_SMP "whether to enable SMP support" ON)
 option(CMK_CPV_IS_SMP "whether to enable SMP support for cpvs" ON)
+option(CMK_USE_SHMEM "whether to use POSIX shared memory for IPC" OFF)
 
 option(RECONVERSE_ATOMIC_QUEUE "whether to use atomic queue" ON)
 
