@@ -185,14 +185,49 @@ void ConverseExit(int exitcode)
   // increment number of PEs ready for exit
   std::atomic_fetch_add_explicit(&numPEsReadyForExit, 1, std::memory_order_release);
   // we need everyone to spin unlike old converse to be able to exit threads
-  while (std::atomic_load_explicit(&numPEsReadyForExit, std::memory_order_acquire) != CmiMyNodeSize()) {}
-  
-  // All threads call exitThread() for their own cleanup
-  comm_backend::exitThread();
-  
-  // only rank 0 does cleanup and exits
+  while (std::atomic_load_explicit(&numPEsReadyForExit, std::memory_order_acquire) != CmiMyNodeSize()) {
+    // make progress while waiting so network progress can continue
+    comm_backend::progress();
+  }
+
+  // At this point all threads on the node are ready to exit. We must perform
+  // the inter-node barrier while per-thread communication contexts are still
+  // alive so that progress() can drive completion. To coordinate that,
+  // rank 0 performs the inter-node barrier and then notifies other threads
+  // (via an atomic) that the barrier is complete. After the notification,
+  // every thread performs its per-thread cleanup (exitThread). Finally,
+  // rank 0 waits for all threads to finish exitThread before tearing down
+  // the global comm backend and exiting the process.
+
+  static std::atomic<int> barrier_done{0};
+  static std::atomic<int> exitThread_done{0};
+
   if (CmiMyRank() == 0) {
+    // participate in the global barrier (blocks until other nodes arrive)
     comm_backend::barrier();
+    // let other local threads know barrier has completed
+    barrier_done.store(1, std::memory_order_release);
+  } else {
+    // other threads help make progress until rank 0 finishes the barrier
+    while (std::atomic_load_explicit(&barrier_done, std::memory_order_acquire) == 0) {
+      comm_backend::progress();
+    }
+  }
+
+  // Now every thread can clean up its thread-local comm state.
+  comm_backend::exitThread();
+
+  // signal we've finished exitThread()
+  std::atomic_fetch_add_explicit(&exitThread_done, 1, std::memory_order_release);
+
+  if (CmiMyRank() == 0) {
+    // wait for all local threads to complete their per-thread cleanup. Use
+    // progress() to avoid deadlock if any backend progress is needed.
+    while (std::atomic_load_explicit(&exitThread_done, std::memory_order_acquire) != CmiMyNodeSize()) {
+      comm_backend::progress();
+    }
+
+    // safe to tear down global comm backend and process-wide structures now
     comm_backend::exit();
     delete[] Cmi_queues;
     delete CmiNodeQueue;
@@ -202,8 +237,8 @@ void ConverseExit(int exitcode)
     CmiHandlerTable = nullptr;
     exit(exitcode);
   } else {
-    // Non-rank-0 threads block here indefinitely
-    // Rank 0's exit() call will terminate the entire process
+    // Non-rank-0 threads block here indefinitely; rank 0 will terminate the
+    // process once cleanup is done.
     while (true) {
       std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
