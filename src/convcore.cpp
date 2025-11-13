@@ -264,20 +264,36 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
   Cmi_startTime = getCurrentTime();
 
   Cmi_npes = 1; // default to 1
-  int plusPeSet = CmiGetArgInt(argv, "+pe", &Cmi_npes);
-  int plusPSet = CmiGetArgInt(argv, "+p", &Cmi_mynodesize);
+  int plusPeSet = CmiGetArgInt(argv, "+pe", &Cmi_npes); //total number of pes
+  int plusPorPPNSet = 0; // pes per process
+  int Cmi_mynodesize_p;
+  int Cmi_mynodesize_ppn;
+  int plusPSet = CmiGetArgInt(argv, "+p", &Cmi_mynodesize_p);
+  int plusPPNSet = CmiGetArgInt(argv, "+ppn", &Cmi_mynodesize_ppn);
+  if (plusPSet || plusPPNSet)
+  {
+    plusPorPPNSet = 1;
+    if (plusPPNSet && plusPSet) {
+      printf("warning: both +ppn and +p specified, using +ppn\n");
+      Cmi_mynodesize = Cmi_mynodesize_ppn;
+    }
+    else if (plusPPNSet)
+      Cmi_mynodesize = Cmi_mynodesize_ppn;
+    else
+      Cmi_mynodesize = Cmi_mynodesize_p;
+  } 
   Cmi_argvcopy = CmiCopyArgs(argv); // init for tracing
 
   comm_backend::init(argv);
   Cmi_mynode = comm_backend::getMyNodeId();
   Cmi_numnodes = comm_backend::getNumNodes();
   RDMAInit(argv);
-  if (plusPeSet && plusPSet && Cmi_npes != Cmi_mynodesize * Cmi_numnodes) {
+  if (plusPeSet && plusPorPPNSet && Cmi_npes != Cmi_mynodesize * Cmi_numnodes) {
     fprintf(stderr,
-            "Error: +pe <N> and +p <M> both set, but N != M * numnodes\n");
+            "Error: +pe <N> and (+p/+ppn) <M> both set, but N != M * numnodes\n");
     exit(1);
   }
-  if (plusPSet)
+  if (plusPorPPNSet)
     Cmi_npes = Cmi_mynodesize * Cmi_numnodes;
   if (Cmi_mynode == 0)
     printf("Charm++> Running in SMP mode on %d nodes and %d PEs\n",
@@ -296,7 +312,7 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
 
   if (plusPeSet)
     Cmi_mynodesize = Cmi_npes / Cmi_numnodes;
-  if (!plusPeSet && !plusPSet)
+  if (!plusPeSet && !plusPorPPNSet)
     Cmi_mynodesize = 1;
   Cmi_nodestart = Cmi_mynode * Cmi_mynodesize;
   // register am handlers
