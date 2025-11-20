@@ -126,7 +126,11 @@ void mempool_free_thread(void* ptr_free);
 }
 #endif
 
-#define ALIGNBUF 128 //sizeof(mempool_header)
+// ALIGNBUF must accommodate both mempool_header and CmiChunkHeader
+// mempool_header (used_header) is 64 bytes, CmiChunkHeader is 16 bytes minimum
+// Total with alignment should be at least 80 bytes, rounded up to next 16-byte boundary = 80
+// However, we use 128 to match cache line size and provide extra safety margin
+#define ALIGNBUF 128 
 #define   GetMempoolBlockPtr(x)   MEMPOOL_GetBlockPtr(MEMPOOL_GetMempoolHeader(x,sizeof(mempool_header)))
 #define   GetMempoolPtr(x)        MEMPOOL_GetMempoolPtr(MEMPOOL_GetMempoolHeader(x,sizeof(mempool_header)))
 

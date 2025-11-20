@@ -41,6 +41,9 @@ typedef struct CthThreadBase {
   int magic;     /* magic number for checking corruption */
   struct CthThreadListener *listener;
 
+  int eventID;
+  int srcPE;
+
 } CthThreadBase;
 
 struct CthThreadStruct {
@@ -99,14 +102,14 @@ void CthSetStrategy(CthThread t, CthAwkFn awkfn, CthThFn chsfn) {
 void CthEnqueueNormalThread(CthThreadToken *token, int s, int pb,
                             unsigned int *prio) {
   CmiSetHandler(token, CpvAccess(CthResumeNormalThreadIdx));
-  CmiGetQueue(CmiMyPe())->push(token);
+  CmiGetQueue(CmiMyRank())->push(token);
 }
 
 void CthEnqueueSchedulingThread(CthThreadToken *token, int s, int pb,
                                 unsigned int *prio) {
   CmiSetHandler(token, CpvAccess(CthResumeSchedulingThreadIdx));
   CpvStaticDeclare(int, CthResumeSchedulingThreadIdx);
-  CmiGetQueue(CmiMyPe())->push(token);
+  CmiGetQueue(CmiMyRank())->push(token);
 }
 
 static CthThread CthSuspendNormalThread(void) {
@@ -163,6 +166,8 @@ static void CthThreadInit(CthThread t) {
   th->tid.id[0] = CmiMyPe();
   th->tid.id[1] = std::atomic_fetch_add(&serialno, 1);
   th->tid.id[2] = 0;
+
+  th->listener = NULL;
 
   th->magic = THD_MAGIC_NUM;
 }
@@ -309,6 +314,8 @@ void CthResume(CthThread t) {
     */
 }
 
+int CthIsSuspendable(CthThread t) { return B(t)->suspendable; }
+
 /*
 Suspend: finds the next thread to execute, and resumes it
 */
@@ -356,6 +363,21 @@ void CthAwaken(CthThread th) {
   CthThreadToken *token = B(th)->token;
   constexpr int strategy = CQS_QUEUEING_FIFO;
   awakenfn(token, strategy, 0, 0); // If this crashes, disable ASLR.
+}
+
+void CthAwakenPrio(CthThread th, int s, int pb, unsigned int *prio)
+{
+  CthAwkFn awakenfn = B(th)->awakenfn;
+  if (awakenfn == 0) CthNoStrategy();
+#if CMK_TRACE_ENABLED
+#if ! CMK_TRACE_IN_CHARM
+  if(CpvAccess(traceOn))
+    traceAwaken(th);
+#endif
+#endif
+  CthThreadToken * token = B(th)->token;
+  awakenfn(token, s, pb, prio); // If this crashes, disable ASLR.
+  B(th)->scheduled++;
 }
 
 void CthYield(void) {
@@ -481,3 +503,21 @@ void CthRegistered(size_t maxOffset) {
 
 /* possible hack? CW */
 char *CthGetData(CthThread t) { return B(t)->data; }
+
+void CthSetEventInfo(CthThread t, int event, int srcPE) 
+{
+  B(t)->eventID = event;
+  B(t)->srcPE = srcPE;
+}
+
+void CthFree(CthThread t)
+{
+  if (t==NULL) return;
+
+  if (t != CthSelf()) {
+    CthThreadFree(t);
+  } else
+    t->base.exiting = 1;
+}
+
+int CthImplemented(void) { return 1; }

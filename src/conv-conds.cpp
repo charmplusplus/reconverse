@@ -13,20 +13,23 @@
  * Structure to hold the requisites for a conditional callback
  */
 struct ccd_cond_callback {
-  CmiHandler fn;
+  CcdCondFn fn;
   void *arg;
 
-  ccd_cond_callback(CmiHandler f, void *a) : fn{f}, arg{a} {}
+  ccd_cond_callback(CcdCondFn f, void *a) : fn{f}, arg{a} {}
 };
 
 /**
  * Structure to hold the requisites for a periodic callback
  */
 struct ccd_periodic_callback {
-  CmiHandler fn;
+  CcdVoidFn fn;
   void *arg;
+  int pe;			/* the pe that sets the callback */
 
-  ccd_periodic_callback(CmiHandler f, void *a) : fn{f}, arg{a} {}
+  ccd_periodic_callback(CcdVoidFn f, void *a, int p)
+    : fn{f}, arg{a}, pe{p}
+  { }
 };
 
 /**
@@ -73,7 +76,7 @@ static inline void remove_n_elems(ccd_cblist &l, int condnum, size_t n) {
 }
 
 /** Append callback to the given cblist, and return the index. */
-static inline int append_elem(ccd_cblist &l, int condnum, CmiHandler fn,
+static inline int append_elem(ccd_cblist &l, int condnum, CcdCondFn fn,
                               void *arg) {
   if (isTimed(condnum))
     _ccd_num_timed_cond_cbs++;
@@ -162,7 +165,7 @@ struct ccd_heap_elem {
   double time;
   ccd_periodic_callback cb;
 
-  ccd_heap_elem(double t, CmiHandler fn, void *arg) : time{t}, cb{fn, arg} {}
+  ccd_heap_elem(double t, CcdVoidFn fn, void *arg, int pe) : time{t}, cb{fn, arg, pe} {}
 
   bool operator>(const ccd_heap_elem &rhs) const {
     return this->time > rhs.time;
@@ -184,9 +187,9 @@ int CcdNumTimerCBs(void) { return ccd_heap.size() + _ccd_num_timed_cond_cbs; }
 /**
  * Insert a new callback into the heap
  */
-static inline void ccd_heap_insert(double t, CmiHandler fnp, void *arg) {
+static inline void ccd_heap_insert(double t, CcdVoidFn fnp, void *arg, int pe = CcdIGNOREPE) {
   auto &h = ccd_heap;
-  h.emplace(t, fnp, arg);
+  h.emplace(t, fnp, arg, pe);
 }
 
 /**
@@ -202,11 +205,11 @@ static void ccd_heap_update(double curWallTime) {
       break;
     const ccd_periodic_callback cb = std::move(e.cb);
     h.pop();
-    (*(cb.fn))(cb.arg);
+    (*(cb.fn))(cb.arg, curWallTime);
   }
 }
 
-void CcdCallBacksReset(void *ignored);
+CLINKAGE void CcdCallBacksReset(void *ignored);
 
 /**
  * Initialize the callback containers
@@ -226,7 +229,7 @@ void CcdModuleInit() {
  * Register a callback function that will be triggered when the specified
  * condition is raised the next time
  */
-int CcdCallOnCondition(int condnum, CmiHandler fnp, void *arg) {
+int CcdCallOnCondition(int condnum, CcdCondFn fnp, void *arg) {
   return append_elem(conds.condcb[condnum], condnum, fnp, arg);
 }
 
@@ -234,7 +237,7 @@ int CcdCallOnCondition(int condnum, CmiHandler fnp, void *arg) {
  * Register a callback function that will be triggered *whenever* the specified
  * condition is raised
  */
-int CcdCallOnConditionKeep(int condnum, CmiHandler fnp, void *arg) {
+int CcdCallOnConditionKeep(int condnum, CcdCondFn fnp, void *arg) {
   return append_elem(conds.condcb_keep[condnum], condnum, fnp, arg);
 }
 
@@ -253,10 +256,21 @@ void CcdCancelCallOnConditionKeep(int condnum, int idx) {
 }
 
 /**
+ * Register a callback function that will be triggered on the specified PE
+ * after a minimum delay of deltaT
+ */
+void CcdCallFnAfterOnPE(CcdVoidFn fnp, void *arg, double deltaT, int pe)
+{
+    double ctime  = CmiWallTimer();
+    double tcall = ctime + deltaT * (1.0/1000.0);
+    ccd_heap_insert(tcall, fnp, arg, pe);
+} 
+
+/**
  * Register a callback function that will be triggered after a minimum
  * delay of deltaT
  */
-void CcdCallFnAfter(CmiHandler fnp, void *arg, double deltaT) {
+void CcdCallFnAfter(CcdVoidFn fnp, void *arg, double deltaT) {
   double ctime = CmiWallTimer();
   double tcall = ctime + deltaT * (1.0 / 1000.0);
   ccd_heap_insert(tcall, fnp, arg);

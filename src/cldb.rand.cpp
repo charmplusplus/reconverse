@@ -15,9 +15,7 @@ void CldHandler(char *msg) {
   CldRestoreHandler((char *)msg);
   ifn = (CldInfoFn)CmiHandlerToFunction(CmiGetInfo(msg));
   ifn(msg, &pfn, &len, &queueing, &priobits, &prioptr);
-  // CsdEnqueueGeneral(msg, queueing, priobits, prioptr);
-  CmiPushPE(CmiMyPe(), len,
-            msg); // use priority queue when we add priority queue
+  CsdEnqueueGeneral(msg, queueing, priobits, prioptr);
 }
 
 void CldNodeHandler(char *msg) {
@@ -42,7 +40,7 @@ void CldEnqueueGroup(CmiGroup grp, void *msg, int infofn) {
     pfn(&msg);
     ifn(msg, &pfn, &len, &queueing, &priobits, &prioptr);
   }
-  CldSwitchHandler((char *)msg, CldHandlerIndex);
+  CldSwitchHandler((char *)msg, CpvAccess(CldHandlerIndex));
   CmiSetInfo(msg, infofn);
 
   CmiSyncMulticastAndFree(grp, len, msg);
@@ -61,7 +59,7 @@ void CldEnqueueWithinNode(void *msg, int infofn) {
     pfn(&msg);
     ifn(msg, &pfn, &len, &queueing, &priobits, &prioptr);
   }
-  CldSwitchHandler((char *)msg, CldHandlerIndex);
+  CldSwitchHandler((char *)msg, CpvAccess(CldHandlerIndex));
   CmiSetInfo(msg, infofn);
 
   CmiWithinNodeBroadcast(len, (char *)msg);
@@ -77,7 +75,7 @@ void CldEnqueueMulti(int npes, const int *pes, void *msg, int infofn) {
     pfn(&msg);
     ifn(msg, &pfn, &len, &queueing, &priobits, &prioptr);
   }
-  CldSwitchHandler((char *)msg, CldHandlerIndex);
+  CldSwitchHandler((char *)msg, CpvAccess(CldHandlerIndex));
   CmiSetInfo(msg, infofn);
 
   CmiSyncListSendAndFree(npes, pes, len, msg);
@@ -90,15 +88,12 @@ void CldEnqueue(int pe, void *msg, int infofn) {
   CldPackFn pfn;
   if (pe == CLD_ANYWHERE) {
     pe = (((CrnRand() + CmiMyPe()) & 0x7FFFFFFF) % CmiNumPes());
-    /* optimizationfor SMP */
-#if CMK_NODE_QUEUE_AVAILABLE
     if (CmiNodeOf(pe) == CmiMyNode()) {
       CldNodeEnqueue(CmiMyNode(), msg, infofn);
       return;
     }
-#endif
     if (pe != CmiMyPe())
-      CpvAccess(CldRelocatedMessages)++;
+      CldRelocatedMessages++;
   }
   ifn = (CldInfoFn)CmiHandlerToFunction(infofn);
   if (pe == CmiMyPe() && !CmiImmIsRunning()) {
@@ -135,7 +130,7 @@ void CldNodeEnqueue(int node, void *msg, int infofn) {
   if (node == CLD_ANYWHERE) {
     node = (((CrnRand() + CmiMyNode()) & 0x7FFFFFFF) % CmiNumNodes());
     if (node != CmiMyNode())
-      CpvAccess(CldRelocatedMessages)++;
+      CldRelocatedMessages++;
   }
   if (node == CmiMyNode() && !CmiImmIsRunning()) {
     ifn(msg, &pfn, &len, &queueing, &priobits, &prioptr);
@@ -146,7 +141,7 @@ void CldNodeEnqueue(int node, void *msg, int infofn) {
       pfn(&msg);
       ifn(msg, &pfn, &len, &queueing, &priobits, &prioptr);
     }
-    CldSwitchHandler((char *)msg, CpvAccess(CldNodeHandlerIndex));
+    CldSwitchHandler((char *)msg, CldNodeHandlerIndex);
     CmiSetInfo(msg, infofn);
     if (node == CLD_BROADCAST) {
       CmiSyncNodeBroadcastAndFree(len, msg);
@@ -160,14 +155,10 @@ void CldNodeEnqueue(int node, void *msg, int infofn) {
 void CldModuleInit(char **argv) {
   CpvInitialize(int, CldHandlerIndex);
   CpvAccess(CldHandlerIndex) = CmiRegisterHandler((CmiHandler)CldHandler);
-  CpvInitialize(int, CldNodeHandlerIndex);
-  CpvAccess(CldNodeHandlerIndex) =
-      CmiRegisterHandler((CmiHandler)CldNodeHandler);
-  CpvInitialize(int, CldRelocatedMessages);
-  CpvInitialize(int, CldLoadBalanceMessages);
-  CpvInitialize(int, CldMessageChunks);
-  CpvAccess(CldRelocatedMessages) = CpvAccess(CldLoadBalanceMessages) =
-      CpvAccess(CldMessageChunks) = 0;
+  CldNodeHandlerIndex = CmiRegisterHandler((CmiHandler)CldNodeHandler);
+  CldRelocatedMessages = 0;
+  CldLoadBalanceMessages = 0;
+  CldMessageChunks = 0;
   CldModuleGeneralInit(argv);
 }
 

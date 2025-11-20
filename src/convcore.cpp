@@ -5,17 +5,19 @@
 #include "scheduler.h"
 
 #include <cinttypes>
+#include <conv-rdma.h>
 #include <cstdarg>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <thread>
 #include <vector>
+#include <sys/time.h>
 
 // GLOBALS
-int Cmi_argc;
 static char **Cmi_argv;
-int Cmi_npes;   // total number of PE's across the entire system
+char **Cmi_argvcopy; // do not remove, needed for tracing
+int Cmi_npes;        // total number of PE's across the entire system
 int Cmi_nranks; // TODO: this isnt used in old converse, but we need to know how
                 // many PEs are on our node?
 int Cmi_mynode;
@@ -27,11 +29,40 @@ int Cmi_numnodes;   // represents the number of physical nodes/systems machine
 int Cmi_nodestart;
 std::vector<CmiHandlerInfo> **CmiHandlerTable; // array of handler vectors
 ConverseNodeQueue<void *> *CmiNodeQueue;
+CpvDeclare(Queue, CsdSchedQueue);
+CsvDeclare(Queue, CsdNodeQueue);
+CsvDeclare(CmiNodeLock, CsdNodeQueueLock);
 double Cmi_startTime;
 CmiSpanningTreeInfo *_topoTree = NULL;
 int CharmLibInterOperate;
+int _immediateLock = 0;
+std::atomic<int> _cleanUp = 0;
 void *memory_stack_top;
 CmiNodeLock _smp_mutex;
+CpvDeclare(std::vector<NcpyOperationInfo *>, newZCPupGets);
+CpvCExtern(int, interopExitFlag);
+CpvDeclare(int, interopExitFlag);
+std::atomic<int> ckExitComplete{0};
+int quietMode;
+int quietModeRequested;
+int userDrivenMode;
+int _replaySystem = 0;
+static int CmiMemoryIs_flag=0;
+CsvDeclare(CmiIpcManager*, coreIpcManager_);
+
+CmiNodeLock CmiMemLock_lock;
+CpvDeclare(int, isHelperOn);
+//partition
+PartitionInfo _partitionInfo;
+int _Cmi_mype_global;
+int _Cmi_numpes_global;
+int _Cmi_mynode_global;
+int _Cmi_numnodes_global;
+int Cmi_nodestartGlobal;
+int backend_poll_freq;
+int backend_poll_thread;
+
+void (*CmiTraceFn)(char **argv) = nullptr;
 
 void CldModuleInit(char **);
 
@@ -40,7 +71,7 @@ static ConverseQueue<void *> **Cmi_queues; // array of queue pointers
 
 // PE LOCALS
 thread_local int Cmi_myrank;
-thread_local CmiState *Cmi_state;
+thread_local CmiState Cmi_state;
 thread_local bool idle_condition;
 thread_local double idle_time;
 
@@ -50,49 +81,83 @@ int Cmi_exitHandler;
 
 // TODO: padding for all these thread_locals and cmistates?
 
-comm_backend::AmHandler AmHandlerPE;
-comm_backend::AmHandler AmHandlerNode;
+comm_backend::AmHandler g_amHandler;
 
-void CommLocalHandler(comm_backend::Status status) { CmiFree(status.msg); }
+CpvStaticDeclare(double, clocktick);
+CpvStaticDeclare(int,inittime_wallclock);
+CpvStaticDeclare(int,inittime_virtual);
 
-void CommRemoteHandlerPE(comm_backend::Status status) {
-  CmiMessageHeader *header = (CmiMessageHeader *)status.msg;
-  int destPE = header->destPE;
-  CmiPushPE(destPE, status.size, status.msg);
+void registerTraceInit(void (*fn)(char **argv)) {
+  CmiTraceFn = fn;
 }
 
-void CommRemoteHandlerNode(comm_backend::Status status) {
-  CmiNodeQueue->push(status.msg);
+void CommLocalHandler(comm_backend::Status status) {
+  CmiFree(const_cast<void *>(status.local_buf));
+}
+
+void CommRemoteHandler(comm_backend::Status status) {
+  CmiMessageHeader *header = (CmiMessageHeader *)status.local_buf;
+  int destPE = header->destPE;
+  if (destPE == CmiMessageDestPENode) {
+    CmiNodeQueue->push(const_cast<void *>(status.local_buf));
+  } else {
+    CmiPushPE(destPE, status.size, const_cast<void *>(status.local_buf));
+  }
 }
 
 void CmiCallHandler(int handler, void *msg) {
-  CmiGetHandlerTable()->at(handler).hdlr(msg);
+  CmiHandlerInfo h = CmiGetHandlerTable()->at(handler);
+  if (h.userPtr) {
+    h.exhdlr(msg, h.userPtr);
+  } else {
+    h.hdlr(msg);
+  }
 }
 
 void converseRunPe(int rank) {
+  char **CmiMyArgv;
+  CmiMyArgv = CmiCopyArgs(Cmi_argv);
+
   // init state
   CmiInitState(rank);
+  // init comm_backend
+  comm_backend::initThread(rank, CmiMyNodeSize());
 
   // init things like cld module, ccs, etc
-  CldModuleInit(Cmi_argv);
-#ifdef SET_CPU_AFFINITY
-  CmiSetCPUAffinity(rank);
-#endif
+  CldModuleInit(CmiMyArgv);
 
   Cmi_exitHandler = CmiRegisterHandler(CmiExitHandler);
   collectiveInit();
   // Cmi_multicastHandler = CmiRegisterHandler(CmiMulticastHandler);
 
-  // barrier to ensure all global structs are initialized
+  // A global barrier to ensure all global structs are initialized
   comm_backend::init_mempool();
+  CmiNodeBarrier();
+  if (rank == 0) {
+    comm_backend::barrier();
+  }
   CmiNodeBarrier();
 
   CthInit(NULL);
   CthSchedInit();
 
+  CpvInitialize(int, isHelperOn);
+  CpvAccess(isHelperOn) = 0;
+
+  if (CmiTraceFn)
+    CmiTraceFn(Cmi_argv);
+
   // call initial function and start scheduler
-  Cmi_startfn(Cmi_argc, Cmi_argv);
+  Cmi_startfn(CmiGetArgc(CmiMyArgv), CmiMyArgv);
   CsdScheduler();
+
+  // Wait for all PEs on this node to finish
+  CmiNodeBarrier();
+
+  // Finalize comm_backend
+  comm_backend::exitThread();
+  // free args
+  CmiFreeArgs(CmiMyArgv);
 }
 
 void CmiStartThreads() {
@@ -102,6 +167,7 @@ void CmiStartThreads() {
   CmiNodeQueue = new ConverseNodeQueue<void *>();
 
   _smp_mutex = CmiCreateLock();
+  CmiMemLock_lock = CmiCreateLock();
 
   // make sure the queues are allocated before PEs start sending messages around
   comm_backend::barrier();
@@ -118,6 +184,7 @@ void CmiStartThreads() {
 
   // make sure all PEs are done before we free the queues.
   comm_backend::barrier();
+  comm_backend::exit();
   delete[] Cmi_queues;
   delete CmiNodeQueue;
   delete[] CmiHandlerTable;
@@ -134,18 +201,22 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
 
   Cmi_startTime = getCurrentTime();
 
-  Cmi_npes = atoi(argv[2]);
-  // int plusPSet = CmiGetArgInt(argv,"+pe",&Cmi_npes);
+  Cmi_npes = 1; // default to 1
+  int plusPeSet = CmiGetArgInt(argv, "+pe", &Cmi_npes);
+  int plusPSet = CmiGetArgInt(argv, "+p", &Cmi_mynodesize);
+  Cmi_argvcopy = CmiCopyArgs(argv); // init for tracing
 
-  Cmi_argc = argc - 2; // TODO: Cmi_argc doesn't include runtime args?
-  Cmi_argv = (char **)malloc(sizeof(char *) * (argc + 1));
-  int i;
-  for (i = 2; i <= argc; i++)
-    Cmi_argv[i - 2] = argv[i];
-
-  comm_backend::init(&argc, &Cmi_argv);
+  comm_backend::init(argv);
   Cmi_mynode = comm_backend::getMyNodeId();
   Cmi_numnodes = comm_backend::getNumNodes();
+  RDMAInit(argv);
+  if (plusPeSet && plusPSet && Cmi_npes != Cmi_mynodesize * Cmi_numnodes) {
+    fprintf(stderr,
+            "Error: +pe <N> and +p <M> both set, but N != M * numnodes\n");
+    exit(1);
+  }
+  if (plusPSet)
+    Cmi_npes = Cmi_mynodesize * Cmi_numnodes;
   if (Cmi_mynode == 0)
     printf("Charm++> Running in SMP mode on %d nodes and %d PEs\n",
            Cmi_numnodes, Cmi_npes);
@@ -160,35 +231,53 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
             "Error: Number of PEs must be a multiple of number of nodes\n");
     exit(1);
   }
-  Cmi_mynodesize = Cmi_npes / Cmi_numnodes;
+
+  if (plusPeSet)
+    Cmi_mynodesize = Cmi_npes / Cmi_numnodes;
+  if (!plusPeSet && !plusPSet)
+    Cmi_mynodesize = 1;
   Cmi_nodestart = Cmi_mynode * Cmi_mynodesize;
   // register am handlers
-  AmHandlerPE = comm_backend::registerAmHandler(CommRemoteHandlerPE);
-  AmHandlerNode = comm_backend::registerAmHandler(CommRemoteHandlerNode);
+  g_amHandler = comm_backend::registerAmHandler(CommRemoteHandler);
 
-#ifdef SET_CPU_AFFINITY
+#ifdef RECONVERSE_ENABLE_CPU_AFFINITY
   CmiInitHwlocTopology();
 #endif
 
+  backend_poll_freq = 1; // default to poll every iteration
+  CmiGetArgInt(argv, "+backend_poll_freq", &backend_poll_freq);
+  if (backend_poll_freq < 1) backend_poll_freq = 1;
+  backend_poll_thread = 1; // default to every thread
+  CmiGetArgInt(argv, "+backend_poll_thread", &backend_poll_thread);
+  if (backend_poll_thread < 1) backend_poll_thread = 1;
+
+  Cmi_argv = argv;
   Cmi_startfn = fn;
   CharmLibInterOperate = 0;
 
-  CmiStartThreads();
-  free(Cmi_argv);
+#ifdef CMK_HAS_PARTITION
+  CmiCreatePartitions(argv);
+  #else
+  _partitionInfo.type = PARTITION_SINGLETON;
+  _partitionInfo.numPartitions = 1;
+  _partitionInfo.myPartition = 0;
+  _Cmi_numnodes_global = Cmi_numnodes;
+  _Cmi_mynode_global = Cmi_mynode;
+  _Cmi_numpes_global = Cmi_npes;
+  Cmi_nodestartGlobal = _Cmi_mynode_global * Cmi_mynodesize;
+  #endif
 
-  comm_backend::exit();
+  CmiStartThreads();
 }
 
 // CMI STATE
-CmiState *CmiGetState(void) { return Cmi_state; };
+CmiState *CmiGetState(void) { return &Cmi_state; };
 
 void CmiInitState(int rank) {
   // allocate state
-  Cmi_state = new CmiState;
-  Cmi_state->pe = Cmi_nodestart + rank;
-  Cmi_state->rank = rank;
-  Cmi_state->node = Cmi_mynode;
-  Cmi_state->stopFlag = 0;
+  Cmi_state.pe = Cmi_nodestart + rank;
+  Cmi_state.rank = rank;
+  Cmi_state.node = Cmi_mynode;
 
   Cmi_myrank = rank;
 
@@ -205,8 +294,27 @@ void CmiInitState(int rank) {
 
   // random
   CrnInit();
-
+  CpvInitialize(std::vector<NcpyOperationInfo *>,
+                newZCPupGets); // Check if this is necessary
+  CpvInitialize(int, interopExitFlag);
+  CpvAccess(interopExitFlag) = 0;
+  if(rank == 0) CmiMemoryIs_flag |= CMI_MEMORY_IS_OS;
+  #ifdef CMK_USE_SHMEM
+  CsvInitialize(CmiIpcManager*, coreIpcManager_);
+  CsvAccess(coreIpcManager_) = nullptr;
+  #endif
+  CmiOnesidedDirectInit();
   CcdModuleInit();
+  CpvInitialize(Queue, CsdSchedQueue);
+  CpvAccess(CsdSchedQueue) = (Queue)malloc(sizeof(QueueImpl));
+  QueueInit(CpvAccess(CsdSchedQueue));
+  CsvInitialize(Queue, CsdNodeQueue);
+  if (CmiMyRank() == 0) {
+    CsvAccess(CsdNodeQueueLock) = CmiCreateLock();
+    CsvAccess(CsdNodeQueue) = (Queue)malloc(sizeof(QueueImpl));
+    QueueInit(CsvAccess(CsdNodeQueue));
+  }
+  CmiNodeBarrier();
 }
 
 ConverseQueue<void *> *CmiGetQueue(int rank) { return Cmi_queues[rank]; }
@@ -249,7 +357,7 @@ void CmiSetInfo(void *msg, int infofn) {
   header->collectiveMetaInfo = infofn;
 }
 
-void CmiNumberHandler(int n, CmiHandler h){
+void CmiNumberHandler(int n, CmiHandler h) {
   CmiHandlerInfo newEntry;
   newEntry.hdlr = h;
   newEntry.userPtr = nullptr;
@@ -285,16 +393,44 @@ void CmiPushPE(int destPE, void *msg) {
   CmiPushPE(destPE, messageSize, msg);
 }
 
+void CmiPushNode(void *msg) {
+  CmiNodeQueue->push(msg);
+}
+
 void *CmiAlloc(int size) {
   if (size <= 0) {
     CmiPrintf("CmiAlloc: size <= 0\n");
     return nullptr;
   }
-  CmiPrintf("Size = %zu\n", size);
+  CmiPrintf("CmiAlloc: Allocating size = %d\n", size);
+  // comm_backend::malloc returns a pointer to where CmiChunkHeader should be placed
+  // Layout after malloc: [mempool_header][CmiChunkHeader][user space]
+  //                                       ^ptr returned
   void* res = comm_backend::malloc(size, sizeof(CmiChunkHeader));
-    ((CmiChunkHeader*)res)->size = size;
-  CmiPrintf("Allocated size = %i, ptr = %p\n", size, res + sizeof(CmiChunkHeader));
-  return res + sizeof(CmiChunkHeader);
+
+  if (size >= CmiMsgHeaderSizeBytes) {
+    // Set zcMsgType in the converse message header to CMK_REG_NO_ZC_MSG
+    CMI_ZC_MSGTYPE((void *)res) = CMK_REG_NO_ZC_MSG;
+    CMI_MSG_NOKEEP((void *)res) = 0;
+  }
+
+  REFFIELDSET(res, 1);
+  SIZEFIELD(res) = size;
+  CmiPrintf("Allocated CmiChunkHeader at %p, user ptr = %p\n", res, res + sizeof(CmiChunkHeader));
+  // Return pointer to user data (after CmiChunkHeader)
+  return (char*)res + sizeof(CmiChunkHeader);
+}
+
+// header ref count methods
+
+// TODO: what is this for? still needed? copied from old converse.
+static void *CmiAllocFindEnclosing(void *blk) {
+  int refCount = REFFIELD(blk);
+  while (refCount < 0) {
+    blk = (void *)((char *)blk + refCount); /* Jump to enclosing block */
+    refCount = REFFIELD(blk);
+  }
+  return blk;
 }
 
 void CmiFree(void *msg) {
@@ -302,34 +438,39 @@ void CmiFree(void *msg) {
     CmiPrintf("CmiFree: msg is nullptr\n");
     return;
   }
-  comm_backend::free(msg);
-}
+  void *parentBlk = CmiAllocFindEnclosing(msg);
+  int refCount = REFFIELDDEC(parentBlk);
 
-//header ref count methods
+  // TODO: does this make sense??
+  // if(refCount==0) /* Logic error: reference count shouldn't already have been
+  // zero */
+  //   CmiAbort("CmiFree reference count was zero-- is this a duplicate free?");
 
-static void *CmiAllocFindEnclosing(void *blk) {
-  int refCount = REFFIELD(blk);
-  while (refCount < 0) {
-    blk = (void *)((char*)blk+refCount); /* Jump to enclosing block */
-    refCount = REFFIELD(blk);
+  #ifdef CMK_USE_SHMEM
+    // we should only free _our_ IPC blocks -- so calling CmiFree on
+    // an IPC block issued by another process will cause a bad free!
+    // (note -- this would only occur if you alloc an ipc block then
+    //          decide not to send it; that should be avoided! )
+    CmiIpcBlock* ipc;
+    auto* manager = CsvAccess(coreIpcManager_);
+    if (msg && (ipc = CmiIsIpcBlock(manager, BLKSTART(msg), CmiMyNode()))) {
+      CmiFreeIpcBlock(manager, ipc);
+      return;
+    }
+  #endif
+
+  if (refCount == 1) {
+    //free(BLKSTART(parentBlk));
+    comm_backend::free(msg);
   }
-  return blk;
+  
 }
 
-int CmiGetReference(void *blk)
-{
-  return REFFIELD(CmiAllocFindEnclosing(blk));
-}
+int CmiGetReference(void *blk) { return REFFIELD(CmiAllocFindEnclosing(blk)); }
 
-void CmiReference(void *blk)
-{
-  REFFIELDINC(CmiAllocFindEnclosing(blk));
-}
+void CmiReference(void *blk) { REFFIELDINC(CmiAllocFindEnclosing(blk)); }
 
-int CmiSize(void *blk)
-{
-  return SIZEFIELD(blk);
-}
+int CmiSize(void *blk) { return SIZEFIELD(blk); }
 
 void CmiMemoryMarkBlock(void *blk) {}
 
@@ -353,19 +494,56 @@ void CmiSyncSendAndFree(int destPE, int messageSize, void *msg) {
   if (CmiMyNode() == destNode) {
     CmiPushPE(destPE, messageSize, msg);
   } else {
-    comm_backend::sendAm(destNode, msg, messageSize, comm_backend::MR_NULL,
-                         CommLocalHandler,
-                         AmHandlerPE); // Commlocalhandler will free msg
+    comm_backend::issueAm(destNode, msg, messageSize, MRFIELD(msg),
+                          CommLocalHandler, g_amHandler,
+                          nullptr); // Commlocalhandler will free msg
   }
 }
 
+void CmiInterSyncSend(int destPE, int partition, int messageSize, void *msg) {
+  char *copymsg = (char *)CmiAlloc(messageSize);
+  std::memcpy(copymsg, msg, messageSize);
+  CmiInterSyncSendAndFree(destPE, partition, messageSize, copymsg);
+}
 
+void CmiInterSyncSendAndFree(int destPE, int partition, int messageSize,
+                             void *msg) {
+  CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
+  header->destPE = destPE;
+  // check partition num
+  if (partition < 0 || partition >= CmiNumPartitions()) {
+    CmiAbort("CmiInterSyncSend: partition %d out of range\n", partition);
+  }
+  // check if this is my partition, if so sync send
+  if (CmiMyPartition() == partition) {
+    CmiSyncSendAndFree(destPE, messageSize, msg);
+    return;
+  }
+  // not my partition, use comm backend
+  // translate destPE to global
+  int globalDestPE = CmiGetPeGlobal(destPE, partition);
+  header->destPE = globalDestPE;
+  int destNode = CmiGetNodeGlobal(CmiNodeOf(globalDestPE), partition);
+  comm_backend::issueAm(destNode, msg, messageSize, MRFIELD(msg),
+                        CommLocalHandler, g_amHandler, nullptr);
+}
+
+void CmiInterSyncSendFn(int destPE, int partition, int messageSize, char *msg) {
+  CmiInterSyncSend(destPE, partition, messageSize, (void *)msg);
+}
+
+void CmiInterFreeSendFn(int destPE, int partition, int messageSize, char *msg) {
+  CmiInterSyncSendAndFree(destPE, partition, messageSize, (void *)msg);
+}
 
 // EXIT TOOLS
 
 void CmiExitHelper(int status) {
-  CmiMessageHeader *exitMsg = new CmiMessageHeader(); // might need to allocate
+  CmiMessageHeader *exitMsg = (CmiMessageHeader *)CmiAlloc(
+      CmiMsgHeaderSizeBytes); // might need to allocate
   exitMsg->handlerId = Cmi_exitHandler;
+  exitMsg->collectiveMetaInfo =
+      status; // use collectiveMetaInfo to pass exit status
   CmiSyncBroadcastAllAndFree(sizeof(*exitMsg), exitMsg);
 }
 
@@ -396,18 +574,20 @@ int CmiRegisterHandlerEx(CmiHandlerEx h, void *userPtr) {
 
 void CmiNodeBarrier(void) {
   static Barrier nodeBarrier(CmiMyNodeSize());
-  nodeBarrier.wait(); // TODO: this may be broken...
+  int64_t ticket = nodeBarrier.arrive();
+  while (!nodeBarrier.test_ticket(ticket)) {
+    comm_backend::progress();
+  }
 }
 
 // TODO: in the original converse, this variant blocks comm thread as well.
 // CmiNodeBarrier does not.
-void CmiNodeAllBarrier() {
-  static Barrier nodeBarrier(CmiMyNodeSize());
-  nodeBarrier.wait();
-}
+void CmiNodeAllBarrier() { CmiNodeBarrier(); }
 
-void CmiAssignOnce(int* variable, int value) {
-  if (CmiMyRank() == 0) { *variable = value; }
+void CmiAssignOnce(int *variable, int value) {
+  if (CmiMyRank() == 0) {
+    *variable = value;
+  }
   CmiNodeAllBarrier();
 }
 
@@ -426,8 +606,17 @@ void CmiExitHandler(void *msg) {
 
 ConverseNodeQueue<void *> *CmiGetNodeQueue() { return CmiNodeQueue; }
 
+void CmiSyncNodeSend(unsigned int destNode, unsigned int size, void *msg) {
+  char *copymsg = (char *)CmiAlloc(size);
+  std::memcpy(copymsg, msg, size); // optionally avoid memcpy and block instead
+  CmiSyncNodeSendAndFree(destNode, size, copymsg);
+}
+
 void CmiSyncNodeSendAndFree(unsigned int destNode, unsigned int size,
                             void *msg) {
+  CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
+
+  header->destPE = CmiMessageDestPENode;
 
   if (destNode >= Cmi_numnodes || destNode < 0) {
     CmiAbort("Destnode %d out of range %d\n", destNode, Cmi_numnodes);
@@ -436,15 +625,44 @@ void CmiSyncNodeSendAndFree(unsigned int destNode, unsigned int size,
   if (CmiMyNode() == destNode) {
     CmiNodeQueue->push(msg);
   } else {
-    comm_backend::sendAm(destNode, msg, size, MRFIELD(msg),
-                         CommLocalHandler, AmHandlerNode);
+    comm_backend::issueAm(destNode, msg, size, MRFIELD(msg),
+                          CommLocalHandler, g_amHandler, nullptr);
   }
 }
 
-void CmiSyncNodeSend(unsigned int destNode, unsigned int size, void *msg) {
-  char *copymsg = (char *)CmiAlloc(size);
-  std::memcpy(copymsg, msg, size); // optionally avoid memcpy and block instead
-  CmiSyncNodeSendAndFree(destNode, size, copymsg);
+void CmiInterSyncNodeSend(int destNode, int partition, int messageSize,
+                          void *msg) {
+  char *copymsg = (char *)CmiAlloc(messageSize);
+  std::memcpy(copymsg, msg, messageSize);
+  CmiInterSyncNodeSendAndFree(destNode, partition, messageSize, copymsg);
+}
+
+void CmiInterSyncNodeSendAndFree(int destNode, int partition, int messageSize,
+                                 void *msg) {
+  CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
+
+  if (partition < 0 || partition >= CmiNumPartitions()) {
+    CmiAbort("CmiInterSyncSend: partition %d out of range\n", partition);
+  }
+  if (CmiMyPartition() == partition) {
+    CmiSyncNodeSendAndFree(destNode, messageSize, msg);
+    return;
+  }
+  // not my partition, use comm backend
+  int globalDestNode = CmiGetNodeGlobal(destNode, partition);
+  header->destPE = CmiMessageDestPENode;
+  comm_backend::issueAm(destNode, msg, messageSize, MRFIELD(msg),
+                        CommLocalHandler, g_amHandler, nullptr);
+}
+
+void CmiInterSyncNodeSendFn(int destNode, int partition, int messageSize,
+                            char *msg) {
+  CmiInterSyncNodeSend(destNode, partition, messageSize, msg);
+}
+
+void CmiInterSyncNodeSendAndFreeFn(int destNode, int partition, int messageSize,
+                                   char *msg) {
+  CmiInterSyncNodeSendAndFree(destNode, partition, messageSize, msg);
 }
 
 // fn versions of the above
@@ -534,8 +752,13 @@ double getCurrentTime() {
 // TODO: implement timer
 double CmiWallTimer() { return getCurrentTime() - Cmi_startTime; }
 
-double CmiStartTimer() {
-  return 0.0;
+double CmiStartTimer() { return 0.0; }
+
+double CmiInitTime(void) { return Cmi_startTime; }
+
+int CmiTimerAbsolute() {
+  // Reconverse FIXME: The purpose of this function is unclear
+  return 0;
 }
 
 void CmiAbortHelper(const char *source, const char *message,
@@ -563,9 +786,7 @@ int CmiScanf(const char *format, ...) {
   {
     va_list args;
     va_start(args, format);
-    {
-      ret = vscanf(format, args);
-    }
+    { ret = vscanf(format, args); }
     va_end(args);
   }
   return ret;
@@ -585,17 +806,33 @@ int CmiError(const char *format, ...) {
   return ret;
 }
 
-void __CmiEnforceMsgHelper(const char *expr, const char *fileName, int lineNum,
-                           const char *msg, ...) {
-  CmiAbort("[%d] Assertion \"%s\" failed in file %s line %d.\n", CmiMyPe(),
-           expr, fileName, lineNum);
+void __CmiEnforceHelper(const char* expr, const char* fileName, const char* lineNum)
+{
+  CmiAbort("[%d] Assertion \"%s\" failed in file %s line %s.\n", CmiMyPe(), expr,
+           fileName, lineNum);
 }
 
-// TODO: implememt
-void CmiInitCPUTopology(char **argv) {}
+void __CmiEnforceMsgHelper(const char* expr, const char* fileName, const char* lineNum,
+                           const char* msg, ...)
+{
+  va_list args;
+  va_start(args, msg);
 
-// TODO: implememt
-void CmiInitCPUAffinity(char **argv) {}
+  // Get length of formatted string
+  va_list argsCopy;
+  va_copy(argsCopy, args);
+  const auto size = 1 + vsnprintf(nullptr, 0, msg, argsCopy);
+  va_end(argsCopy);
+
+  // Allocate a buffer of right size and create formatted string in it
+  std::vector<char> formatted(size);
+  vsnprintf(formatted.data(), size, msg, args);
+  va_end(args);
+
+  CmiAbort("[%d] Assertion \"%s\" failed in file %s line %s.\n%s", CmiMyPe(), expr,
+           fileName, lineNum, formatted.data());
+}
+
 
 bool CmiGetIdle() { return idle_condition; }
 
@@ -729,6 +966,9 @@ char **CmiCopyArgs(char **argv) {
     ret[i] = argv[i];
   return ret;
 }
+
+/** Free the copied argv array*/
+void CmiFreeArgs(char **argv) { free(argv); }
 
 /** Delete the first k argument from the given list, shifting
 all other arguments down by k spaces.
@@ -957,3 +1197,318 @@ void CmiLock(CmiNodeLock lock) { pthread_mutex_lock(lock); }
 void CmiUnlock(CmiNodeLock lock) { pthread_mutex_unlock(lock); }
 
 int CmiTryLock(CmiNodeLock lock) { return pthread_mutex_trylock(lock); }
+
+// empty function to satisfy charm
+void CommunicationServerThread(int sleepTime) {}
+
+// start and stop interop schedulers
+
+void StartInteropScheduler() {
+  CsdScheduler(-1);
+  CmiNodeAllBarrier();
+}
+
+void StopInteropScheduler() { CpvAccess(interopExitFlag) = 1; }
+
+int CmiMemoryIs(int flag)
+{
+	return (CmiMemoryIs_flag&flag)==flag;
+}
+
+static char *CopyMsg(char *msg, int len) {
+  char *copy = (char *)CmiAlloc(len);
+#if CMK_ERROR_CHECKING
+  if (!copy) {
+    CmiAbort("Error: out of memory in machine layer\n");
+  }
+#endif
+  memcpy(copy, msg, len);
+  return copy;
+}
+
+void CmiForwardMsgToPeers(int size, char *msg) {
+  /* FIXME: now it's just a flat p2p send!! When node size is large,
+   * it should also be sent in a tree
+   */
+
+  int exceptRank = CmiMyRank();
+  if (CMI_MSG_NOKEEP(msg)) {
+    for (int i = 0; i < exceptRank; i++) {
+      CmiReference(msg);
+      CmiPushPE(i, msg);
+    }
+    for (int i = exceptRank + 1; i < CmiMyNodeSize(); i++) {
+      CmiReference(msg);
+      CmiPushPE(i, msg);
+    }
+  } else {
+    for (int i = 0; i < exceptRank; i++) {
+      CmiPushPE(i, CopyMsg(msg, size));
+    }
+    for (int i = exceptRank + 1; i < CmiMyNodeSize(); i++) {
+      CmiPushPE(i, CopyMsg(msg, size));
+    }
+  }
+}
+
+// partitions
+
+void CmiSetNumPartitions(int nump) { _partitionInfo.numPartitions = nump; }
+
+void CmiSetMasterPartition(void) {
+  if (!CmiMyNodeGlobal() && _partitionInfo.type != PARTITION_DEFAULT) {
+    CmiAbort("setMasterPartition used with incompatible option\n");
+  }
+  _partitionInfo.type = PARTITION_MASTER;
+}
+
+void CmiSetPartitionSizes(char *sizes) {
+  int length = strlen(sizes);
+  _partitionInfo.partsizes = (char *)malloc((length + 1) * sizeof(char));
+
+  if (!CmiMyNodeGlobal() && _partitionInfo.type != PARTITION_DEFAULT) {
+    CmiAbort("setPartitionSizes used with incompatible option\n");
+  }
+
+  memcpy(_partitionInfo.partsizes, sizes, length * sizeof(char));
+  _partitionInfo.partsizes[length] = '\0';
+  _partitionInfo.type = PARTITION_PREFIX;
+}
+
+void CmiSetPartitionScheme(int scheme) {
+  _partitionInfo.scheme = scheme;
+  _partitionInfo.isTopoaware = 1;
+}
+
+void CmiSetCustomPartitioning(void) {
+  _partitionInfo.scheme = 100;
+  _partitionInfo.isTopoaware = 1;
+}
+
+static void create_partition_map(char **argv) {
+  char *token, *tptr;
+  int i;
+
+  _partitionInfo.numPartitions = 1;
+  _partitionInfo.type = PARTITION_DEFAULT;
+  _partitionInfo.partsizes = NULL;
+  _partitionInfo.scheme = 0;
+  _partitionInfo.isTopoaware = 0;
+
+  if (!CmiGetArgIntDesc(argv, "+partitions", &_partitionInfo.numPartitions,
+                        "number of partitions")) {
+    CmiGetArgIntDesc(argv, "+replicas", &_partitionInfo.numPartitions,
+                     "number of partitions");
+  }
+
+#if CMK_MULTICORE
+  if (_partitionInfo.numPartitions != 1) {
+    CmiAbort("+partitions other than 1 is not allowed for multicore build\n");
+  }
+#endif
+
+  _partitionInfo.partitionSize =
+      (int *)calloc(_partitionInfo.numPartitions, sizeof(int));
+  _partitionInfo.partitionPrefix =
+      (int *)calloc(_partitionInfo.numPartitions, sizeof(int));
+
+  if (CmiGetArgFlagDesc(argv, "+master_partition",
+                        "assign a process as master partition")) {
+    _partitionInfo.type = PARTITION_MASTER;
+  }
+
+  if (CmiGetArgStringDesc(argv, "+partition_sizes", &_partitionInfo.partsizes,
+                          "size of partitions")) {
+    if (!CmiMyNodeGlobal() && _partitionInfo.type != PARTITION_DEFAULT) {
+      CmiAbort("+partition_sizes used with incompatible option, possibly "
+               "+master_partition\n");
+    }
+    _partitionInfo.type = PARTITION_PREFIX;
+  }
+
+  if (CmiGetArgFlagDesc(argv, "+partition_topology",
+                        "topology aware partitions")) {
+    _partitionInfo.isTopoaware = 1;
+    _partitionInfo.scheme = 1;
+  }
+
+  if (CmiGetArgIntDesc(argv, "+partition_topology_scheme",
+                       &_partitionInfo.scheme,
+                       "topology aware partitioning scheme")) {
+    _partitionInfo.isTopoaware = 1;
+  }
+
+  if (CmiGetArgFlagDesc(argv, "+use_custom_partition",
+                        "custom partitioning scheme")) {
+    _partitionInfo.scheme = 100;
+    _partitionInfo.isTopoaware = 1;
+  }
+
+  if (_partitionInfo.type == PARTITION_DEFAULT) {
+    if ((_Cmi_numnodes_global % _partitionInfo.numPartitions) != 0) {
+      CmiAbort("Number of partitions does not evenly divide number of "
+               "processes. Aborting\n");
+    }
+    _partitionInfo.partitionPrefix[0] = 0;
+    _partitionInfo.partitionSize[0] =
+        _Cmi_numnodes_global / _partitionInfo.numPartitions;
+    for (i = 1; i < _partitionInfo.numPartitions; i++) {
+      _partitionInfo.partitionSize[i] = _partitionInfo.partitionSize[i - 1];
+      _partitionInfo.partitionPrefix[i] =
+          _partitionInfo.partitionPrefix[i - 1] +
+          _partitionInfo.partitionSize[i - 1];
+    }
+    _partitionInfo.myPartition =
+        _Cmi_mynode_global / _partitionInfo.partitionSize[0];
+  } else if (_partitionInfo.type == PARTITION_MASTER) {
+    if (((_Cmi_numnodes_global - 1) % (_partitionInfo.numPartitions - 1)) !=
+        0) {
+      CmiAbort("Number of non-master partitions does not evenly divide number "
+               "of processes minus one. Aborting\n");
+    }
+    _partitionInfo.partitionSize[0] = 1;
+    _partitionInfo.partitionPrefix[0] = 0;
+    _partitionInfo.partitionSize[1] =
+        (_Cmi_numnodes_global - 1) / (_partitionInfo.numPartitions - 1);
+    _partitionInfo.partitionPrefix[1] = 1;
+    for (i = 2; i < _partitionInfo.numPartitions; i++) {
+      _partitionInfo.partitionSize[i] = _partitionInfo.partitionSize[i - 1];
+      _partitionInfo.partitionPrefix[i] =
+          _partitionInfo.partitionPrefix[i - 1] +
+          _partitionInfo.partitionSize[i - 1];
+    }
+    _partitionInfo.myPartition =
+        1 + (_Cmi_mynode_global - 1) / _partitionInfo.partitionSize[1];
+    if (!_Cmi_mynode_global)
+      _partitionInfo.myPartition = 0;
+  } else if (_partitionInfo.type == PARTITION_PREFIX) {
+    token = strtok_r(_partitionInfo.partsizes, ",", &tptr);
+    while (token) {
+      int i, j;
+      int hasdash = 0, hascolon = 0, hasdot = 0;
+      int start, end, stride = 1, block = 1, size;
+      for (i = 0; i < strlen(token); i++) {
+        if (token[i] == '-')
+          hasdash = 1;
+        else if (token[i] == ':')
+          hascolon = 1;
+        else if (token[i] == '.')
+          hasdot = 1;
+      }
+      if (hasdash) {
+        if (hascolon) {
+          if (hasdot) {
+            if (sscanf(token, "%d-%d:%d.%d#%d", &start, &end, &stride, &block,
+                       &size) != 5)
+              printf("Warning: Check the format of \"%s\".\n", token);
+          } else {
+            if (sscanf(token, "%d-%d:%d#%d", &start, &end, &stride, &size) != 4)
+              printf("Warning: Check the format of \"%s\".\n", token);
+          }
+        } else {
+          if (sscanf(token, "%d-%d#%d", &start, &end, &size) != 3)
+            printf("Warning: Check the format of \"%s\".\n", token);
+        }
+      } else {
+        if (sscanf(token, "%d#%d", &start, &size) != 2) {
+          printf("Warning: Check the format of \"%s\".\n", token);
+        }
+        end = start;
+      }
+      if (block > stride) {
+        printf("Warning: invalid block size in \"%s\" ignored.\n", token);
+        block = 1;
+      }
+      for (i = start; i <= end; i += stride) {
+        for (j = 0; j < block; j++) {
+          if (i + j > end)
+            break;
+          _partitionInfo.partitionSize[i + j] = size;
+        }
+      }
+      token = strtok_r(NULL, ",", &tptr);
+    }
+    _partitionInfo.partitionPrefix[0] = 0;
+    _partitionInfo.myPartition = 0;
+    for (i = 1; i < _partitionInfo.numPartitions; i++) {
+      if (_partitionInfo.partitionSize[i - 1] <= 0) {
+        CmiAbort("Partition size has to be greater than zero.\n");
+      }
+      _partitionInfo.partitionPrefix[i] =
+          _partitionInfo.partitionPrefix[i - 1] +
+          _partitionInfo.partitionSize[i - 1];
+      if ((_Cmi_mynode_global >= _partitionInfo.partitionPrefix[i]) &&
+          (_Cmi_mynode_global < (_partitionInfo.partitionPrefix[i] +
+                                 _partitionInfo.partitionSize[i]))) {
+        _partitionInfo.myPartition = i;
+      }
+    }
+    if (_partitionInfo.partitionSize[i - 1] <= 0) {
+      CmiAbort("Partition size has to be greater than zero.\n");
+    }
+  }
+  Cmi_mynode =
+      Cmi_mynode - _partitionInfo.partitionPrefix[_partitionInfo.myPartition];
+
+  if (_partitionInfo.isTopoaware) {
+    CmiAbort("Partition aware not implemented yet\n");
+  }
+}
+
+int node_lToGTranslate(int node, int partition) {
+  int rank;
+  if (_partitionInfo.type == PARTITION_SINGLETON) {
+    return node;
+  } else if (_partitionInfo.type == PARTITION_DEFAULT) {
+    rank = (partition * _partitionInfo.partitionSize[0]) + node;
+  } else if (_partitionInfo.type == PARTITION_MASTER) {
+    if (partition == 0) {
+      rank = 0;
+    } else {
+      rank = 1 + ((partition - 1) * _partitionInfo.partitionSize[1]) + node;
+    }
+  } else if (_partitionInfo.type == PARTITION_PREFIX) {
+    rank = _partitionInfo.partitionPrefix[partition] + node;
+  } else {
+    CmiAbort("Partition type did not match any of the supported types\n");
+  }
+  if (_partitionInfo.isTopoaware) {
+    return _partitionInfo.nodeMap[rank];
+  } else {
+    return rank;
+  }
+}
+
+int pe_lToGTranslate(int pe, int partition) {
+  if (_partitionInfo.type == PARTITION_SINGLETON)
+    return pe;
+
+  if (pe < CmiPartitionSize(partition) * CmiMyNodeSize()) {
+    return node_lToGTranslate(CmiNodeOf(pe), partition) * CmiMyNodeSize() +
+           CmiRankOf(pe);
+  }
+
+  return CmiNumPesGlobal() +
+         node_lToGTranslate(pe - CmiPartitionSize(partition) * CmiMyNodeSize(),
+                            partition);
+}
+
+int CmiMyPeGlobal(void) {
+  return CmiGetPeGlobal(CmiGetState()->pe, CmiMyPartition());
+}
+
+void CmiCreatePartitions(char **argv) {
+  _Cmi_numnodes_global = Cmi_numnodes;
+  _Cmi_mynode_global = Cmi_mynode;
+  _Cmi_numpes_global = Cmi_npes;
+  Cmi_nodestartGlobal = _Cmi_mynode_global * Cmi_mynodesize;
+  create_partition_map(argv);
+}
+
+// Since we are not implementing converse level seed balancers yet
+void LBTopoInit() {}
+
+int CmiDeliverMsgs(int maxmsgs)
+{
+  return CsdScheduler(maxmsgs);
+}

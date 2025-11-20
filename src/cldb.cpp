@@ -6,8 +6,8 @@
 
 typedef char *BitVector;
 
-/*
 CpvDeclare(int, CldHandlerIndex);
+/*
 CpvDeclare(int, CldNodeHandlerIndex);
 CpvDeclare(BitVector, CldPEBitVector);
 CpvDeclare(int, CldBalanceHandlerIndex);
@@ -26,6 +26,10 @@ thread_local int CldBalanceHandlerIndex;
 thread_local int CldRelocatedMessages;
 thread_local int CldLoadBalanceMessages;
 thread_local int CldMessageChunks;
+
+static char s_lbtopo_default[] = "torus_nd_5";
+extern char *_lbtopo;
+char *_lbtopo = s_lbtopo_default;
 
 extern void LoadNotifyFn(int);
 

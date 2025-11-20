@@ -21,27 +21,38 @@ include(AddReconverse)
 # General Options
 # ##############################################################################
 
-option(BUILD_SHARED_LIBS "Build using shared libraries" ON)
+option(BUILD_SHARED_LIBS "Build using shared libraries" OFF)
 
-option(RECONVERSE_BUILD_EXAMPLES "Build examples" ON)
-option(RECONVERSE_BUILD_TESTS "Build tests" ON)
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+  # This is the root project
+  set(RECONVERSE_ROOT_PROJECT ON)
+else()
+  # This is a subproject
+  set(RECONVERSE_ROOT_PROJECT OFF)
+endif()
+
+option(RECONVERSE_BUILD_TESTS "Build tests" ${RECONVERSE_ROOT_PROJECT})
 
 option(RECONVERSE_TRY_ENABLE_COMM_LCI2 "whether to enable the LCIv2 backend" ON)
 option(RECONVERSE_AUTOFETCH_LCI2
         "whether to autofetch LCIv2 if LCI2 cannot be found" OFF)
 set(RECONVERSE_AUTOFETCH_LCI2_TAG
-    "85dc99f3b32cfc8b3b4b0e0590ee445282964b57"
-    CACHE STRING "The tag to fetch for LCIv2") # master branch as of 2025-04-17
+    "5c526672b7a9548013d8b45d8ebf06d5cac36e66"
+    CACHE STRING "The tag to fetch for LCIv2") # master branch as of 2025-11-7
 
-option(RECONVERSE_TRY_ENABLE_COMM_LCI1 "whether to enable the LCIv1 backend" OFF)
-option(RECONVERSE_AUTOFETCH_LCI1
-       "whether to autofetch LCIv1 if LCI1 cannot be found" OFF)
-set(RECONVERSE_AUTOFETCH_LCI1_TAG
-    "ad1c43e5ff28bb2cfc8a300615f4d502b7bce31f"
-    CACHE STRING "The tag to fetch for LCIv1") # master branch as of 2025-04-17
+option(RECONVERSE_TRY_ENABLE_COMM_LCW "whether to enable the LCW backend" ON)
+option(RECONVERSE_AUTOFETCH_LCW
+        "whether to autofetch LCW if LCW cannot be found" OFF)
+set(RECONVERSE_AUTOFETCH_LCW_TAG
+    "20689cad808bdb3af32a4707485d8e0d41fdfbe0"
+    CACHE STRING "The tag to fetch for LCW") # master branch as of 2025-09-25
 
-option(SPANTREE "whether to enable spanning tree collectives" ON)
+option(SPANTREE "whether to enable spanning tree collectives" OFF) #should turn this on once charm issues fixed
+
+# Reconverse uses SMP always, but turn on this option for backwards compatibility (see pingpong_multipairs for example)
 option(CMK_SMP "whether to enable SMP support" ON)
+option(CMK_CPV_IS_SMP "whether to enable SMP support for cpvs" ON)
+option(CMK_USE_SHMEM "whether to use POSIX shared memory for IPC" OFF)
 
 option(RECONVERSE_ATOMIC_QUEUE "whether to use atomic queue" ON)
 
@@ -49,7 +60,8 @@ set(RECONVERSE_TEST_LAUNCHER
     "mpirun"
     CACHE STRING "The executable to run multiple processes in CTest")
 
-option(ENABLE_CPU_AFFINITY "Enable cpu affinity with hwloc" OFF)
+find_package(HWLOC)
+option(RECONVERSE_ENABLE_CPU_AFFINITY "Enable cpu affinity with hwloc" ${HWLOC_FOUND})
 
 function(charm_determine_arch output input)
   if(input STREQUAL "x86_64" OR input STREQUAL "AMD64")
@@ -101,15 +113,6 @@ endif()
 
 find_package(Threads REQUIRED)
 
-if(ENABLE_CPU_AFFINITY)
-  find_library(HWLOC NAMES libhwloc.so libhwloc.dylib PATHS /opt/local/lib /usr/lib /usr/local/lib /usr/local/Cellar/hwloc/2.12.0/lib)
-  if(HWLOC)
-    message(STATUS "Found hwloc: ${HWLOC}")
-  else()
-    message(FATAL_ERROR "Could not find libhwloc")
-  endif()
-endif()
-
 if(RECONVERSE_ATOMIC_QUEUE)
   add_definitions(-DATOMIC_QUEUE_ENABLED)
   message(STATUS "Atomic queue enabled")
@@ -121,24 +124,23 @@ add_library(reconverse $<TARGET_OBJECTS:boost-context>)
 set_target_properties(reconverse PROPERTIES CXX_STANDARD 17)
 add_subdirectory(include)
 add_subdirectory(src)
-target_link_libraries(reconverse PUBLIC Threads::Threads ${HWLOC})
+target_link_libraries(reconverse PUBLIC Threads::Threads)
+
+if(RECONVERSE_ENABLE_CPU_AFFINITY)
+  target_link_libraries(reconverse PUBLIC HWLOC::HWLOC)
+endif()
+
+if(NOT RECONVERSE_ROOT_PROJECT)
+  # This project is being fetched as a subproject by another CMake project.
+  # Define an alias to mimic find_package behavior and ensure consistent usage.
+  add_library(reconverse::reconverse ALIAS reconverse)
+endif()
 
 # ##############################################################################
 # Add Subdirectories
 # ##############################################################################
 add_subdirectory(boost-context)
 
-if(RECONVERSE_BUILD_EXAMPLES)
-  add_subdirectory(examples)
-endif()
-
 if(RECONVERSE_BUILD_TESTS)
-  add_subdirectory(test)
-endif()
-
-if(ENABLE_CPU_AFFINITY)
-  add_definitions(-DSET_CPU_AFFINITY)
-  message(STATUS "CPU affinity enabled")
-else()
-  message(STATUS "CPU affinity disabled")
+  add_subdirectory(tests)
 endif()

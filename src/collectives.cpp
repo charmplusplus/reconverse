@@ -27,19 +27,29 @@ void collectiveInit(void) {
 
 /* Broadcast to everyone but the source pe. Source does not free. */
 void CmiSyncBroadcast(int size, void *msg) {
+    DEBUGF("[%d] CmiSyncBroadcast\n", CmiMyPe());
     int pe = CmiMyPe();
   
     CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
     header->messageSize = size;
   
   #ifdef SPANTREE
+  #if SPANTREE ON
+    DEBUGF("[%d] Spanning tree option\n", CmiMyPe());
     CmiSetBcastSource(msg, pe); // used to skip the source
     header->swapHandlerId = header->handlerId;
     header->handlerId = Cmi_bcastHandler;
     CmiSyncSend(0, size, msg);
   #else
+    for (int i = pe + 1; i < CmiNumPes(); i++)
+        CmiSyncSend(i, size, msg);
   
-    for (int i = pe + 1; i < Cmi_npes; i++)
+    for (int i = 0; i < pe; i++)
+      CmiSyncSend(i, size, msg);
+  #endif
+  #else
+  
+    for (int i = pe + 1; i < CmiNumPes(); i++)
       CmiSyncSend(i, size, msg);
   
     for (int i = 0; i < pe; i++)
@@ -53,17 +63,23 @@ void CmiSyncBroadcast(int size, void *msg) {
   }
   
   void CmiSyncBroadcastAll(int size, void *msg) {
+    DEBUGF("[%d] CmiSyncBroadcastAll\n", CmiMyPe());
     CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
     header->messageSize = size;
   
   #ifdef SPANTREE
+  #if SPANTREE ON
     CmiSetBcastSource(msg, -1); // don't skip the source
     header->swapHandlerId = header->handlerId;
   
     header->handlerId = Cmi_bcastHandler;
     CmiSyncSend(0, size, msg);
   #else
-    for (int i = 0; i < Cmi_npes; i++)
+    for (int i = 0; i < CmiNumPes(); i++)
+      CmiSyncSend(i, size, msg);
+  #endif
+  #else
+    for (int i = 0; i < CmiNumPes(); i++)
       CmiSyncSend(i, size, msg);
   #endif
   }
@@ -81,19 +97,29 @@ void CmiSyncBroadcast(int size, void *msg) {
   }
   
   void CmiSyncNodeBroadcast(unsigned int size, void *msg) {
+
     int node = CmiMyNode();
   
     CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
     header->messageSize = size;
   
   #ifdef SPANTREE
+  #if SPANTREE ON
     CmiSetBcastSource(msg, node); // used to skip the source
     header->swapHandlerId = header->handlerId;
     header->handlerId = Cmi_nodeBcastHandler;
     CmiSyncNodeSend(0, size, msg);
   #else
   
-    for (int i = node + 1; i < Cmi_numnodes; i++)
+    for (int i = node + 1; i < CmiNumNodes(); i++)
+      CmiSyncNodeSend(i, size, msg);
+  
+    for (int i = 0; i < node; i++)
+      CmiSyncNodeSend(i, size, msg);
+  #endif
+  #else
+  
+    for (int i = node + 1; i < CmiNumNodes(); i++)
       CmiSyncNodeSend(i, size, msg);
   
     for (int i = 0; i < node; i++)
@@ -111,13 +137,19 @@ void CmiSyncBroadcast(int size, void *msg) {
     header->messageSize = size;
   
   #ifdef SPANTREE
+  #if SPANTREE ON
     CmiSetBcastSource(msg, -1); // don't skip the source
     header->swapHandlerId = header->handlerId;
     header->handlerId = Cmi_nodeBcastHandler;
     CmiSyncNodeSend(0, size, msg);
   #else
   
-    for (int i = 0; i < Cmi_numnodes; i++)
+    for (int i = 0; i < CmiNumNodes(); i++)
+      CmiSyncNodeSend(i, size, msg);
+  #endif
+  #else
+  
+    for (int i = 0; i < CmiNumNodes(); i++)
       CmiSyncNodeSend(i, size, msg);
   #endif
   }
@@ -204,11 +236,10 @@ void CmiReductionsInit(void) {
       (CmiNodeReduction *)malloc(CmiMaxReductions * sizeof(CmiNodeReduction));
   for (int i = 0; i < CmiMaxReductions; ++i) {
     CmiNodeReduction &nodered = noderedinfo[i];
-#ifdef CMK_SMP
+
     // node reduction must be initialized with a valid lock
-    nodered.lock = CmiCreateLock();
-#endif
-    nodered.red = nullptr;
+    nodered.lock = CmiCreateLock(); // in non-smp this would just be a nullptr
+
   }
   CsvAccess(_node_reduction_info) = noderedinfo;
   CsvAccess(_node_reduction_counter) = 0;
@@ -240,7 +271,6 @@ static inline CmiReductionID getNextID(CmiReductionID &ctr) {
 // TODO: is this needed for node reductions?? old Converse uses locks and
 // atomics in SMP for node reductions
 // TODO: this overflow is not thread-safe
-#ifdef CMK_SMP
 static inline CmiReductionID getNextID(std::atomic<CmiReductionID> &ctr) {
   CmiReductionID old =
       ctr.fetch_add(1, std::memory_order_relaxed); // Increment atomically
@@ -250,7 +280,7 @@ static inline CmiReductionID getNextID(std::atomic<CmiReductionID> &ctr) {
   }
   return old;
 }
-#endif
+
 
 unsigned CmiGetReductionIndex(CmiReductionID id) {
   // treating the id as the index into the reduction table
@@ -396,19 +426,19 @@ static void CmiClearNodeReduction(CmiReductionID id) {
   reduction_ref = NULL;
 }
 
+// lock and unlock are used to support SMP
 void CmiNodeReduce(void *msg, int size, CmiReduceMergeFn mergeFn) {
-#ifdef CMK_SMP
+
   CmiNodeReduction nodeRed =
       CsvAccess(_node_reduction_info)[CmiGetReductionIndex(CmiGetRedID(msg))];
   CmiLock(nodeRed.lock);
-#endif
+
   const CmiReductionID id = CmiGetNextNodeReductionID();
   CmiReduction *red = CmiGetCreateNodeReduction(id);
   CmiInternalNodeReduce(msg, size, mergeFn, red);
 
-#ifdef CMK_SMP
+
   CmiUnlock(nodeRed.lock);
-#endif
 }
 
 CmiReductionID CmiGetNextNodeReductionID() {
@@ -500,12 +530,13 @@ void CmiSendNodeReduce(CmiReduction *red) {
   CmiClearNodeReduction(red->ReductionID);
 }
 
+// lock and unlock used to support SMP
 void CmiNodeReduceHandler(void *msg) {
-#ifdef CMK_SMP
+
   CmiNodeReduction nodeRed =
       CsvAccess(_node_reduction_info)[CmiGetReductionIndex(CmiGetRedID(msg))];
   CmiLock(nodeRed.lock);
-#endif
+
   CmiReduction *reduction = CmiGetCreateNodeReduction(CmiGetRedID(msg));
 
   // how are we ensuring the messages arrive in order again?
@@ -513,9 +544,9 @@ void CmiNodeReduceHandler(void *msg) {
   reduction->messagesReceived++;
   CmiSendNodeReduce(reduction);
 
-#ifdef CMK_SMP
+
   CmiUnlock(nodeRed.lock);
-#endif
+
 }
 
 /************* Groups ***************/
@@ -579,8 +610,9 @@ void CmiSyncListSendFn(int npes, const int *pes, int len, char *msg) {
 
 void CmiSyncListSendAndFree(int npes, const int *pes, int len, void *msg) {
   for (int i = 0; i < npes; i++) {
-    CmiSyncSendAndFree(pes[i], len, msg);
+    CmiSyncSend(pes[i], len, msg);
   }
+  CmiFree(msg);
 }
 
 void CmiFreeListSendFn(int npes, const int *pes, int len, char *msg) {

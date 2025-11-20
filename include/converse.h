@@ -3,23 +3,28 @@
 #ifndef CONVERSE_H
 #define CONVERSE_H
 
-#include <cinttypes>
-#include <cstdio>
-#include <cstdlib>
+#ifdef __cplusplus
+#include <atomic>
+#include <queue>
+#include <utility>
+#else
+#include <stdatomic.h>
+#endif
 #include <pthread.h>
 #include <atomic>
 //#include "comm_backend/comm_backend.h"
-
-using CmiInt1 = std::int8_t;
-using CmiInt2 = std::int16_t;
-using CmiInt4 = std::int32_t;
-using CmiInt8 = std::int64_t;
-using CmiUint1 = std::uint8_t;
-using CmiUint2 = std::uint16_t;
-using CmiUint4 = std::uint32_t;
-using CmiUint8 = std::uint64_t;
-
+#include <stdio.h>
+#include <stdlib.h>
 #include <stdint.h>
+#include <stdbool.h>
+#include <inttypes.h>
+
+#ifdef __cplusplus
+#  define CLINKAGE extern "C"
+#else
+#  define CLINKAGE /*empty*/
+#endif
+
 typedef int8_t CMK_TYPEDEF_INT1;
 typedef int16_t CMK_TYPEDEF_INT2;
 typedef int32_t CMK_TYPEDEF_INT4;
@@ -41,36 +46,65 @@ typedef CMK_TYPEDEF_UINT8 CmiUInt8;
 typedef __int128_t CmiInt16;
 typedef __uint128_t CmiUInt16;
 
-// NOTE: these are solely for backwards compatibility
-// Do not use in reconverse impl
+typedef pthread_mutex_t *CmiNodeLock;
+typedef CmiNodeLock CmiImmediateLockType;
+extern int _immediateLock;
+extern int _immediateFlag;
+extern CmiNodeLock _smp_mutex;
+
+extern CmiNodeLock CmiMemLock_lock;
+#define CmiMemLock() do{if (CmiMemLock_lock) CmiLock(CmiMemLock_lock);} while (0)
+
+#define CmiMemUnlock() do{if (CmiMemLock_lock) CmiUnlock(CmiMemLock_lock);} while (0)
 
 #define CMK_TAG(x, y) x##y##_
 #define CMK_CONCAT(x, y) x##y
 
-#define CpvDeclare(t, v) t *CMK_TAG(Cpv_, v)
-#define CpvStaticDeclare(t, v) static t *CMK_TAG(Cpv_, v)
+#ifdef __cplusplus
+/* In C++, use new so t's constructor gets called */
+# define CpvInit_Alloc(t,n) new t[n]()
+# define CpvInit_Alloc_scalar(t) new t()
+#else
+# define CpvInit_Alloc(t,n) (t *)calloc(n,sizeof(t))
+# define CpvInit_Alloc_scalar(t) (t *)calloc(1,sizeof(t))
+#endif
 
-#define CpvInitialize(t, v)                                                    \
-  do {                                                                         \
-    if (CmiMyRank()) {                                                         \
-      CmiNodeBarrier();                                                        \
-    } else {                                                                   \
-      CMK_TAG(Cpv_, v) = new t[CmiMyNodeSize()];                               \
-      CmiNodeBarrier();                                                        \
-    }                                                                          \
-  } while (0)
-;
+#define CpvDeclare(t,v) __thread t* CMK_TAG(Cpv_,v) = NULL;   \
+                        int CMK_TAG(Cpv_inited_,v) = 0;  \
+                        t ** CMK_TAG(Cpv_addr_,v)
+#define CpvExtern(t,v)  extern __thread t* CMK_TAG(Cpv_,v);  \
+                        extern int CMK_TAG(Cpv_inited_,v);  \
+                        extern t ** CMK_TAG(Cpv_addr_,v)
+#ifdef __cplusplus
+#define CpvCExtern(t,v) extern "C" __thread t* CMK_TAG(Cpv_,v);  \
+                        extern "C" int CMK_TAG(Cpv_inited_,v);  \
+                        extern "C" t ** CMK_TAG(Cpv_addr_,v)
+#else
+#define CpvCExtern(t,v)    CpvExtern(t,v)
+#endif
+#define CpvStaticDeclare(t,v) static __thread t* CMK_TAG(Cpv_,v) = NULL;   \
+                        static int CMK_TAG(Cpv_inited_,v) = 0;  \
+                        static t ** CMK_TAG(Cpv_addr_,v)
 
-#define CpvAccess(v) CMK_TAG(Cpv_, v)[CmiMyRank()]
-#define CpvAccessOther(v, r) CMK_TAG(Cpv_, v)[r]
-#define CpvExtern(t, v) extern t *CMK_TAG(Cpv_, v)
+#define CpvInitialize(t,v)\
+    do {                                                               \
+      CmiMemLock();                                                    \
+      if (!(CMK_TAG(Cpv_inited_,v))) {                                \
+        t** cpvinitobj = CpvInit_Alloc(t*, CmiMyNodeSize());         \
+        CMK_TAG(Cpv_addr_,v) = cpvinitobj;                             \
+        CMK_TAG(Cpv_inited_,v) = 1;                                    \
+        CmiMemUnlock();                                                \
+      }                                                                \
+      else                                                             \
+        CmiMemUnlock();                                                \
+      t* cpvobj = CpvInit_Alloc_scalar(t);                             \
+      CMK_TAG(Cpv_,v) = cpvobj;                                        \
+      CMK_TAG(Cpv_addr_,v)[CmiMyRank()] = CMK_TAG(Cpv_,v);             \
+    } while(0)
+
+#define CpvAccess(v) (*CMK_TAG(Cpv_,v))
+#define CpvAccessOther(v, r) (*(CMK_TAG(Cpv_addr_,v)[r]))
 #define CpvInitialized(v) (0 != CMK_TAG(Cpv_, v))
-
-#define CMK_THREADLOCAL __thread
-#define CpvCExtern(t, v)                                                       \
-  extern "C" CMK_THREADLOCAL t *CMK_TAG(Cpv_, v);                              \
-  extern "C" int CMK_TAG(Cpv_inited_, v);                                      \
-  extern "C" t **CMK_TAG(Cpv_addr_, v)
 
 #define CsvDeclare(t, v) t v
 #define CsvStaticDeclare(t, v) static t v
@@ -91,6 +125,26 @@ typedef __uint128_t CmiUInt16;
 #define ALIGN_DEFAULT(x) CMIALIGN(x, ALIGN_BYTES)
 #define CMIPADDING(x, n) (CMIALIGN((x), (n)) - (size_t)(x))
 
+// Portable alignment specifier for structs
+#ifdef __cplusplus
+#define CMI_ALIGNAS(n) alignas(n)
+#elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 202311L
+// C23 has alignas
+#define CMI_ALIGNAS(n) alignas(n)
+#elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+// C11 has _Alignas
+#define CMI_ALIGNAS(n) _Alignas(n)
+#elif defined(__GNUC__) || defined(__clang__)
+// GCC/Clang attribute
+#define CMI_ALIGNAS(n) __attribute__((aligned(n)))
+#elif defined(_MSC_VER)
+// MSVC
+#define CMI_ALIGNAS(n) __declspec(align(n))
+#else
+// Fallback - no alignment (may cause issues on some platforms)
+#define CMI_ALIGNAS(n)
+#endif
+
 // End of NOTE
 
 typedef void (*CmiHandler)(void *msg);
@@ -103,23 +157,30 @@ typedef void (*CldInfoFn)(void *msg, CldPackFn *packer, int *len, int *queueing,
 
 typedef int (*CldEstimator)(void);
 
+#ifdef __cplusplus
+#define CmiMessageDestPENode static_cast<CmiUInt4>(-1)
+#else
+#define CmiMessageDestPENode ((CmiUInt4)(-1))
+#endif
+
 typedef struct Header {
   CmiInt2 handlerId;
-  CmiUint4 destPE; // global ID of destination PE
+  CmiUInt4 destPE; // global ID of destination PE
   int messageSize;
   // used for bcast (bcast source pe/node), multicast (group id), reductions
   // (reduction id)
-  CmiUint4 collectiveMetaInfo;
+  CmiUInt4 collectiveMetaInfo;
   // used for special ops (bcast, reduction, multicast) when the handler field
   // is repurposed
   CmiInt2 swapHandlerId;
   bool nokeep;
-  CmiUint1 zcMsgType; // 0: normal, 1: zero-copy
+  CmiUInt1 zcMsgType; // 0: normal, 1: zero-copy
 } CmiMessageHeader;
 
 typedef CmiMessageHeader CmiMsgHeaderBasic;
 
-#define CMK_NODE_QUEUE_AVAILABLE CMK_SMP
+// #define CMK_NODE_QUEUE_AVAILABLE CMK_SMP
+#define CMK_NODE_QUEUE_AVAILABLE 1 // we assume CMK_SMP
 
 typedef struct {
   int parent;
@@ -136,40 +197,51 @@ extern CmiSpanningTreeInfo *_topoTree;
 typedef CMK_MULTICAST_GROUP_TYPE CmiGroup;
 
 #define CmiMsgHeaderSizeBytes sizeof(CmiMessageHeader)
+#define CmiExtHeaderSizeBytes CmiMsgHeaderSizeBytes
 #define CmiReservedHeaderSize CmiMsgHeaderSizeBytes
 
 typedef void (*CmiStartFn)(int argc, char **argv);
+#ifdef __cplusplus
 void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched = 0,
                   int initret = 0);
+#else
+void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
+                  int initret);
+#endif
 
 static CmiStartFn Cmi_startfn;
 extern int CharmLibInterOperate;
 
+#ifdef __cplusplus
 struct alignas(ALIGN_BYTES) CmiChunkHeader {
   int size;
   void* mr;
 private:
-#ifdef CMK_SMP
-  std::atomic<int> ref;
-#else
-  int ref;
-#endif
+  std::atomic<int> ref; // only supports smp, would just be int otherwise
 
 public:
-  CmiChunkHeader() : mr(nullptr) {};
-  CmiChunkHeader(const CmiChunkHeader &x) : size{x.size}, mr{x.mr}, ref{x.getRef()} {}
-#ifdef CMK_SMP
+  CmiChunkHeader() = default;
+  CmiChunkHeader(const CmiChunkHeader &x) : size{x.size}, ref{x.getRef()} {}
+
+  // reference counting (assumes SMP. otherwise could just use basic int
+  // operations)
   int getRef() const { return ref.load(std::memory_order_acquire); }
   void setRef(int r) { return ref.store(r, std::memory_order_release); }
   int incRef() { return ref.fetch_add(1, std::memory_order_release); }
   int decRef() { return ref.fetch_sub(1, std::memory_order_release); }
-#else
-  int getRef() const { return ref; }
-  void setRef(int r) { ref = r; }
-  int incRef() { return ref++; }
-  int decRef() { return ref--; }
-#endif
 };
+#else
+struct CMI_ALIGNAS(ALIGN_BYTES) CmiChunkHeader {
+  int size;
+  int ref; // basic int for C compilation
+};
+
+/* C functions for reference counting */
+static inline int CmiChunkHeader_getRef(struct CmiChunkHeader* hdr) { return hdr->ref; }
+static inline void CmiChunkHeader_setRef(struct CmiChunkHeader* hdr, int r) { hdr->ref = r; }
+static inline int CmiChunkHeader_incRef(struct CmiChunkHeader* hdr) { return __atomic_fetch_add(&hdr->ref, 1, __ATOMIC_RELEASE); }
+static inline int CmiChunkHeader_decRef(struct CmiChunkHeader* hdr) { return __atomic_fetch_sub(&hdr->ref, 1, __ATOMIC_RELEASE); }
+#endif
 
 // threads library
 
@@ -206,15 +278,30 @@ CthThread CthCreate(CthVoidFn fn, void *arg, int size);
 
 static void CthThreadFree(CthThread t);
 
+void CthFree(CthThread t);
+
 void CthResume(CthThread t);
+
+int CthIsSuspendable(CthThread t);
 
 void CthSuspend(void);
 
 void CthAwaken(CthThread th);
 
+void CthAwakenPrio(CthThread th, int s, int pb, unsigned int *prio);
+
 void CthYield(void);
 
 void CthTraceResume(CthThread t);
+
+void CthSetEventInfo(CthThread t, int event, int srcPE);
+
+void CthSetStrategyDefault(CthThread t);
+
+int CthImplemented(void);
+
+#define CmiTurnOnStats()
+#define CmiTurnOffStats()
 
 // Ctv functions
 
@@ -273,8 +360,6 @@ enum ncpyRegModes {
 enum ncpyDeregModes { CMK_BUFFER_DEREG = 4, CMK_BUFFER_NODEREG = 5 };
 
 // handler tools
-typedef void (*CmiHandler)(void *msg);
-typedef void (*CmiHandlerEx)(void *msg, void *userPtr);
 int CmiRegisterHandler(CmiHandler h);
 int CmiRegisterHandlerEx(CmiHandlerEx h, void *userPtr);
 CmiHandler CmiHandlerToFunction(int handlerId);
@@ -286,10 +371,20 @@ void CmiNumberHandlerEx(int n, CmiHandlerEx h, void *userPtr);
 // message allocation/memory
 void *CmiAlloc(int size);
 void CmiFree(void *msg);
+#define CmiRdmaAlloc CmiAlloc
+#define CmiRdmaFree CmiFree
 #define CmiMemoryUsage() 0
 void CmiMemoryMarkBlock(void *blk);
 extern void
     *memory_stack_top; // TODO: replace this with actual memory implementation
+
+#define CMI_MEMORY_IS_ISOMALLOC   (1<<1)
+#define CMI_MEMORY_IS_PARANOID    (1<<2)
+#define CMI_MEMORY_IS_GNU         (1<<3)
+#define CMI_MEMORY_IS_GNUOLD      (1<<4)
+#define CMI_MEMORY_IS_OS          (1<<5)
+#define CMI_MEMORY_IS_CHARMDEBUG  (1<<6)
+int CmiMemoryIs(int flag); /* return state of this flag */
 
 // state getters
 int CmiMyPe();
@@ -298,27 +393,14 @@ int CmiMyNodeSize();
 int CmiMyRank();
 int CmiNumPes();
 int CmiNumNodes();
-#define CmiNumPhysicalNodes() CmiNumNodes()
+// FIXME
+//#define CmiPhysicalNodeID(node) (node)
+extern int CmiPhysicalNodeID(int pe);
 int CmiNodeOf(int pe);
 int CmiRankOf(int pe);
 int CmiStopFlag();
 #define CmiNodeSize(n) (CmiMyNodeSize())
 int CmiNodeFirst(int node);
-#define CmiGetFirstPeOnPhysicalNode(i) CmiNodeFirst(i)
-
-// partitions (still needs to implement)
-#define CmiMyPartition() 0
-#define CmiPartitionSize(part) CmiNumNodes()
-#define CmiMyPartitionSize() CmiNumNodes()
-#define CmiNumPartitions() 1
-#define CmiNumNodesGlobal() CmiNumNodes()
-#define CmiMyNodeGlobal() CmiMyNode()
-#define CmiNumPesGlobal() CmiNumPes()
-#define CmiMyPeGlobal() CmiMyPe()
-#define CmiGetPeGlobal(pe, part) (pe)
-#define CmiGetNodeGlobal(node, part) (node)
-#define CmiGetPeLocal(pe) (pe)
-#define CmiGetNodeLocal(node) (node)
 
 // handler things
 void CmiSetHandler(void *msg, int handlerId);
@@ -334,6 +416,7 @@ void CmiSyncSendAndFree(int destPE, int messageSize, void *msg);
 void CmiSyncListSend(int npes, const int *pes, int len, void *msg);
 void CmiSyncListSendAndFree(int npes, const int *pes, int len, void *msg);
 void CmiPushPE(int destPE, void *msg);
+void CmiPushNode(void *msg);
 
 void CmiSyncSendFn(int destPE, int messageSize, char *msg);
 void CmiFreeSendFn(int destPE, int messageSize, char *msg);
@@ -369,6 +452,11 @@ void CmiSyncMulticastAndFree(CmiGroup grp, int size, void *msg);
 void CmiSyncMulticastFn(CmiGroup grp, int size, char *msg);
 void CmiFreeMulticastFn(CmiGroup grp, int size, char *msg);
 
+//network functions
+void CmiNetworkProgress();
+// ignore argument since it's only 0 in namd
+#define CmiNetworkProgressAfter(p) CmiNetworkProgressAfter()
+
 // Barrier functions
 void CmiNodeBarrier();
 void CmiNodeAllBarrier();
@@ -377,7 +465,56 @@ void CmiNodeAllBarrier();
 // scheduler
 void CsdExitScheduler();
 int CsdScheduler(int maxmsgs);
-void CsdEnqueueGeneral(void *Message, int strategy, int priobits, int *prioptr);
+
+#ifdef __cplusplus
+// Message-priority pair for the queue
+struct MessagePriorityPair {
+  void* message;
+  long long priority;
+  
+  MessagePriorityPair(void* msg, long long prio) : message(msg), priority(prio) {}
+};
+
+// Comparator for increasing order of priority values
+struct MessagePriorityComparator {
+  bool operator()(const MessagePriorityPair& a, const MessagePriorityPair& b) const {
+    return a.priority > b.priority; // Note: inverted for min-heap behavior
+  }
+};
+
+#endif
+
+typedef struct QueueImpl
+{
+  void *pq_neg; // negative priorities
+  void *pq_zero; // zero priority
+  void *pq_pos; // positive priorities
+} *Queue;
+
+void QueueInit(Queue q);
+void QueueDestroy(Queue q);
+int QueueEmpty(Queue q);
+int QueueSize(Queue q);
+void QueuePush(Queue q, void* message, long long priority);
+void QueuePop(Queue q);
+void* QueueTop(Queue q);
+
+//typedef std::priority_queue<MessagePriorityPair, std::vector<MessagePriorityPair>, MessagePriorityComparator> *Queue;
+
+//#define QueueInit() new std::priority_queue<MessagePriorityPair, std::vector<MessagePriorityPair>, MessagePriorityComparator>()
+
+CpvExtern(Queue, CsdSchedQueue);
+CsvExtern(Queue, CsdNodeQueue);
+CsvExtern(CmiNodeLock, CsdNodeQueueLock);
+void CqsEnqueueGeneral(Queue q, void *Message, int strategy, int priobits,
+                         unsigned int *prioptr);
+#define CsdEnqueueGeneral(msg, strategy, priobits, prioptr) \
+  (CqsEnqueueGeneral((Queue)CpvAccess(CsdSchedQueue),(msg),(strategy),(priobits),(prioptr)))
+#define CsdNodeEnqueueGeneral(msg, strategy, priobits, prioptr) do { \
+          CmiLock(CsvAccess(CsdNodeQueueLock)); \
+          CqsEnqueueGeneral((Queue)CsvAccess(CsdNodeQueue),(msg),(strategy),(priobits),(prioptr)); \
+          CmiUnlock(CsvAccess(CsdNodeQueueLock)); \
+        } while(0)
 
 void CmiAssignOnce(int *variable, int value);
 
@@ -389,16 +526,23 @@ void CmiResetGlobalReduceSeqID();
 void CmiResetGlobalNodeReduceSeqID();
 
 // Exit functions
+
 void CmiExit(int status);
-#define ConverseExit(status) CmiExit(status)
+#ifdef __cplusplus
+extern "C" {
+#endif
 void CmiAbort(const char *format, ...);
+#ifdef __cplusplus
+}
+#endif
 
 // Utility functions
 int CmiPrintf(const char *format, ...);
 int CmiGetArgc(char **argv);
-void CmiAbort(const char *format, ...);
 int CmiScanf(const char *format, ...);
 int CmiError(const char *format, ...);
+
+#define ConverseExit(...) CmiExit(__VA_ARGS__ + 0)
 #define CmiMemcpy(dest, src, size) memcpy((dest), (src), (size))
 
 #define setMemoryTypeChare(p) /* empty memory debugging method */
@@ -406,21 +550,35 @@ int CmiError(const char *format, ...);
 
 void CmiInitCPUTopology(char **argv);
 void CmiInitCPUAffinity(char **argv);
+int CmiOnCore(void);
 
-void __CmiEnforceMsgHelper(const char *expr, const char *fileName, int lineNum,
-                           const char *msg, ...);
+#define __CMK_STRING(x) #x
+#define __CMK_XSTRING(x) __CMK_STRING(x)
 
-#define CmiEnforce(condition)                                                  \
-  do {                                                                         \
-    if (!(condition)) {                                                        \
-      __CmiEnforceMsgHelper(#condition, __FILE__, __LINE__, "");               \
-    }                                                                          \
-  } while (0)
+void __CmiEnforceHelper(const char* expr, const char* fileName, const char* lineNum);
+void __CmiEnforceMsgHelper(const char* expr, const char* fileName,
+			   const char* lineNum, const char* msg, ...);
+
+#define CmiEnforce(expr)                                             \
+  ((void)(CMI_LIKELY(expr) ? 0                                       \
+                 : (__CmiEnforceHelper(__CMK_STRING(expr), __FILE__, \
+                                       __CMK_XSTRING(__LINE__)),     \
+                    0)))
+
+#define CmiEnforceMsg(expr, ...)                                              \
+  ((void)(CMI_LIKELY(expr)                                                    \
+              ? 0                                                             \
+              : (__CmiEnforceMsgHelper(__CMK_STRING(expr), __FILE__,          \
+                                       __CMK_XSTRING(__LINE__), __VA_ARGS__), \
+                 0)))
 
 double getCurrentTime(void);
 double CmiWallTimer(void);
 #define CmiCpuTimer() CmiWallTimer()
+#define CmiTimer() CmiWallTimer()
 double CmiStartTimer(void);
+double CmiInitTime(void);
+int CmiTimerAbsolute(void);
 
 // rand functions that charm uses
 void CrnSrand(unsigned int);
@@ -470,13 +628,15 @@ double CrnDrandRange(double, double);
 #define CcdUSERMAX 127
 
 // convcond functions
-typedef CmiHandler CcdVoidFn;
-typedef CmiHandler CcdCondFn;
+#define CCD_COND_FN_EXISTS 1 //needed for namd WorkDistrib.C
+typedef void (*CcdCondFn)(void *userParam);
+typedef void (*CcdVoidFn)(void *userParam, double curWallTime);
 void CcdModuleInit();
-void CcdCallFnAfter(CmiHandler fnp, void *arg, double msecs);
-#define CcdCallFnAfterOnPE(fn, arg, msecs, pe) CcdCallFnAfter(fn, arg, msecs)
-int CcdCallOnCondition(int condnum, CmiHandler fnp, void *arg);
-int CcdCallOnConditionKeep(int condnum, CmiHandler fnp, void *arg);
+#define CcdIGNOREPE -2
+void CcdCallFnAfter(CcdVoidFn fnp, void *arg, double msecs);
+void CcdCallFnAfterOnPE(CcdVoidFn fnp, void *arg, double msecs, int pe);
+int CcdCallOnCondition(int condnum, CcdCondFn fnp, void *arg);
+int CcdCallOnConditionKeep(int condnum, CcdCondFn fnp, void *arg);
 void CcdCancelCallOnCondition(int condnum, int idx);
 void CcdCancelCallOnConditionKeep(int condnum, int idx);
 void CcdRaiseCondition(int condnum);
@@ -564,31 +724,20 @@ int CmiGetArgFlagDesc(char **argv, const char *arg, const char *desc);
 void CmiDeleteArgs(char **argv, int k);
 int CmiGetArgc(char **argv);
 char **CmiCopyArgs(char **argv);
+void CmiFreeArgs(char **argv);
 int CmiArgGivingUsage(void);
 void CmiDeprecateArgInt(char **argv, const char *arg, const char *desc,
                         const char *warning);
 
-typedef pthread_mutex_t *CmiNodeLock;
-typedef CmiNodeLock CmiImmediateLockType;
-extern int _immediateLock;
-extern int _immediateFlag;
-extern CmiNodeLock _smp_mutex;
-
 #define CmiCreateImmediateLock() (0)
 #define CmiImmediateLock(ignored)                                              \
-  {                                                                            \
-    _immediateLock++;                                                          \
-  }
+  { _immediateLock++; }
 #define CmiImmediateUnlock(ignored)                                            \
-  {                                                                            \
-    _immediateLock--;                                                          \
-  }
+  { _immediateLock--; }
 #define CmiCheckImmediateLock(ignored)                                         \
   ((_immediateLock) ? ((_immediateFlag = 1), 1) : 0)
 #define CmiClearImmediateFlag()                                                \
-  {                                                                            \
-    _immediateFlag = 0;                                                        \
-  }
+  { _immediateFlag = 0; }
 #define CmiBecomeImmediate(msg) /* empty */
 #define CmiResetImmediate(msg)  /* empty */
 #define CmiIsImmediate(msg) (0)
@@ -616,7 +765,7 @@ int CmiTryLock(CmiNodeLock lock);
     if (!(expr)) {                                                             \
       fprintf(stderr, "Assertion %s failed: file %s, line %d\n", #expr,        \
               __FILE__, __LINE__);                                             \
-      CmiExit(0);                                                              \
+      CmiAbort("Failed assert");                                               \
     }                                                                          \
   } while (0)
 
@@ -625,7 +774,7 @@ int CmiTryLock(CmiNodeLock lock);
     if (!(expr)) {                                                             \
       fprintf(stderr, __VA_ARGS__);                                            \
       fprintf(stderr, "\n");                                                   \
-      CmiExit(0);                                                              \
+      CmiAbort("Failed assert");                                               \
     }                                                                          \
   } while (0)
 #endif
@@ -658,6 +807,7 @@ void CldEnqueueGroup(CmiGroup grp, void *msg, int infofn);
 // CldEnqueueWithinNode enqueues a message for each PE on the node.
 void CldNodeEnqueue(int node, void *msg, int infofn);
 void CldEnqueueWithinNode(void *msg, int infofn);
+void CldEnqueueGroup(CmiGroup grp, void *msg, int infofn);
 
 #define CmiImmIsRunning() (0)
 #define CMI_MSG_NOKEEP(msg) ((CmiMessageHeader *)msg)->nokeep
@@ -844,12 +994,12 @@ enum ncpyFreeNcpyOpInfoMode {
 #define CMK_SPANTREE_MAXSPAN 4
 #define CST_W (CMK_SPANTREE_MAXSPAN)
 #define CST_NN (CmiNumNodes())
-#define CmiNodeSpanTreeParent(n) ((n) ? (((n) - 1) / CST_W) : (-1))
+#define CmiNodeSpanTreeParent(n) ((n) ? (((n)-1) / CST_W) : (-1))
 #define CmiNodeSpanTreeChildren(n, c)                                          \
   do {                                                                         \
     int _i;                                                                    \
     for (_i = 0; _i < CST_W; _i++) {                                           \
-      int _x = (n) * CST_W + _i + 1;                                           \
+      int _x = (n)*CST_W + _i + 1;                                             \
       if (_x < CST_NN)                                                         \
         (c)[_i] = _x;                                                          \
     }                                                                          \
@@ -857,7 +1007,7 @@ enum ncpyFreeNcpyOpInfoMode {
 #define CmiNumNodeSpanTreeChildren(n)                                          \
   ((((n) + 1) * CST_W < CST_NN)                                                \
        ? CST_W                                                                 \
-       : ((((n) * CST_W + 1) >= CST_NN) ? 0 : ((CST_NN - 1) - (n) * CST_W)))
+       : ((((n)*CST_W + 1) >= CST_NN) ? 0 : ((CST_NN - 1) - (n)*CST_W)))
 #define CST_R(p) (CmiRankOf(p))
 #define CST_NF(n) (CmiNodeFirst(n))
 #define CST_SP(n) (CmiNodeSpanTreeParent(n))
@@ -892,4 +1042,279 @@ enum ncpyFreeNcpyOpInfoMode {
     }                                                                          \
   } while (0)
 
+extern void CsdSchedulePoll(void);
+
+// topology
+extern int CmiNumCores(void);
+extern int CmiCpuTopologyEnabled(void);
+extern int CmiPeOnSamePhysicalNode(int pe1, int pe2);
+extern int CmiNumPesOnPhysicalNode(int node);
+extern void CmiGetPesOnPhysicalNode(int node, int **pelist, int *num);
+extern int CmiPhysicalRank(int pe);
+extern void CmiInitCPUAffinity(char **argv);
+extern int CmiPrintCPUAffinity(void);
+extern int CmiSetCPUAffinity(int core);
+extern int CmiSetCPUAffinityLogical(int core);
+extern int CmiOnCore(void);
+
+int CmiNumPhysicalNodes();
+int CmiGetFirstPeOnPhysicalNode(int node);
+
+static char *CopyMsg(char *msg, int len);
+void CmiForwardMsgToPeers(int size, char *msg);
+
+void LBTopoInit();
+
+#ifdef __cplusplus
+extern "C" {
 #endif
+
+size_t CmiFwrite(const void *ptr, size_t size, size_t nmemb, FILE *f);
+CmiInt8 CmiPwrite(int fd, const char *buf, size_t bytes, size_t offset);
+int CmiOpen(const char *pathname, int flags, int mode);
+FILE *CmiFopen(const char *path, const char *mode);
+int CmiFclose(FILE *fp);
+
+#ifdef __cplusplus
+}
+#endif
+
+void registerTraceInit(void (*fn)(char **argv));
+
+int CmiDeliverMsgs(int maxmsgs);
+
+#ifdef __cplusplus
+#define CmiMemoryReadFence()                 std::atomic_thread_fence(std::memory_order_seq_cst)
+#define CmiMemoryWriteFence()                std::atomic_thread_fence(std::memory_order_seq_cst)
+#else
+#define CmiMemoryReadFence()                 __sync_synchronize()
+#define CmiMemoryWriteFence()                __sync_synchronize()
+#endif
+
+#ifdef __cplusplus
+template <typename T> struct CmiIsAtomic : std::false_type {};
+template <typename T> struct CmiIsAtomic<std::atomic<T>> : std::true_type {};
+
+template <typename T>
+typename std::enable_if<CmiIsAtomic<T>::value, typename T::value_type>::type
+CmiAtomicFetchAndIncImpl(T& input) {
+    return std::atomic_fetch_add(&input, typename T::value_type(1));
+}
+
+template <typename T>
+typename std::enable_if<!CmiIsAtomic<T>::value, T>::type
+CmiAtomicFetchAndIncImpl(T& input) {
+    T old = input;
+    ++input;
+    return old;
+}
+
+#define CmiMemoryAtomicFetchAndInc(input, output) ((output) = CmiAtomicFetchAndIncImpl(input))
+#else
+#define CmiMemoryAtomicFetchAndInc(input, output) ((output) = __sync_fetch_and_add(&(input), 1))
+#endif
+
+#define CmiEnableUrgentSend(yn) /* intentionally left empty */
+
+typedef struct CmmTableStruct *CmmTable;
+
+#define CmmWildCard (-1)
+
+//typedef void (*CmmPupMessageFn)(pup_er p,void **msg);
+//CmmTable CmmPup(pup_er p, CmmTable t, CmmPupMessageFn msgpup);
+
+CmmTable   CmmNew(void);
+void       CmmFree(CmmTable t);
+void	   CmmFreeAll(CmmTable t);
+void       CmmPut(CmmTable t, int ntags, int *tags, void *msg);
+void      *CmmFind(CmmTable t, int ntags, int *tags, int *returntags, int del);
+int        CmmEntries(CmmTable t);
+int 	   CmmGetLastTag(CmmTable t, int ntags, int *tags);
+#define    CmmGet(t,nt,tg,rt)   (CmmFind((t),(nt),(tg),(rt),1))
+#define    CmmProbe(t,nt,tg,rt) (CmmFind((t),(nt),(tg),(rt),0))
+
+
+#ifndef CMI_CACHE_LINE_SIZE
+#ifdef __cpp_lib_hardware_interference_size
+# define CMI_CACHE_LINE_SIZE std::hardware_destructive_interference_size
+#elif CMK_PPC64 || (defined __APPLE__ && defined __arm64__)
+# define CMI_CACHE_LINE_SIZE 128
+#else
+# define CMI_CACHE_LINE_SIZE 64
+#endif
+#endif
+//partitions
+
+typedef enum Partition_Type {
+  PARTITION_SINGLETON,
+  PARTITION_DEFAULT,
+  PARTITION_MASTER,
+  PARTITION_PREFIX
+} Partition_Type;
+
+/* variables and functions for partition */
+typedef struct {
+  Partition_Type type;
+  int isTopoaware, scheme;
+  int numPartitions;
+  int *partitionSize;
+  int *partitionPrefix;
+  int *nodeMap;
+  int myPartition;
+  char *partsizes;
+} PartitionInfo;
+
+void CmiCreatePartitions(char **argv);
+void CmiSetNumPartitions(int nump);
+void CmiSetMasterPartition(void);
+void CmiSetPartitionSizes(char *size);
+void CmiSetPartitionScheme(int scheme);
+void CmiSetCustomPartitioning(void);
+
+extern int _Cmi_mype_global;
+extern int _Cmi_numpes_global;
+extern int _Cmi_mynode_global;
+extern int _Cmi_numnodes_global;
+extern PartitionInfo _partitionInfo;
+
+#define CmiNumPartitions() _partitionInfo.numPartitions
+#define CmiMyPartition() _partitionInfo.myPartition
+#define CmiPartitionSize(part) _partitionInfo.partitionSize[part]
+#define CmiMyPartitionSize() CmiPartitionSize(CmiMyPartition())
+#define CmiNumNodesGlobal() _Cmi_numnodes_global
+#define CmiMyNodeGlobal() _Cmi_mynode_global
+#define CmiNumPesGlobal() _Cmi_numpes_global
+/* we need different implementations of this based on SMP or non-smp */
+extern int CmiMyPeGlobal(void);
+
+/* functions to translate between local and global */
+int node_lToGTranslate(int node, int partition);
+int pe_lToGTranslate(int pe, int partition);
+
+#define CmiGetPeGlobal(pe, part) pe_lToGTranslate(pe, part)
+#define CmiGetNodeGlobal(node, part) node_lToGTranslate(node, part)
+#define CmiGetPeLocal(pe) pe_gToLTranslate(pe)
+#define CmiGetNodeLocal(node) node_gToLTranslate(node)
+
+void CmiInterSyncSend(int destPE, int partition, int messageSize, void *msg);
+void CmiInterSyncSendAndFree(int destPE, int partition, int messageSize,
+                             void *msg);
+void CmiInterSyncNodeSend(int destNode, int partition, int messageSize,
+                          void *msg);
+void CmiInterSyncNodeSendAndFree(int destNode, int partition, int messageSize,
+                                 void *msg);
+void CmiInterSyncSendFn(int destPE, int partition, int messageSize, char *msg);
+void CmiInterFreeSendFn(int destPE, int partition, int messageSize, char *msg);
+void CmiInterSyncNodeSendFn(int destNode, int partition, int messageSize,
+                            char *msg);
+void CmiInterSyncNodeSendAndFreeFn(int destNode, int partition, int messageSize,
+                                   char *msg);
+
+/* end of variables and functions for partition */
+
+#define CMI_IPC_CUTOFF_ARG "ipccutoff"
+#define CMI_IPC_CUTOFF_DESC "max message size for cmi-shmem (in bytes)"
+#define CMI_IPC_POOL_SIZE_ARG "ipcpoolsize"
+#define CMI_IPC_POOL_SIZE_DESC "size of cmi-shmem pool (in bytes)"
+
+struct CmiIpcManager;
+
+#ifndef __cplusplus
+typedef struct CmiIpcManager CmiIpcManager;
+#endif
+
+#ifdef __cplusplus
+namespace cmi {
+namespace ipc {
+// recommended cutoff for block sizes
+CpvExtern(size_t, kRecommendedCutoff);
+// used to represent an empty linked list
+constexpr auto nil = uintptr_t(0);
+// used to represent the tail of a linked list
+constexpr auto max = UINTPTR_MAX;
+// used to indicate a message bound for a node
+constexpr auto nodeDatagram = UINT16_MAX;
+// default number of attempts to alloc before timing out
+constexpr auto defaultTimeout = 4;
+}  // namespace ipc
+}  // namespace cmi
+
+// alignas is used for padding here, rather than for alignment of the
+// CmiIpcBlock itself.
+struct alignas(ALIGN_BYTES) CmiIpcBlock {
+public:
+  // "home" rank of the block
+  int src;
+  int dst;
+  uintptr_t orig;
+  uintptr_t next;
+  size_t size;
+
+  CmiIpcBlock(size_t size_, uintptr_t orig_)
+      : orig(orig_), next(cmi::ipc::nil), size(size_) {}
+};
+
+enum CmiIpcAllocStatus {
+  CMI_IPC_OUT_OF_MEMORY,
+  CMI_IPC_REMOTE_DESTINATION,
+  CMI_IPC_SUCCESS,
+  CMI_IPC_TIMEOUT
+};
+
+// sets up ipc environment
+void CmiIpcInit(char** argv);
+
+// creates an ipc manager, waking the thread when it's done
+// ( this must be called in the same order on all pes! )
+CmiIpcManager* CmiMakeIpcManager(CthThread th);
+
+// push/pop blocks from the manager's send/recv queue
+bool CmiPushIpcBlock(CmiIpcManager*, CmiIpcBlock*);
+CmiIpcBlock* CmiPopIpcBlock(CmiIpcManager*);
+
+// tries to allocate a block, returning null if unsucessful
+// (fails when other PEs are contending resources)
+// second value of pair indicates failure cause
+std::pair<CmiIpcBlock*, CmiIpcAllocStatus> CmiAllocIpcBlock(CmiIpcManager*, int node, std::size_t size);
+
+// frees a block -- enabling it to be used again
+void CmiFreeIpcBlock(CmiIpcManager*, CmiIpcBlock*);
+
+// currently a no-op but may be eventually usable
+// intended to "capture" blocks from remote pes
+inline void CmiCacheIpcBlock(CmiIpcBlock*) { return; }
+
+// identifies whether a void* is the payload of a block
+// belonging to the given node
+CmiIpcBlock* CmiIsIpcBlock(CmiIpcManager*, void*, int node);
+
+// if (init) is true -- initializes the
+// memory segment for use as a message
+void* CmiIpcBlockToMsg(CmiIpcBlock*, bool init);
+
+// equivalent to calling above with (init = false)
+inline void* CmiIpcBlockToMsg(CmiIpcBlock* block) {
+  auto res = (char*)block + sizeof(CmiIpcBlock) + sizeof(CmiChunkHeader);
+  return (void*)res;
+}
+
+inline CmiIpcBlock* CmiMsgToIpcBlock(CmiIpcManager* manager, void* msg) {
+  return CmiIsIpcBlock(manager, (char*)msg - sizeof(CmiChunkHeader), CmiMyNode());
+}
+
+CmiIpcBlock* CmiMsgToIpcBlock(CmiIpcManager*, char* msg, std::size_t len, int node,
+                           int rank = cmi::ipc::nodeDatagram,
+                           int timeout = cmi::ipc::defaultTimeout);
+
+// deliver a block as a message
+void CmiDeliverIpcBlockMsg(CmiIpcBlock*);
+
+inline const std::size_t& CmiRecommendedIpcBlockCutoff(void) {
+  using namespace cmi::ipc;
+  return CpvAccess(kRecommendedCutoff);
+}
+#endif /* __cplusplus */
+
+CsvExtern(CmiIpcManager*, coreIpcManager_);
+
+#endif // CONVERSE_H

@@ -25,7 +25,6 @@ void CldHandler(char *msg) {
             msg); // use priority queue when we add priority queue
 }
 
-/*
 void CldEnqueueGroup(CmiGroup grp, void *msg, int infofn)
 {
   int len, queueing, priobits; unsigned int *prioptr;
@@ -41,7 +40,6 @@ void CldEnqueueGroup(CmiGroup grp, void *msg, int infofn)
 
   CmiSyncMulticastAndFree(grp, len, msg);
 }
-  */
 
 void CldEnqueueWithinNode(void *msg, int infofn) {
   int len, queueing, priobits;

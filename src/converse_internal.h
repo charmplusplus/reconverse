@@ -4,6 +4,7 @@
 #define CONVCORE_H
 
 #include <cstring>
+#include "converse.h"
 
 #include "converse.h"
 #include "converse_config.h"
@@ -23,6 +24,9 @@ typedef struct GroupDef_s {
 } *GroupDef;
 
 #define GROUPTAB_SIZE 101
+
+//debug
+#define  DEBUGF(...)    //CmiPrintf(__VA_ARGS__)
 
 void CmiStartThreads(char **argv);
 void converseRunPe(int rank);
@@ -49,13 +53,16 @@ typedef struct HandlerInfo {
 std::vector<CmiHandlerInfo> *CmiGetHandlerTable();
 
 typedef struct State {
-  int pe;
-  int rank;
-  int node;
-  ConverseQueue<void *> *queue;
-  int stopFlag;
-
+  int pe = 0;
+  int rank = 0;
+  int node = 0;
+  ConverseQueue<void *> *queue = nullptr;
+  int stopFlag = 0;
 } CmiState;
+
+extern int backend_poll_freq; // poll every backend_poll_freq iterations of the
+                             // scheduler loop
+extern int backend_poll_thread; // every backend_poll_thread threads will call progress
 
 // state relevant functionality
 CmiState *CmiGetState(void);
@@ -119,9 +126,10 @@ typedef struct {
 
 typedef struct {
   // in non-SMP, node reduction is equivalent to PE reduction
-#ifdef CMK_SMP
+  // Reconverse assumes SMP, use a node lock
+
   CmiNodeLock lock;
-#endif
+
   CmiReduction *red;
 } CmiNodeReduction;
 
@@ -130,11 +138,9 @@ CpvStaticDeclare(CmiReduction **,
                  _reduction_info); // an array of pointers to reduction structs
 CpvStaticDeclare(CmiReductionID, _reduce_seqID_global);
 
-#ifdef CMK_SMP
+// atomics used here to support SMP
 using CmiNodeReductionID = std::atomic<CmiReductionID>;
-#else
-using CmiNodeReductionID = CmiReductionID;
-#endif
+
 CsvStaticDeclare(CmiNodeReductionID, _node_reduction_counter);
 CsvStaticDeclare(
     CmiNodeReduction *,
@@ -173,5 +179,8 @@ void CmiSetRedID(void *msg, CmiReductionID redID);
 // helpers for broadcast
 void CmiSetBcastSource(void *msg, CmiBroadcastSource source);
 CmiBroadcastSource CmiGetBcastSource(void *msg);
+
+// helpers for RDMA
+void RDMAInit(char **argv);
 
 #endif
