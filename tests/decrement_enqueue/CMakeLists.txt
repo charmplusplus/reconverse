@@ -1,0 +1,2 @@
+add_reconverse_executable(decrement_enqueue decrement_enqueue.cpp)
+add_test(NAME decrement_enqueue COMMAND decrement_enqueue +pe 1)
