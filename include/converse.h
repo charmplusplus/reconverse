@@ -55,6 +55,8 @@ extern CmiNodeLock CmiMemLock_lock;
 
 #define CmiMemUnlock() do{if (CmiMemLock_lock) CmiUnlock(CmiMemLock_lock);} while (0)
 
+#define CmiInCommThread()  (0)
+
 #define CMK_TAG(x, y) x##y##_
 #define CMK_CONCAT(x, y) x##y
 
