@@ -664,6 +664,46 @@ int CmiRegisterHandlerEx(CmiHandlerEx h, void *userPtr) {
   return handlerVector->size() - 1;
 }
 
+//decrement to enqueue
+
+DecrementToEnqueueMsg *CmiCreateDecrementToEnqueue(unsigned int initialCount, void *msg){
+  if(initialCount == 0){
+    CmiAbort("CmiCreateDecrementToEnqueue: initialCount cannot be zero\n");
+  }
+  DecrementToEnqueueMsg *dteMsg = static_cast<DecrementToEnqueueMsg *>(malloc(sizeof(DecrementToEnqueueMsg)));
+  dteMsg->counter = static_cast<unsigned int *>(malloc(sizeof(unsigned int)));
+  *(dteMsg->counter) = initialCount;
+  dteMsg->msg = msg;
+  return dteMsg;
+}
+
+void CmiDecrementCounter(DecrementToEnqueueMsg *dteMsg){
+  if(dteMsg == nullptr){
+    CmiAbort("CmiDecrementCounter: dteMsg is nullptr\n");
+  }
+  if(dteMsg->counter == nullptr){
+    CmiAbort("CmiDecrementCounter: counter is nullptr\n");
+  }
+  unsigned int oldValue = __atomic_fetch_sub(dteMsg->counter, 1, __ATOMIC_SEQ_CST);
+  if(oldValue == 0){
+    CmiAbort("CmiDecrementCounter: counter already zero, cannot decrement further\n");
+  }
+  if(oldValue == 1){
+    //get dest PE from message header
+    CmiMessageHeader *header = static_cast<CmiMessageHeader *>(dteMsg->msg);
+    int destPE = header->destPE;
+    CmiAssertMsg(
+      destPE >= 0 && destPE < Cmi_npes,
+      "CmiDecrementCounter: destPE out of range"
+    );
+    // enqueue the message (node send)
+    CmiSyncSendAndFree(destPE, header->messageSize, dteMsg->msg);
+    // free the counter and dteMsg
+    free(dteMsg->counter);
+    free(dteMsg);
+  }
+}
+
 void CmiNodeBarrier(void) {
   static Barrier nodeBarrier(CmiMyNodeSize());
   int64_t ticket = nodeBarrier.arrive();

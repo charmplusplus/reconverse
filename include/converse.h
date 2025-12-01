@@ -750,6 +750,15 @@ void CmiLock(CmiNodeLock lock);
 void CmiUnlock(CmiNodeLock lock);
 int CmiTryLock(CmiNodeLock lock);
 
+//decrementToEnqueue
+typedef struct DecrementToEnqueueMsg{
+  unsigned int *counter;
+  void *msg;
+} DecrementToEnqueueMsg;
+
+DecrementToEnqueueMsg *CmiCreateDecrementToEnqueue(unsigned int initialCount, void *msg);
+void CmiDecrementCounter(DecrementToEnqueueMsg *dteMsg);
+
 // error checking
 
 // do we want asserts to be defaulted to be on or off(right now it is on)
