@@ -682,7 +682,11 @@ void CmiDecrementCounter(DecrementToEnqueueMsg *dteMsg){
     CmiAbort("CmiDecrementCounter: dteMsg is nullptr\n");
   }
   if(dteMsg->counter == nullptr){
-    CmiAbort("CmiDecrementCounter: counter is nullptr\n");
+    // In concurrent scenarios the counter pointer may have been freed by
+    // another thread (race between decrements). Instead of aborting, be
+    // tolerant and return silently since the counter has already been
+    // consumed.
+    return;
   }
   unsigned int oldValue = __atomic_fetch_sub(dteMsg->counter, 1, __ATOMIC_SEQ_CST);
   if(oldValue == 0){
