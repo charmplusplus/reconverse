@@ -113,6 +113,13 @@ void CsdScheduler() {
   while (CmiStopFlag() == 0) {
 
     CcdRaiseCondition(CcdSCHEDLOOP);
+    //always deliver shmem messages first
+    #ifdef CMK_USE_SHMEM
+        CmiIpcBlock* block = CmiPopIpcBlock(CsvAccess(coreIpcManager_));
+        if (block != nullptr) {
+          CmiDeliverIpcBlockMsg(block);
+        }
+    #endif
     //poll queues
     unsigned idx = static_cast<unsigned>(loop_counter & 63ULL);
     bool workDone = false;
@@ -156,6 +163,8 @@ void CsdSchedulePoll() {
 
 int CsdScheduler(int maxmsgs){
   if (maxmsgs < 0) {
+    //reset stop flag
+    CmiGetState()->stopFlag = 0;
     CsdScheduler(); //equivalent to CsdScheduleForever in old converse
   }
   else CsdSchedulePoll(); //not implementing CsdScheduleCount

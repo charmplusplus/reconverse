@@ -28,6 +28,7 @@ int Cmi_mynodesize; // represents the number of PE's/threads on a single
 int Cmi_numnodes;   // represents the number of physical nodes/systems machine
 int Cmi_nodestart;
 std::vector<CmiHandlerInfo> **CmiHandlerTable; // array of handler vectors
+std::atomic<int> numPEsReadyForExit {0};
 ConverseNodeQueue<void *> *CmiNodeQueue;
 CpvDeclare(Queue, CsdSchedQueue);
 CsvDeclare(Queue, CsdNodeQueue);
@@ -48,6 +49,9 @@ int quietModeRequested;
 int userDrivenMode;
 int _replaySystem = 0;
 static int CmiMemoryIs_flag=0;
+CsvDeclare(CmiIpcManager*, coreIpcManager_);
+int Cmi_usched;
+int Cmi_initret;
 
 CmiNodeLock CmiMemLock_lock;
 CpvDeclare(int, isHelperOn);
@@ -113,7 +117,7 @@ void CmiCallHandler(int handler, void *msg) {
   }
 }
 
-void converseRunPe(int rank) {
+void converseRunPe(int rank, int everReturn) {
   char **CmiMyArgv;
   CmiMyArgv = CmiCopyArgs(Cmi_argv);
 
@@ -145,51 +149,110 @@ void converseRunPe(int rank) {
   if (CmiTraceFn)
     CmiTraceFn(Cmi_argv);
 
-  // call initial function and start scheduler
-  Cmi_startfn(CmiGetArgc(CmiMyArgv), CmiMyArgv);
-  CsdScheduler();
+  /*Converse modes:
+  * usched=0, initret/everReturn=0: normal mode, converse starts scheduler for you
+  * usched=1, initret/everReturn=0: user-driven scheduling, user calls scheduler
+  * in startfn, then exits
+  * usched=1, initret/everReturn=1: ConverseInit returns without calling startfn
+  * on rank 0, still calls startfn on other ranks (used by namd)
+  */
 
+  if(!everReturn)
+  {
+    Cmi_startfn(CmiGetArgc(CmiMyArgv), CmiMyArgv);
+    if (Cmi_usched == 0) {
+      CsdScheduler();
+    }
+    CmiFreeArgs(CmiMyArgv);
+    //todo: add interoperate condition
+    ConverseExit();
+  }
+  else CmiFreeArgs(CmiMyArgv);
+
+  /*
   // Wait for all PEs on this node to finish
   CmiNodeBarrier();
 
   // Finalize comm_backend
   comm_backend::exitThread();
-  // free args
-  CmiFreeArgs(CmiMyArgv);
+  */
+}
+
+//function to exit converse and terminate the program
+//waits for all threads to call, then does cleanup on rank 0
+void ConverseExit(int exitcode)
+{
+  // increment number of PEs ready for exit
+  std::atomic_fetch_add_explicit(&numPEsReadyForExit, 1, std::memory_order_release);
+  // we need everyone to spin unlike old converse to be able to exit threads
+  while (std::atomic_load_explicit(&numPEsReadyForExit, std::memory_order_acquire) != CmiMyNodeSize()) {
+    // make progress while waiting so network progress can continue
+    comm_backend::progress();
+  }
+
+  // At this point all threads on the node are ready to exit. We must perform
+  // the inter-node barrier while per-thread communication contexts are still
+  // alive so that progress() can drive completion. To coordinate that,
+  // rank 0 performs the inter-node barrier and then notifies other threads
+  // (via an atomic) that the barrier is complete. After the notification,
+  // every thread performs its per-thread cleanup (exitThread). Finally,
+  // rank 0 waits for all threads to finish exitThread before tearing down
+  // the global comm backend and exiting the process.
+
+  static std::atomic<int> barrier_done{0};
+  static std::atomic<int> exitThread_done{0};
+
+  if (CmiMyRank() == 0) {
+    // participate in the global barrier (blocks until other nodes arrive)
+    comm_backend::barrier();
+    // let other local threads know barrier has completed
+    barrier_done.store(1, std::memory_order_release);
+  } else {
+    // other threads help make progress until rank 0 finishes the barrier
+    while (std::atomic_load_explicit(&barrier_done, std::memory_order_acquire) == 0) {
+      comm_backend::progress();
+    }
+  }
+
+  // Now every thread can clean up its thread-local comm state.
+  comm_backend::exitThread();
+
+  // signal we've finished exitThread()
+  std::atomic_fetch_add_explicit(&exitThread_done, 1, std::memory_order_release);
+
+  if (CmiMyRank() == 0) {
+    // wait for all local threads to complete their per-thread cleanup. Use
+    // progress() to avoid deadlock if any backend progress is needed.
+    while (std::atomic_load_explicit(&exitThread_done, std::memory_order_acquire) != CmiMyNodeSize()) {
+      comm_backend::progress();
+    }
+
+    // safe to tear down global comm backend and process-wide structures now
+    comm_backend::exit();
+    delete[] Cmi_queues;
+    delete CmiNodeQueue;
+    delete[] CmiHandlerTable;
+    Cmi_queues = nullptr;
+    CmiNodeQueue = nullptr;
+    CmiHandlerTable = nullptr;
+    exit(exitcode);
+  } else {
+    // Non-rank-0 threads block here indefinitely; rank 0 will terminate the
+    // process once cleanup is done.
+    while (true) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+  }
 }
 
 void CmiStartThreads() {
-  // allocate global arrays
-  Cmi_queues = new ConverseQueue<void *> *[Cmi_mynodesize];
-  CmiHandlerTable = new std::vector<CmiHandlerInfo> *[Cmi_mynodesize];
-  CmiNodeQueue = new ConverseNodeQueue<void *>();
-  CmiQueueRegisterInit();
 
-  _smp_mutex = CmiCreateLock();
-  CmiMemLock_lock = CmiCreateLock();
-
-  // make sure the queues are allocated before PEs start sending messages around
-  comm_backend::barrier();
-
-  std::vector<std::thread> threads;
-  for (int i = 0; i < Cmi_mynodesize; i++) {
-    std::thread t(converseRunPe, i);
-    threads.push_back(std::move(t));
+  // Create threads for ranks 1 and up, run rank 0 on main thread (like original Converse)
+  for (int i = 1; i < Cmi_mynodesize; i++) {
+    std::thread t(converseRunPe, i, 0); // everReturn is 0 for ranks > 0, meaning these ranks will call the start function and not return from ConverseInit
+    t.detach();
   }
 
-  for (auto &thread : threads) {
-    thread.join();
-  }
-
-  // make sure all PEs are done before we free the queues.
-  comm_backend::barrier();
-  comm_backend::exit();
-  delete[] Cmi_queues;
-  delete CmiNodeQueue;
-  delete[] CmiHandlerTable;
-  Cmi_queues = nullptr;
-  CmiNodeQueue = nullptr;
-  CmiHandlerTable = nullptr;
 }
 
 // argument form: ./prog +pe <N>
@@ -201,20 +264,36 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
   Cmi_startTime = getCurrentTime();
 
   Cmi_npes = 1; // default to 1
-  int plusPeSet = CmiGetArgInt(argv, "+pe", &Cmi_npes);
-  int plusPSet = CmiGetArgInt(argv, "+p", &Cmi_mynodesize);
+  int plusPeSet = CmiGetArgInt(argv, "+pe", &Cmi_npes); //total number of pes
+  int plusPorPPNSet = 0; // pes per process
+  int Cmi_mynodesize_p;
+  int Cmi_mynodesize_ppn;
+  int plusPSet = CmiGetArgInt(argv, "+p", &Cmi_mynodesize_p);
+  int plusPPNSet = CmiGetArgInt(argv, "+ppn", &Cmi_mynodesize_ppn);
+  if (plusPSet || plusPPNSet)
+  {
+    plusPorPPNSet = 1;
+    if (plusPPNSet && plusPSet) {
+      printf("warning: both +ppn and +p specified, using +ppn\n");
+      Cmi_mynodesize = Cmi_mynodesize_ppn;
+    }
+    else if (plusPPNSet)
+      Cmi_mynodesize = Cmi_mynodesize_ppn;
+    else
+      Cmi_mynodesize = Cmi_mynodesize_p;
+  } 
   Cmi_argvcopy = CmiCopyArgs(argv); // init for tracing
 
   comm_backend::init(argv);
   Cmi_mynode = comm_backend::getMyNodeId();
   Cmi_numnodes = comm_backend::getNumNodes();
   RDMAInit(argv);
-  if (plusPeSet && plusPSet && Cmi_npes != Cmi_mynodesize * Cmi_numnodes) {
+  if (plusPeSet && plusPorPPNSet && Cmi_npes != Cmi_mynodesize * Cmi_numnodes) {
     fprintf(stderr,
-            "Error: +pe <N> and +p <M> both set, but N != M * numnodes\n");
+            "Error: +pe <N> and (+p/+ppn) <M> both set, but N != M * numnodes\n");
     exit(1);
   }
-  if (plusPSet)
+  if (plusPorPPNSet)
     Cmi_npes = Cmi_mynodesize * Cmi_numnodes;
   if (Cmi_mynode == 0)
     printf("Charm++> Running in SMP mode on %d nodes and %d PEs\n",
@@ -233,7 +312,7 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
 
   if (plusPeSet)
     Cmi_mynodesize = Cmi_npes / Cmi_numnodes;
-  if (!plusPeSet && !plusPSet)
+  if (!plusPeSet && !plusPorPPNSet)
     Cmi_mynodesize = 1;
   Cmi_nodestart = Cmi_mynode * Cmi_mynodesize;
   // register am handlers
@@ -253,6 +332,8 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
   Cmi_argv = argv;
   Cmi_startfn = fn;
   CharmLibInterOperate = 0;
+  Cmi_usched = usched;
+  Cmi_initret = initret;
 
 #ifdef CMK_HAS_PARTITION
   CmiCreatePartitions(argv);
@@ -266,7 +347,24 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
   Cmi_nodestartGlobal = _Cmi_mynode_global * Cmi_mynodesize;
   #endif
 
+  // allocate global arrays
+  Cmi_queues = new ConverseQueue<void *> *[Cmi_mynodesize];
+  CmiHandlerTable = new std::vector<CmiHandlerInfo> *[Cmi_mynodesize];
+  CmiNodeQueue = new ConverseNodeQueue<void *>();
+
+  //register queues
+  CmiQueueRegisterInit();
+
+  _smp_mutex = CmiCreateLock();
+  CmiMemLock_lock = CmiCreateLock();
+
+  // make sure the queues are allocated before PEs start sending messages around
+  comm_backend::barrier();
+
+  //launch threads on rank 1+
   CmiStartThreads();
+  //run rank 0 on main thread
+  converseRunPe(0, Cmi_initret);
 }
 
 // CMI STATE
@@ -298,6 +396,10 @@ void CmiInitState(int rank) {
   CpvInitialize(int, interopExitFlag);
   CpvAccess(interopExitFlag) = 0;
   if(rank == 0) CmiMemoryIs_flag |= CMI_MEMORY_IS_OS;
+  #ifdef CMK_USE_SHMEM
+  CsvInitialize(CmiIpcManager*, coreIpcManager_);
+  CsvAccess(coreIpcManager_) = nullptr;
+  #endif
   CmiOnesidedDirectInit();
   CcdModuleInit();
   CpvInitialize(Queue, CsdSchedQueue);
@@ -440,9 +542,23 @@ void CmiFree(void *msg) {
   // zero */
   //   CmiAbort("CmiFree reference count was zero-- is this a duplicate free?");
 
+  #ifdef CMK_USE_SHMEM
+    // we should only free _our_ IPC blocks -- so calling CmiFree on
+    // an IPC block issued by another process will cause a bad free!
+    // (note -- this would only occur if you alloc an ipc block then
+    //          decide not to send it; that should be avoided! )
+    CmiIpcBlock* ipc;
+    auto* manager = CsvAccess(coreIpcManager_);
+    if (msg && (ipc = CmiIsIpcBlock(manager, BLKSTART(msg), CmiMyNode()))) {
+      CmiFreeIpcBlock(manager, ipc);
+      return;
+    }
+  #endif
+
   if (refCount == 1) {
     free(BLKSTART(parentBlk));
   }
+  
 }
 
 int CmiGetReference(void *blk) { return REFFIELD(CmiAllocFindEnclosing(blk)); }
@@ -785,11 +901,33 @@ int CmiError(const char *format, ...) {
   return ret;
 }
 
-void __CmiEnforceMsgHelper(const char *expr, const char *fileName, int lineNum,
-                           const char *msg, ...) {
-  CmiAbort("[%d] Assertion \"%s\" failed in file %s line %d.\n", CmiMyPe(),
-           expr, fileName, lineNum);
+void __CmiEnforceHelper(const char* expr, const char* fileName, const char* lineNum)
+{
+  CmiAbort("[%d] Assertion \"%s\" failed in file %s line %s.\n", CmiMyPe(), expr,
+           fileName, lineNum);
 }
+
+void __CmiEnforceMsgHelper(const char* expr, const char* fileName, const char* lineNum,
+                           const char* msg, ...)
+{
+  va_list args;
+  va_start(args, msg);
+
+  // Get length of formatted string
+  va_list argsCopy;
+  va_copy(argsCopy, args);
+  const auto size = 1 + vsnprintf(nullptr, 0, msg, argsCopy);
+  va_end(argsCopy);
+
+  // Allocate a buffer of right size and create formatted string in it
+  std::vector<char> formatted(size);
+  vsnprintf(formatted.data(), size, msg, args);
+  va_end(args);
+
+  CmiAbort("[%d] Assertion \"%s\" failed in file %s line %s.\n%s", CmiMyPe(), expr,
+           fileName, lineNum, formatted.data());
+}
+
 
 bool CmiGetIdle() { return idle_condition; }
 
