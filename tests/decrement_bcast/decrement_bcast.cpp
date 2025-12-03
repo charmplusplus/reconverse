@@ -8,17 +8,18 @@
 #include "converse.h"
 #include <string.h>
 
-// Handler called when final message is delivered (counter reached zero).
-void exit_handler(void *msg) {
-  CmiPrintf("Exit handler: counter reached zero on PE %d\n", CmiMyPe());
-  CmiExit(0);
-}
-
 // Global pointer to the DecrementToEnqueueMsg created on PE 0. Other PEs do not
 // need direct access to its fields; PE 0 will own and use this pointer when
 // decrementing. Making it global simplifies the broadcast message.
 static DecrementToEnqueueMsg *g_dte = NULL;
 static int g_decInvH = -1;
+
+// Handler called when final message is delivered (counter reached zero).
+void exit_handler(void *msg) {
+  CmiPrintf("Exit handler: counter reached zero on PE %d\n", CmiMyPe());
+  CmiFreeDecrementToEnqueue(g_dte);
+  CmiExit(0);
+}
 
 // Handler that will be invoked on PE0 for each incoming decrement-invoker
 // message. It calls CmiDecrementCounter on the global DTE.

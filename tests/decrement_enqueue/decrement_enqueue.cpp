@@ -4,9 +4,12 @@
 #include "converse.h"
 #include <string.h>
 
+DecrementToEnqueueMsg *dte;
+
 // Handler invoked when the decrement counter reaches zero. Exits the program.
 void exit_handler(void *msg) {
-  // We don't need the message payload; just exit.
+  // free DecrementToEnqueueMsg
+  CmiFreeDecrementToEnqueue(dte);
   CmiPrintf("Exit handler called, exiting...\n");
   CmiExit(0);
 }
@@ -32,7 +35,7 @@ void test_start(int argc, char **argv) {
   hdr->messageSize = msgSize;
 
   // Create the decrement-to-enqueue helper with initial count 16.
-  DecrementToEnqueueMsg *dte = CmiCreateDecrementToEnqueue(16u, msg);
+  dte = CmiCreateDecrementToEnqueue(16u, msg);
 
   // Decrement 16 times; on the 16th call the message will be sent and the
   // registered handler will call CmiExit.

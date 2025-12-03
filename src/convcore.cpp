@@ -700,12 +700,33 @@ void CmiDecrementCounter(DecrementToEnqueueMsg *dteMsg){
       destPE >= 0 && destPE < Cmi_npes,
       "CmiDecrementCounter: destPE out of range"
     );
-    // enqueue the message (node send)
-    CmiSyncSendAndFree(destPE, header->messageSize, dteMsg->msg);
-    // free the counter and dteMsg
-    free(dteMsg->counter);
-    free(dteMsg);
+    // enqueue the message without freeing
+    CmiSyncSend(destPE, header->messageSize, dteMsg->msg);
   }
+}
+
+void CmiResetCounter(unsigned int newCount, DecrementToEnqueueMsg *dteMsg){
+  if(dteMsg == nullptr){
+    CmiAbort("CmiResetCounter: dteMsg is nullptr\n");
+  }
+  if(dteMsg->counter == nullptr){
+    CmiAbort("CmiResetCounter: counter is nullptr\n");
+  }
+  if(newCount == 0){
+    CmiAbort("CmiResetCounter: newCount cannot be zero\n");
+  }
+  __atomic_store_n(dteMsg->counter, newCount, __ATOMIC_SEQ_CST);
+}
+
+void CmiFreeDecrementToEnqueue(DecrementToEnqueueMsg *dteMsg){
+  if(dteMsg == nullptr){
+    CmiAbort("CmiFreeDecrementToEnqueue: dteMsg is nullptr\n");
+  }
+  if(dteMsg->counter == nullptr){
+    CmiAbort("CmiFreeDecrementToEnqueue: counter is nullptr\n");
+  }
+  free(dteMsg->counter);
+  free(dteMsg);
 }
 
 void CmiNodeBarrier(void) {

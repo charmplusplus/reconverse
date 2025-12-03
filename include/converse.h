@@ -760,6 +760,8 @@ typedef struct DecrementToEnqueueMsg{
 
 DecrementToEnqueueMsg *CmiCreateDecrementToEnqueue(unsigned int initialCount, void *msg);
 void CmiDecrementCounter(DecrementToEnqueueMsg *dteMsg);
+void CmiResetCounter(unsigned int newCount, DecrementToEnqueueMsg *dteMsg);
+void CmiFreeDecrementToEnqueue(DecrementToEnqueueMsg *dteMsg);
 
 // error checking
 
