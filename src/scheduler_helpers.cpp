@@ -2,6 +2,8 @@
 
 std::vector<QueuePollHandler> g_handlers; //list of handlers
 Groups g_groups; //groups of handlers by index
+QueuePollHandlerFn *poll_handlers; // fixed size array
+#define ARRAY_SIZE 64
 
 // Build a 64-bit mask for a period n (1..64) with optional phase (0..n-1)
 inline uint64_t make_mask_every_n(unsigned n, unsigned phase = 0) {
@@ -60,4 +62,35 @@ void add_handler(QueuePollHandlerFn fn, unsigned period, unsigned phase)
     set_frequency(index, period, phase);
 }
 
-
+void add_list_of_handlers(const std::vector<std::pair<QueuePollHandlerFn, unsigned int>>& handlers){
+    // total frequency
+    unsigned int total = 0;
+    for(const auto& handler : handlers){
+        total += handler.second;
+    }
+    if(total == 0) return; // nothing to add
+    // loop through handlers and add them to the table
+    // spread out based on normalized frequency
+    poll_handlers = new QueuePollHandlerFn[ARRAY_SIZE];
+    unsigned int current_index = 0;
+    for(const auto& handler : handlers){
+        unsigned int freq = handler.second;
+        unsigned int normalized = (freq * ARRAY_SIZE) / total; //estimate of how many slots this handler should take
+        if(normalized == 0) normalized = 1; // at least once
+        // go through loop and find empty slots
+        // spread out as evenly as possible
+        unsigned int remaining = normalized;
+        unsigned int step = ARRAY_SIZE / normalized;
+        unsigned int index = current_index;
+        while(remaining > 0){
+            //find next empty slot
+            while(poll_handlers[index] != nullptr){
+                index = (index + 1) % ARRAY_SIZE;
+            }
+            poll_handlers[index] = handler.first;
+            remaining--;
+            index = (index + step) % ARRAY_SIZE;
+        }
+        current_index = (current_index + 1) % ARRAY_SIZE;
+    }
+}

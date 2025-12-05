@@ -20,5 +20,12 @@ using Groups = std::array<std::vector<QueuePollHandlerFn>, 64>;
 
 void add_handler(QueuePollHandlerFn fn, unsigned period, unsigned phase = 0);
 
+// Add multiple handlers at once
+// pairs of poll handlers and relative frequencies (will be normalized regardless of actual value)
+// (frequency/total)*64
+// example: if the frequencies are 8, 1, 16, 1, 4, then they are added up to 30, then normalized to 17, 2, 34, 2, 9
+// then assign to slots based on these normalized values
+void add_list_of_handlers(const std::vector<std::pair<QueuePollHandlerFn, unsigned int>>& handlers);
+
 void CsdScheduler();
 #endif
