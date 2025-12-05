@@ -91,7 +91,7 @@ void test_start(int argc, char **argv) {
     fhdr->destPE = 0;
     fhdr->messageSize = finalSize;
 
-    g_dte = CmiCreateDecrementToEnqueue((unsigned int)initial, finalMsg);
+    g_dte = CmiCreateDecrementToEnqueue(finalMsg, (unsigned int)initial);
     // Ensure stores to g_dte and its internals are visible to other PEs/threads.
     //CmiMemoryWriteFence();
     //CmiPrintf("[PE %d] created g_dte=%p, counter=%p (initial=%d)\n", CmiMyPe(), (void*)g_dte, (void*)(g_dte?g_dte->counter:NULL), initial);

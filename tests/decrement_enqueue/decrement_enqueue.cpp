@@ -35,7 +35,7 @@ void test_start(int argc, char **argv) {
   hdr->messageSize = msgSize;
 
   // Create the decrement-to-enqueue helper with initial count 16.
-  dte = CmiCreateDecrementToEnqueue(16u, msg);
+  dte = CmiCreateDecrementToEnqueue(msg, 16u);
 
   // Decrement 16 times; on the 16th call the message will be sent and the
   // registered handler will call CmiExit.
