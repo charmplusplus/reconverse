@@ -666,7 +666,7 @@ int CmiRegisterHandlerEx(CmiHandlerEx h, void *userPtr) {
 
 //decrement to enqueue
 
-DecrementToEnqueueMsg *CmiCreateDecrementToEnqueue(unsigned int initialCount, void *msg){
+DecrementToEnqueueMsg *CmiCreateDecrementToEnqueue(void *msg, unsigned int initialCount){
   if(initialCount == 0){
     CmiAbort("CmiCreateDecrementToEnqueue: initialCount cannot be zero\n");
   }
@@ -705,7 +705,7 @@ void CmiDecrementCounter(DecrementToEnqueueMsg *dteMsg){
   }
 }
 
-void CmiResetCounter(unsigned int newCount, DecrementToEnqueueMsg *dteMsg){
+void CmiResetCounter(DecrementToEnqueueMsg *dteMsg, unsigned int newCount){
   if(dteMsg == nullptr){
     CmiAbort("CmiResetCounter: dteMsg is nullptr\n");
   }

@@ -758,9 +758,15 @@ typedef struct DecrementToEnqueueMsg{
   void *msg;
 } DecrementToEnqueueMsg;
 
-DecrementToEnqueueMsg *CmiCreateDecrementToEnqueue(unsigned int initialCount, void *msg);
 void CmiDecrementCounter(DecrementToEnqueueMsg *dteMsg);
-void CmiResetCounter(unsigned int newCount, DecrementToEnqueueMsg *dteMsg);
+#ifdef __cplusplus
+//default set to 10
+DecrementToEnqueueMsg *CmiCreateDecrementToEnqueue(void *msg, unsigned int initialCount = 10);
+void CmiResetCounter(DecrementToEnqueueMsg *dteMsg, unsigned int newCount = 10);
+#else
+DecrementToEnqueueMsg *CmiCreateDecrementToEnqueue(void *msg, unsigned int initialCount);
+void CmiResetCounter(DecrementToEnqueueMsg *dteMsg, unsigned int newCount);
+#endif
 void CmiFreeDecrementToEnqueue(DecrementToEnqueueMsg *dteMsg);
 
 // error checking
