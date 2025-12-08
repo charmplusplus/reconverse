@@ -100,7 +100,7 @@ void CmiQueueRegisterInitThread() {
   handlers.push_back(std::make_pair(pollNodePrioQueue, 16));
   handlers.push_back(std::make_pair(pollThreadPrioQueue, 1));
   handlers.push_back(std::make_pair(pollProgress, 1));
-  add_list_of_handlers(handlers);
+  //add_list_of_handlers(handlers);
 }
 
 //will add queue polling functions
