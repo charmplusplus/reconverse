@@ -93,9 +93,7 @@ bool pollProgress()
   return false; //polling progress doesn't count
 }
 
-//will add queue polling functions
-//called at node level (before threads created)
-void CmiQueueRegisterInit() {
+void CmiQueueRegisterInitThread() {
   std::vector<std::pair<QueuePollHandlerFn, unsigned int>> handlers;
   handlers.push_back(std::make_pair(pollConverseNodeQueue, 8));
   handlers.push_back(std::make_pair(pollConverseThreadQueue, 1));
@@ -103,6 +101,11 @@ void CmiQueueRegisterInit() {
   handlers.push_back(std::make_pair(pollThreadPrioQueue, 1));
   handlers.push_back(std::make_pair(pollProgress, 1));
   add_list_of_handlers(handlers);
+}
+
+//will add queue polling functions
+//called at node level (before threads created)
+void CmiQueueRegisterInit() {
   add_handler(pollConverseNodeQueue, 8);
   add_handler(pollConverseThreadQueue, 1);
   add_handler(pollNodePrioQueue, 16);

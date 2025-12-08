@@ -71,6 +71,7 @@ void CmiPushPE(int destPE, int messageSize, void *msg);
 
 //queue reg init
 void CmiQueueRegisterInit(void);
+void CmiQueueRegisterInitThread(void); 
 
 // node queue
 ConverseNodeQueue<void *> *CmiGetNodeQueue();

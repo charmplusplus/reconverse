@@ -2,7 +2,8 @@
 
 std::vector<QueuePollHandler> g_handlers; //list of handlers
 Groups g_groups; //groups of handlers by index
-QueuePollHandlerFn *poll_handlers; // fixed size array
+CpvDeclare(QueuePollHandlerFn *, poll_handlers);
+//QueuePollHandlerFn *poll_handlers; // fixed size array
 #define ARRAY_SIZE 64
 
 // Build a 64-bit mask for a period n (1..64) with optional phase (0..n-1)
@@ -71,14 +72,16 @@ void add_list_of_handlers(const std::vector<std::pair<QueuePollHandlerFn, unsign
     if(total == 0) return; // nothing to add
     // loop through handlers and add them to the table
     // spread out based on normalized frequency
-    poll_handlers = new QueuePollHandlerFn[ARRAY_SIZE];
+    CpvInitialize(QueuePollHandlerFn *, poll_handlers);
+    CpvAccess(poll_handlers) = new QueuePollHandlerFn[ARRAY_SIZE];
+    //poll_handlers = new QueuePollHandlerFn[ARRAY_SIZE];
     unsigned int current_index = 0; //earliest slot is index within handlers vector
     unsigned int total_assigned = 0;
     int handler_index = 0;//for debugging
     for(const auto& handler : handlers){
         unsigned int freq = handler.second;
         long normalized = lround((freq * ARRAY_SIZE) / static_cast<double>(total)); //estimate of how many slots this handler should take
-        CmiPrintf("[process %d] Handler %d frequency %u normalized to %ld\n", CmiMyRank(), handler_index, freq, normalized);
+        CmiPrintf("Handler %d frequency %u normalized to %ld\n", handler_index, freq, normalized);
         if(normalized == 0) normalized = 1; // at least once
         // go through loop and find empty slots
         // spread out as evenly as possible
@@ -90,12 +93,13 @@ void add_list_of_handlers(const std::vector<std::pair<QueuePollHandlerFn, unsign
             if(total_assigned >= ARRAY_SIZE){
                 break; // all slots assigned
             }
-            while(poll_handlers[index] != nullptr){
+            while(CpvAccess(poll_handlers)[index] != nullptr){
                 index = (index + 1) % ARRAY_SIZE;
             }
-            poll_handlers[index] = handler.first;
+            CpvAccess(poll_handlers)[index] = handler.first;
+            //poll_handlers[index] = handler.first;
             total_assigned++;
-            CmiPrintf("[process %d] Adding handler %d at index %d\n", CmiMyRank(), handler_index, index);
+            CmiPrintf("Adding handler %d at index %d\n", handler_index, index);
             remaining--;
             index = (index + step) % ARRAY_SIZE;
         }
