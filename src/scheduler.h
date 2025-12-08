@@ -6,6 +6,7 @@
 #include <thread>
 #include <array>
 #include <vector>
+#include <cmath>
 
 using QueuePollHandlerFn = bool(*)(void); //we need a return value to indicate if work was done
 

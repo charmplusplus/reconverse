@@ -72,10 +72,13 @@ void add_list_of_handlers(const std::vector<std::pair<QueuePollHandlerFn, unsign
     // loop through handlers and add them to the table
     // spread out based on normalized frequency
     poll_handlers = new QueuePollHandlerFn[ARRAY_SIZE];
-    unsigned int current_index = 0;
+    unsigned int current_index = 0; //earliest slot is index within handlers vector
+    unsigned int total_assigned = 0;
+    int handler_index = 0;//for debugging
     for(const auto& handler : handlers){
         unsigned int freq = handler.second;
-        unsigned int normalized = (freq * ARRAY_SIZE) / total; //estimate of how many slots this handler should take
+        long normalized = lround((freq * ARRAY_SIZE) / static_cast<double>(total)); //estimate of how many slots this handler should take
+        //CmiPrintf("Handler %d frequency %u normalized to %ld\n", handler_index, freq, normalized);
         if(normalized == 0) normalized = 1; // at least once
         // go through loop and find empty slots
         // spread out as evenly as possible
@@ -84,13 +87,19 @@ void add_list_of_handlers(const std::vector<std::pair<QueuePollHandlerFn, unsign
         unsigned int index = current_index;
         while(remaining > 0){
             //find next empty slot
+            if(total_assigned >= ARRAY_SIZE){
+                break; // all slots assigned
+            }
             while(poll_handlers[index] != nullptr){
                 index = (index + 1) % ARRAY_SIZE;
             }
             poll_handlers[index] = handler.first;
+            total_assigned++;
+            //CmiPrintf("Adding handler %d at index %d\n", handler_index, index);
             remaining--;
             index = (index + step) % ARRAY_SIZE;
         }
         current_index = (current_index + 1) % ARRAY_SIZE;
+        handler_index++;
     }
 }
