@@ -126,7 +126,7 @@ void converseRunPe(int rank, int everReturn) {
   // init comm_backend
   comm_backend::initThread(rank, CmiMyNodeSize());
 
-  CmiQueueRegisterInitThread();
+  //CmiQueueRegisterInitThread();
 
   // init things like cld module, ccs, etc
   CldModuleInit(CmiMyArgv);
