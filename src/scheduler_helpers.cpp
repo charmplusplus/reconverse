@@ -88,6 +88,7 @@ void add_list_of_handlers(const std::vector<std::pair<QueuePollHandlerFn, unsign
         unsigned int remaining = normalized;
         unsigned int step = ARRAY_SIZE / normalized;
         unsigned int index = current_index;
+        /*
         while(remaining > 0){
             //find next empty slot
             if(total_assigned >= ARRAY_SIZE){
@@ -103,6 +104,7 @@ void add_list_of_handlers(const std::vector<std::pair<QueuePollHandlerFn, unsign
             remaining--;
             index = (index + step) % ARRAY_SIZE;
         }
+            */
         current_index = (current_index + 1) % ARRAY_SIZE;
         handler_index++;
     }
