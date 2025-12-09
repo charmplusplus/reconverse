@@ -3,6 +3,7 @@
 std::vector<QueuePollHandler> g_handlers; //list of handlers
 Groups g_groups; //groups of handlers by index
 CpvDeclare(QueuePollHandlerFn *, poll_handlers);
+CpvDeclare(int*, poll_handler_assigned);
 //QueuePollHandlerFn *poll_handlers; // fixed size array
 #define ARRAY_SIZE 64
 
@@ -74,6 +75,11 @@ void add_list_of_handlers(const std::vector<std::pair<QueuePollHandlerFn, unsign
     // spread out based on normalized frequency
     CpvInitialize(QueuePollHandlerFn *, poll_handlers);
     CpvAccess(poll_handlers) = new QueuePollHandlerFn[ARRAY_SIZE];
+    CpvInitialize(int*, poll_handler_assigned);
+    CpvAccess(poll_handler_assigned) = new int[ARRAY_SIZE];
+    for(unsigned int i=0; i<ARRAY_SIZE; i++){
+        CpvAccess(poll_handler_assigned)[i] = 0;
+    }
     //poll_handlers = new QueuePollHandlerFn[ARRAY_SIZE];
     unsigned int current_index = 0; //earliest slot is index within handlers vector
     unsigned int total_assigned = 0;
@@ -88,23 +94,22 @@ void add_list_of_handlers(const std::vector<std::pair<QueuePollHandlerFn, unsign
         unsigned int remaining = normalized;
         unsigned int step = ARRAY_SIZE / normalized;
         unsigned int index = current_index;
-        /*
         while(remaining > 0){
             //find next empty slot
             if(total_assigned >= ARRAY_SIZE){
                 break; // all slots assigned
             }
-            while(CpvAccess(poll_handlers)[index] != nullptr){
+            while(CpvAccess(poll_handler_assigned)[index] == 0){
                 index = (index + 1) % ARRAY_SIZE;
             }
             CpvAccess(poll_handlers)[index] = handler.first;
+            CpvAccess(poll_handler_assigned)[index] = 1;
             //poll_handlers[index] = handler.first;
             total_assigned++;
             CmiPrintf("Adding handler %d at index %d\n", handler_index, index);
             remaining--;
             index = (index + step) % ARRAY_SIZE;
         }
-            */
         current_index = (current_index + 1) % ARRAY_SIZE;
         handler_index++;
     }
