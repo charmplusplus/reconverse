@@ -87,7 +87,7 @@ void add_list_of_handlers(const std::vector<std::pair<QueuePollHandlerFn, unsign
     for(const auto& handler : handlers){
         unsigned int freq = handler.second;
         long normalized = lround((freq * ARRAY_SIZE) / static_cast<double>(total)); //estimate of how many slots this handler should take
-        CmiPrintf("Handler %d frequency %u normalized to %ld\n", handler_index, freq, normalized);
+        //CmiPrintf("Handler %d frequency %u normalized to %ld\n", handler_index, freq, normalized);
         if(normalized == 0) normalized = 1; // at least once
         // go through loop and find empty slots
         // spread out as evenly as possible
@@ -106,7 +106,7 @@ void add_list_of_handlers(const std::vector<std::pair<QueuePollHandlerFn, unsign
             CpvAccess(poll_handler_assigned)[index] = 1;
             //poll_handlers[index] = handler.first;
             total_assigned++;
-            CmiPrintf("Adding handler %d at index %d\n", handler_index, index);
+            //CmiPrintf("Adding handler %d at index %d\n", handler_index, index);
             remaining--;
             index = (index + step) % ARRAY_SIZE;
         }
