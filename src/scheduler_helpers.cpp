@@ -102,7 +102,7 @@ void add_list_of_handlers(const std::vector<std::pair<QueuePollHandlerFn, unsign
             while(CpvAccess(poll_handler_assigned)[index] != 0){
                 index = (index + 1) % ARRAY_SIZE;
             }
-            //CpvAccess(poll_handlers)[index] = handler.first;
+            CpvAccess(poll_handlers)[index] = handler.first;
             CpvAccess(poll_handler_assigned)[index] = 1;
             //poll_handlers[index] = handler.first;
             total_assigned++;
