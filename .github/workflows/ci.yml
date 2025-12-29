@@ -41,7 +41,7 @@ jobs:
                 -DLCT_PMI_BACKEND_ENABLE_MPI=ON \
                 .
             cmake --build build --target all
-            ctest --extra-verbose --timeout 60
+            ctest --test-dir build --extra-verbose --timeout 60
 
       - name: With the LCW communication backend
         shell: bash

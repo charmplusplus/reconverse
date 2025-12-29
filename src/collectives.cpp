@@ -229,8 +229,11 @@ void CmiReductionsInit(void) {
   CpvAccess(_reduction_counter) = 0;
 
   // SETUP NODE-LEVEL REDUCTIONS
-  CsvInitialize(CmiNodeReduction *, _node_reduction_info);
-  CsvInitialize(CmiNodeReductionID, _node_reduction_counter);
+  if(CmiMyRank() == 0)
+  {
+    CsvInitialize(CmiNodeReduction *, _node_reduction_info);
+    CsvInitialize(CmiNodeReductionID, _node_reduction_counter);
+
 
   auto noderedinfo =
       (CmiNodeReduction *)malloc(CmiMaxReductions * sizeof(CmiNodeReduction));
@@ -239,10 +242,13 @@ void CmiReductionsInit(void) {
 
     // node reduction must be initialized with a valid lock
     nodered.lock = CmiCreateLock(); // in non-smp this would just be a nullptr
-
+  
+    CsvAccess(_node_reduction_info) = noderedinfo;
+    CsvAccess(_node_reduction_counter) = 0;
   }
-  CsvAccess(_node_reduction_info) = noderedinfo;
-  CsvAccess(_node_reduction_counter) = 0;
+
+}
+
 }
 
 // extract reduction ID from message
@@ -428,15 +434,14 @@ static void CmiClearNodeReduction(CmiReductionID id) {
 
 // lock and unlock are used to support SMP
 void CmiNodeReduce(void *msg, int size, CmiReduceMergeFn mergeFn) {
+  const CmiReductionID id = CmiGetNextNodeReductionID();
 
   CmiNodeReduction nodeRed =
-      CsvAccess(_node_reduction_info)[CmiGetReductionIndex(CmiGetRedID(msg))];
+      CsvAccess(_node_reduction_info)[CmiGetReductionIndex(id)];
   CmiLock(nodeRed.lock);
 
-  const CmiReductionID id = CmiGetNextNodeReductionID();
   CmiReduction *red = CmiGetCreateNodeReduction(id);
   CmiInternalNodeReduce(msg, size, mergeFn, red);
-
 
   CmiUnlock(nodeRed.lock);
 }

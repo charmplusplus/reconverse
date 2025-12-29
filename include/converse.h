@@ -57,6 +57,8 @@ extern CmiNodeLock CmiMemLock_lock;
 
 #define CmiMemUnlock() do{if (CmiMemLock_lock) CmiUnlock(CmiMemLock_lock);} while (0)
 
+#define CmiInCommThread()  (0)
+
 #define CMK_TAG(x, y) x##y##_
 #define CMK_CONCAT(x, y) x##y
 
@@ -542,7 +544,11 @@ int CmiGetArgc(char **argv);
 int CmiScanf(const char *format, ...);
 int CmiError(const char *format, ...);
 
-#define ConverseExit(...) CmiExit(__VA_ARGS__ + 0)
+#ifdef __cplusplus
+void ConverseExit(int status=0);
+#else
+void ConverseExit(int status);
+#endif
 #define CmiMemcpy(dest, src, size) memcpy((dest), (src), (size))
 
 #define setMemoryTypeChare(p) /* empty memory debugging method */

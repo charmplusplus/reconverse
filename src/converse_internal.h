@@ -29,7 +29,7 @@ typedef struct GroupDef_s {
 #define  DEBUGF(...)    //CmiPrintf(__VA_ARGS__)
 
 void CmiStartThreads(char **argv);
-void converseRunPe(int rank);
+void converseRunPe(int rank, int everReturn);
 void collectiveInit(void);
 
 // HANDLERS
