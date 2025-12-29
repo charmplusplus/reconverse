@@ -1,4 +1,4 @@
-#include "converse_internal.h"
+#include "comm_backend/comm_backend_internal.h"
 
 namespace comm_backend {
 
@@ -44,9 +44,16 @@ void init(char **argv) {
   gMyNodeID = gCommBackend->getMyNodeId();
   gNumNodes = gCommBackend->getNumNodes();
   if (gNumNodes == 1) {
-    DEBUGF("Only one node detected, exiting comm backend\n");
+    //DEBUGF("Only one node detected, exiting comm backend\n");
     exit();
   }
+}
+
+void init_mempool() {
+  if (gCommBackend == nullptr) {
+    return;
+  }
+  gCommBackend->init_mempool();
 }
 
 void exit() {
@@ -113,6 +120,23 @@ void issueRput(int rank, const void *local_buf, size_t size, mr_t local_mr,
   }
   gCommBackend->issueRput(rank, local_buf, size, local_mr, remote_disp, rmr,
                           localComp, user_context);
+}
+
+void *malloc(int nbytes, int header)
+{
+  if (gCommBackend == nullptr) {
+    return std::malloc(nbytes + header);
+  }
+  return gCommBackend->malloc(nbytes, header);
+}
+
+void free(void* msg)
+{
+  if (gCommBackend == nullptr) {
+    std::free(msg - sizeof(CmiChunkHeader));
+    return;
+  }
+  return gCommBackend->free(msg);
 }
 
 bool progress(void) {

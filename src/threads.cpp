@@ -1,3 +1,8 @@
+#include <signal.h>
+#include <errno.h>
+#include <atomic>
+#include <cstring>
+#include "uFcontext.h"
 #include "converse_internal.h"
 #include "scheduler.h"
 #include "uFcontext.h"

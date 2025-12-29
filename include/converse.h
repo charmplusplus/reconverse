@@ -11,6 +11,8 @@
 #include <stdatomic.h>
 #endif
 #include <pthread.h>
+#include <atomic>
+//#include "comm_backend/comm_backend.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
@@ -215,7 +217,7 @@ extern int CharmLibInterOperate;
 #ifdef __cplusplus
 struct alignas(ALIGN_BYTES) CmiChunkHeader {
   int size;
-
+  void* mr;
 private:
   std::atomic<int> ref; // only supports smp, would just be int otherwise
 
@@ -337,6 +339,7 @@ extern char *CthGetData(CthThread t);
 /* Given a user chunk m, extract the enclosing chunk header fields: */
 #define BLKSTART(m) ((CmiChunkHeader *)(((intptr_t)m) - sizeof(CmiChunkHeader)))
 #define SIZEFIELD(m) ((BLKSTART(m))->size)
+  #define MRFIELD(m) ((BLKSTART(m))->mr)
 #define REFFIELD(m) ((BLKSTART(m))->getRef())
 #define REFFIELDSET(m, r) ((BLKSTART(m))->setRef(r))
 #define REFFIELDINC(m) ((BLKSTART(m))->incRef())
