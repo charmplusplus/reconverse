@@ -154,25 +154,106 @@ void CsdScheduler() {
  * are empty, not when the scheduler is stopped.
  */
 void CsdSchedulePoll() {
-  uint64_t loop_counter = 0;
+ // get pthread level queue
+  ConverseQueue<void *> *queue = CmiGetQueue(CmiMyRank());
+
+  // get node level queue
+  ConverseNodeQueue<void *> *nodeQueue = CmiGetNodeQueue();
 
   while(1){
 
     CcdCallBacks();
+
     CcdRaiseCondition(CcdSCHEDLOOP);
-    //poll queues
-    unsigned idx = static_cast<unsigned>(loop_counter & 63ULL);
-    bool workDone = false;
-    /*for (auto fn : g_groups[idx]) {
-        workDone |= fn();
-    }*/
-    workDone |= CpvAccess(poll_handlers)[idx]();
-    if(!workDone) {
-      setIdle();
-      break;
+
+    // poll node queue
+    if (!nodeQueue->empty()) {
+      auto result = nodeQueue->pop();
+      if (result) {
+        void *msg = result.value();
+        // process event
+        CmiHandleMessage(msg);
+
+        // release idle if necessary
+        if (CmiGetIdle()) {
+          CmiSetIdle(false);
+          CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
+        }
+      }
     }
-    loop_counter++;
-    
+
+    // poll thread queue
+    else if (!queue->empty()) {
+      // get next event (guaranteed to be there because only single consumer)
+      void *msg = queue->pop().value();
+
+      // process event
+      CmiHandleMessage(msg);
+
+      // release idle if necessary
+      if (CmiGetIdle()) {
+        CmiSetIdle(false);
+        CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
+      }
+    }
+
+    // poll node prio queue
+    else {
+      // Try to acquire lock without blocking
+      if (CmiTryLock(CsvAccess(CsdNodeQueueLock)) == 0) {
+        if (!QueueEmpty(CsvAccess(CsdNodeQueue))) {
+          void *msg = QueueTop(CsvAccess(CsdNodeQueue));
+          QueuePop(CsvAccess(CsdNodeQueue));
+          CmiUnlock(CsvAccess(CsdNodeQueueLock));
+          // process event
+          CmiHandleMessage(msg);
+
+          // release idle if necessary
+          if (CmiGetIdle()) {
+            CmiSetIdle(false);
+            CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
+          }
+        } 
+        else {
+          CmiUnlock(CsvAccess(CsdNodeQueueLock));
+          if (!QueueEmpty(CpvAccess(CsdSchedQueue))) {
+          void *msg = QueueTop(CpvAccess(CsdSchedQueue));
+          QueuePop(CpvAccess(CsdSchedQueue));
+
+          // process event
+          CmiHandleMessage(msg);
+
+          // release idle if necessary
+          if (CmiGetIdle()) {
+            CmiSetIdle(false);
+            CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
+          }
+        } else {
+          comm_backend::progress();
+          break; //break when queues are empty
+        }
+        }
+      } 
+      else {
+        // Could not acquire node queue lock, skip to thread prio queue
+        if (!QueueEmpty(CpvAccess(CsdSchedQueue))) {
+          void *msg = QueueTop(CpvAccess(CsdSchedQueue));
+          QueuePop(CpvAccess(CsdSchedQueue));
+
+          // process event
+          CmiHandleMessage(msg);
+
+          // release idle if necessary
+          if (CmiGetIdle()) {
+            CmiSetIdle(false);
+            CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
+          }
+        } else {
+          comm_backend::progress();
+          break; //break when queues are empty
+        }
+      }
+    }
   }
 }
 
