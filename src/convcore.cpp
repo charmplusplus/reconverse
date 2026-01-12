@@ -126,6 +126,8 @@ void converseRunPe(int rank, int everReturn) {
   // init comm_backend
   comm_backend::initThread(rank, CmiMyNodeSize());
 
+  CmiQueueRegisterInitThread();
+
   // init things like cld module, ccs, etc
   CldModuleInit(CmiMyArgv);
 
@@ -351,6 +353,9 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
   Cmi_queues = new ConverseQueue<void *> *[Cmi_mynodesize];
   CmiHandlerTable = new std::vector<CmiHandlerInfo> *[Cmi_mynodesize];
   CmiNodeQueue = new ConverseNodeQueue<void *>();
+
+  //register queues
+  CmiQueueRegisterInit();
 
   _smp_mutex = CmiCreateLock();
   CmiMemLock_lock = CmiCreateLock();
