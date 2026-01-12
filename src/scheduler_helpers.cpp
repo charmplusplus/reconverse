@@ -7,6 +7,9 @@ CpvDeclare(int*, poll_handler_assigned);
 //QueuePollHandlerFn *poll_handlers; // fixed size array
 #define ARRAY_SIZE 64
 
+// default handler used to safely occupy any unassigned slot
+static bool pollNoWork() { return false; }
+
 // Build a 64-bit mask for a period n (1..64) with optional phase (0..n-1)
 inline uint64_t make_mask_every_n(unsigned n, unsigned phase = 0) {
     if (n == 0) return 0ULL;
@@ -79,6 +82,7 @@ void add_list_of_handlers(const std::vector<std::pair<QueuePollHandlerFn, unsign
     CpvAccess(poll_handler_assigned) = new int[ARRAY_SIZE];
     for(unsigned int i=0; i<ARRAY_SIZE; i++){
         CpvAccess(poll_handler_assigned)[i] = 0;
+        CpvAccess(poll_handlers)[i] = pollNoWork; // ensure valid callable in every slot
     }
     //poll_handlers = new QueuePollHandlerFn[ARRAY_SIZE];
     unsigned int current_index = 0; //earliest slot is index within handlers vector

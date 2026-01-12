@@ -2,6 +2,7 @@
 
 extern std::vector<QueuePollHandler> g_handlers; //list of handlers
 extern Groups g_groups; //groups of handlers by index
+CpvExtern(QueuePollHandlerFn *, poll_handlers);
 
 static inline void releaseIdle() {
   if (CmiGetIdle()) {
@@ -133,9 +134,12 @@ void CsdScheduler() {
     //poll queues
     unsigned idx = static_cast<unsigned>(loop_counter & 63ULL);
     bool workDone = false;
+    /*
     for (auto fn : g_groups[idx]) {
         workDone |= fn();
     }
+        */
+    workDone |= CpvAccess(poll_handlers)[idx]();
     if(!workDone) {
       setIdle();
     }
@@ -159,9 +163,10 @@ void CsdSchedulePoll() {
     //poll queues
     unsigned idx = static_cast<unsigned>(loop_counter & 63ULL);
     bool workDone = false;
-    for (auto fn : g_groups[idx]) {
+    /*for (auto fn : g_groups[idx]) {
         workDone |= fn();
-    }
+    }*/
+    workDone |= CpvAccess(poll_handlers)[idx]();
     if(!workDone) {
       setIdle();
       break;
