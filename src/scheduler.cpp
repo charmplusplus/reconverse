@@ -193,12 +193,12 @@ void CqsEnqueueGeneral(Queue q, void *Message, int strategy, int priobits,
               break;
             case CQS_QUEUEING_IFIFO:
             case CQS_QUEUEING_ILIFO:
-              iprio=prioptr[0]+(1U<<(8*sizeof(unsigned int)-1));
+              iprio=prioptr[0];
               QueuePush(q, Message, iprio);
               break;
             case CQS_QUEUEING_LFIFO:
             case CQS_QUEUEING_LLIFO:
-              lprio = ((long long*)prioptr)[0] + (1ULL<<(8*sizeof(long long)-1));
+              lprio = ((long long*)prioptr)[0];
               QueuePush(q, Message, lprio);
               break;
             default:
