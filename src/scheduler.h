@@ -8,6 +8,7 @@
 #include <vector>
 #include <cmath>
 
+#define ARRAY_SIZE 64
 using QueuePollHandlerFn = bool(*)(void); //we need a return value to indicate if work was done
 
 struct QueuePollHandler {

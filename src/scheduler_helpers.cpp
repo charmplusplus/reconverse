@@ -5,7 +5,6 @@ Groups g_groups; //groups of handlers by index
 CpvDeclare(QueuePollHandlerFn *, poll_handlers);
 CpvDeclare(int*, poll_handler_assigned);
 //QueuePollHandlerFn *poll_handlers; // fixed size array
-#define ARRAY_SIZE 64
 
 // default handler used to safely occupy any unassigned slot
 static bool pollNoWork() { return false; }
