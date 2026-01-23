@@ -752,6 +752,23 @@ void CmiLock(CmiNodeLock lock);
 void CmiUnlock(CmiNodeLock lock);
 int CmiTryLock(CmiNodeLock lock);
 
+//decrementToEnqueue
+typedef struct DecrementToEnqueueMsg{
+  unsigned int *counter;
+  void *msg;
+} DecrementToEnqueueMsg;
+
+void CmiDecrementCounter(DecrementToEnqueueMsg *dteMsg);
+#ifdef __cplusplus
+//default set to 10
+DecrementToEnqueueMsg *CmiCreateDecrementToEnqueue(void *msg, unsigned int initialCount = 10);
+void CmiResetCounter(DecrementToEnqueueMsg *dteMsg, unsigned int newCount = 10);
+#else
+DecrementToEnqueueMsg *CmiCreateDecrementToEnqueue(void *msg, unsigned int initialCount);
+void CmiResetCounter(DecrementToEnqueueMsg *dteMsg, unsigned int newCount);
+#endif
+void CmiFreeDecrementToEnqueue(DecrementToEnqueueMsg *dteMsg);
+
 // error checking
 
 // do we want asserts to be defaulted to be on or off(right now it is on)

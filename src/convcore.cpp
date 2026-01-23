@@ -669,6 +669,71 @@ int CmiRegisterHandlerEx(CmiHandlerEx h, void *userPtr) {
   return handlerVector->size() - 1;
 }
 
+//decrement to enqueue
+
+DecrementToEnqueueMsg *CmiCreateDecrementToEnqueue(void *msg, unsigned int initialCount){
+  if(initialCount == 0){
+    CmiAbort("CmiCreateDecrementToEnqueue: initialCount cannot be zero\n");
+  }
+  DecrementToEnqueueMsg *dteMsg = static_cast<DecrementToEnqueueMsg *>(malloc(sizeof(DecrementToEnqueueMsg)));
+  dteMsg->counter = static_cast<unsigned int *>(malloc(sizeof(unsigned int)));
+  *(dteMsg->counter) = initialCount;
+  dteMsg->msg = msg;
+  return dteMsg;
+}
+
+void CmiDecrementCounter(DecrementToEnqueueMsg *dteMsg){
+  if(dteMsg == nullptr){
+    CmiAbort("CmiDecrementCounter: dteMsg is nullptr\n");
+  }
+  if(dteMsg->counter == nullptr){
+    // In concurrent scenarios the counter pointer may have been freed by
+    // another thread (race between decrements). Instead of aborting, be
+    // tolerant and return silently since the counter has already been
+    // consumed.
+    return;
+  }
+  unsigned int oldValue = __atomic_fetch_sub(dteMsg->counter, 1, __ATOMIC_SEQ_CST);
+  if(oldValue == 0){
+    CmiAbort("CmiDecrementCounter: counter already zero, cannot decrement further\n");
+  }
+  if(oldValue == 1){
+    //get dest PE from message header
+    CmiMessageHeader *header = static_cast<CmiMessageHeader *>(dteMsg->msg);
+    int destPE = header->destPE;
+    CmiAssertMsg(
+      destPE >= 0 && destPE < Cmi_npes,
+      "CmiDecrementCounter: destPE out of range"
+    );
+    // enqueue the message without freeing
+    CmiSyncSend(destPE, header->messageSize, dteMsg->msg);
+  }
+}
+
+void CmiResetCounter(DecrementToEnqueueMsg *dteMsg, unsigned int newCount){
+  if(dteMsg == nullptr){
+    CmiAbort("CmiResetCounter: dteMsg is nullptr\n");
+  }
+  if(dteMsg->counter == nullptr){
+    CmiAbort("CmiResetCounter: counter is nullptr\n");
+  }
+  if(newCount == 0){
+    CmiAbort("CmiResetCounter: newCount cannot be zero\n");
+  }
+  __atomic_store_n(dteMsg->counter, newCount, __ATOMIC_SEQ_CST);
+}
+
+void CmiFreeDecrementToEnqueue(DecrementToEnqueueMsg *dteMsg){
+  if(dteMsg == nullptr){
+    CmiAbort("CmiFreeDecrementToEnqueue: dteMsg is nullptr\n");
+  }
+  if(dteMsg->counter == nullptr){
+    CmiAbort("CmiFreeDecrementToEnqueue: counter is nullptr\n");
+  }
+  free(dteMsg->counter);
+  free(dteMsg);
+}
+
 void CmiNodeBarrier(void) {
   static Barrier nodeBarrier(CmiMyNodeSize());
   int64_t ticket = nodeBarrier.arrive();
