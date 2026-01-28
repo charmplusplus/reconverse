@@ -1337,4 +1337,8 @@ inline const std::size_t& CmiRecommendedIpcBlockCutoff(void) {
 
 CsvExtern(CmiIpcManager*, coreIpcManager_);
 
+/* Task Queue Macros */
+#define CsdTaskEnqueue(x) TaskQueuePushLocal((void*)(x))
+#define CsdTaskPop() TaskQueuePopLocal()
+
 #endif // CONVERSE_H
