@@ -8,12 +8,13 @@
 #include "converse.h"
 
 #define MAX_TASK_NUM 512
-CpvDeclare(int, exitHandlerId);
+#define MAX_RING_HOPS 1000
 CpvDeclare(int, divideHandlerId);
 CpvDeclare(int, ringHandlerId);
 
 struct Message {
   CmiMessageHeader header;
+  int num; //ring hops
 };
 
 struct ConverseTaskMsg {
@@ -21,13 +22,8 @@ struct ConverseTaskMsg {
   int num; //task number
 };
 
-//end after 10 seconds regardless of progress
-void exitHandler(void *vmsg) {
-  printf("Exiting Converse after 10 seconds\n");
-  CmiExit(0);
-}
-
 void divide_handler(void *msg) {
+  //CmiPrintf("[PE %d] Divide handler called\n", CmiMyPe());
   ConverseTaskMsg *taskMsg = (ConverseTaskMsg *)msg;
   int num = taskMsg->num;
 
@@ -35,6 +31,9 @@ void divide_handler(void *msg) {
     // create two new tasks
     for (int i = 0; i < 2; i++) {
       ConverseTaskMsg *newTaskMsg = (ConverseTaskMsg *)CmiAlloc(sizeof(ConverseTaskMsg));
+      CmiMessageHeader *header = (CmiMessageHeader *)newTaskMsg;
+      header->handlerId = CpvAccess(divideHandlerId);
+      header->messageSize = sizeof(ConverseTaskMsg);
       newTaskMsg->num = num / 2;
       CsdTaskEnqueue((void *)newTaskMsg);
     }
@@ -45,34 +44,52 @@ void divide_handler(void *msg) {
 
 // rings within the process only
 void ring_handler(void *msg) {
-  CmiMessageHeader *header = (CmiMessageHeader *)msg;
-  int next_pe = (CmiMyRank() + 1) % CmiMyNodeSize();
-  CmiSyncSendAndFree(next_pe, header->messageSize, msg);
+  //CmiPrintf("[PE %d] Ring handler called\n", CmiMyPe());
+  Message *ring_msg = (Message *)msg;
+  ring_msg->num--;
+  if (ring_msg->num == 0) {
+    CmiPrintf("[PE %d] Ring completed\n", CmiMyPe());
+    CmiFree(msg);
+    CmiExit(0);
+  }
+  else {
+    CmiMessageHeader *header = (CmiMessageHeader *)msg;
+    int next_pe = (CmiMyRank() + 1) % CmiMyNodeSize();
+    CmiSyncSendAndFree(next_pe, header->messageSize, msg);
+  }
 }
 
 CmiStartFn mymain(int argc, char **argv){
-    CpvInitialize(int, exitHandlerId);
-    CpvAccess(exitHandlerId) = CmiRegisterHandler(exitHandler);
     CpvInitialize(int, divideHandlerId);
     CpvAccess(divideHandlerId) = CmiRegisterHandler(divide_handler);
     CpvInitialize(int, ringHandlerId);
     CpvAccess(ringHandlerId) = CmiRegisterHandler(ring_handler);
 
-    //launch ring task
-    Message *msg = (Message *)CmiAlloc(sizeof(Message));
-    CmiMessageHeader *header = (CmiMessageHeader *)msg;
-    header->handlerId = CpvAccess(ringHandlerId);
-    header->messageSize = sizeof(Message);
-    CmiSyncSendAndFree((CmiMyRank() + 1) % CmiMyNodeSize(),
-                        header->messageSize, msg);
-    //launch divide tasks
-    for(int i=0; i<MAX_TASK_NUM; i*=2)
+    //launch ring task on rank 0
+    if(CmiMyRank() == 0)
     {
+      CmiPrintf("[PE %d] Launching ring message\n", CmiMyPe());
+      Message *msg = (Message *)CmiAlloc(sizeof(Message));
+      msg->num = MAX_RING_HOPS * CmiMyNodeSize();
+      CmiMessageHeader *header = (CmiMessageHeader *)msg;
+      header->handlerId = CpvAccess(ringHandlerId);
+      header->messageSize = sizeof(Message);
+      CmiSyncSendAndFree((CmiMyRank() + 1) % CmiMyNodeSize(),
+                          header->messageSize, msg);
+    }
+    //launch divide tasks
+    for(int i=1; i<MAX_TASK_NUM; i*=2)
+    {
+      //CmiPrintf("[PE %d] Launching divide task with num=%d\n", CmiMyPe(), i);
       ConverseTaskMsg *taskMsg = (ConverseTaskMsg *)CmiAlloc(sizeof(ConverseTaskMsg));
-      taskMsg->num = MAX_TASK_NUM;
+      CmiMessageHeader *header = (CmiMessageHeader *)taskMsg;
+      header->handlerId = CpvAccess(divideHandlerId);
+      header->messageSize = sizeof(ConverseTaskMsg);
+      taskMsg->num = i;
       CsdTaskEnqueue((void *)taskMsg);
     }
 
+    return 0;
 }
 
 int main(int argc, char **argv) {

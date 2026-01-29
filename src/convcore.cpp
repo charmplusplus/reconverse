@@ -2,7 +2,6 @@
 #include "barrier.h"
 #include "converse_internal.h"
 #include "queue.h"
-#include "conv-taskq.h"
 #include "taskqueue.h"
 #include "scheduler.h"
 

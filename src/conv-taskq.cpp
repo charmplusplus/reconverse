@@ -1,4 +1,4 @@
-#include "conv-taskq.h"
+#include "converse.h"
 
 /* Check if the local task queue has tasks available */
 extern "C" int TaskQueueHasWork(void) {
