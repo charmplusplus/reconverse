@@ -2,7 +2,10 @@
 #include "converse.h"
 #include "converse_internal.h"
 #include "queue.h"
+#include "taskqueue.h"
 #include <thread>
+
+CpvExtern(TaskQueue, CsdTaskQueue);
 
 /**
  * The main scheduler loop for the Charm++ runtime.
@@ -91,20 +94,35 @@ void CsdScheduler() {
             CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
           }
         } else {
-          // the processor is idle
-          // if not already idle, set idle and raise condition
-          if (!CmiGetIdle()) {
-            CmiSetIdle(true);
-            CmiSetIdleTime(CmiWallTimer());
-            CcdRaiseCondition(CcdPROCESSOR_BEGIN_IDLE);
-          }
-          // if already idle, call still idle and (maybe) long idle
-          else {
-            CcdRaiseCondition(CcdPROCESSOR_STILL_IDLE);
-            if (CmiWallTimer() - CmiGetIdleTime() > 10.0) {
-              CcdRaiseCondition(CcdPROCESSOR_LONG_IDLE);
+          #if CMK_TASKQUEUE
+          // Check local task queue before going idle
+          void *task_msg = TaskQueuePopLocal();
+          if (task_msg != NULL) {
+            // Found a task in our local queue
+            CmiHandleMessage(task_msg);
+            if (CmiGetIdle()) {
+              CmiSetIdle(false);
+              CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
             }
+          } else {
+          #endif
+            // the processor is idle
+            // if not already idle, set idle and raise condition
+            if (!CmiGetIdle()) {
+              CmiSetIdle(true);
+              CmiSetIdleTime(CmiWallTimer());
+              CcdRaiseCondition(CcdPROCESSOR_BEGIN_IDLE);
+            }
+            // if already idle, call still idle and (maybe) long idle
+            else {
+              CcdRaiseCondition(CcdPROCESSOR_STILL_IDLE);
+              if (CmiWallTimer() - CmiGetIdleTime() > 10.0) {
+                CcdRaiseCondition(CcdPROCESSOR_LONG_IDLE);
+              }
+            }
+          #if CMK_TASKQUEUE
           }
+          #endif
         }
         }        
       } 
@@ -123,20 +141,35 @@ void CsdScheduler() {
             CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
           }
         } else {
-          // the processor is idle
-          // if not already idle, set idle and raise condition
-          if (!CmiGetIdle()) {
-            CmiSetIdle(true);
-            CmiSetIdleTime(CmiWallTimer());
-            CcdRaiseCondition(CcdPROCESSOR_BEGIN_IDLE);
-          }
-          // if already idle, call still idle and (maybe) long idle
-          else {
-            CcdRaiseCondition(CcdPROCESSOR_STILL_IDLE);
-            if (CmiWallTimer() - CmiGetIdleTime() > 10.0) {
-              CcdRaiseCondition(CcdPROCESSOR_LONG_IDLE);
+          #if CMK_TASKQUEUE
+          // Check local task queue before going idle
+          void *task_msg = TaskQueuePopLocal();
+          if (task_msg != NULL) {
+            // Found a task in our local queue
+            CmiHandleMessage(task_msg);
+            if (CmiGetIdle()) {
+              CmiSetIdle(false);
+              CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
             }
+          } else {
+          #endif
+            // the processor is idle
+            // if not already idle, set idle and raise condition
+            if (!CmiGetIdle()) {
+              CmiSetIdle(true);
+              CmiSetIdleTime(CmiWallTimer());
+              CcdRaiseCondition(CcdPROCESSOR_BEGIN_IDLE);
+            }
+            // if already idle, call still idle and (maybe) long idle
+            else {
+              CcdRaiseCondition(CcdPROCESSOR_STILL_IDLE);
+              if (CmiWallTimer() - CmiGetIdleTime() > 10.0) {
+                CcdRaiseCondition(CcdPROCESSOR_LONG_IDLE);
+              }
+            }
+          #if CMK_TASKQUEUE
           }
+          #endif
         }
       }
     }
@@ -230,9 +263,27 @@ void CsdSchedulePoll() {
             CmiSetIdle(false);
             CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
           }
-        } else {
-          comm_backend::progress();
-          break; //break when queues are empty
+        } 
+        else {
+          #if CMK_TASKQUEUE
+          //because idle, check task queue
+          void *task_msg = TaskQueuePopLocal();
+          if (task_msg != NULL) {
+            // Found a task in our local queue
+            CmiHandleMessage(task_msg);
+            if (CmiGetIdle()) {
+              CmiSetIdle(false);
+              CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
+            }
+          }
+          else
+          {
+          #endif
+            comm_backend::progress();
+            break; //break when queues are empty
+          #if CMK_TASKQUEUE
+          }
+          #endif
         }
         }
       } 
@@ -250,9 +301,27 @@ void CsdSchedulePoll() {
             CmiSetIdle(false);
             CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
           }
-        } else {
-          comm_backend::progress();
-          break; //break when queues are empty
+        } 
+        else {
+          #if CMK_TASKQUEUE
+          //because idle, check task queue
+          void *task_msg = TaskQueuePopLocal();
+          if (task_msg != NULL) {
+            // Found a task in our local queue
+            CmiHandleMessage(task_msg);
+            if (CmiGetIdle()) {
+              CmiSetIdle(false);
+              CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
+            }
+          }
+          else
+          {
+          #endif
+            comm_backend::progress();
+            break; //break when queues are empty
+          #if CMK_TASKQUEUE
+          }
+          #endif
         }
       }
     }

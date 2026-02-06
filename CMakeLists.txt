@@ -53,6 +53,7 @@ option(SPANTREE "whether to enable spanning tree collectives" OFF) #should turn 
 option(CMK_SMP "whether to enable SMP support" ON)
 option(CMK_CPV_IS_SMP "whether to enable SMP support for cpvs" ON)
 option(CMK_USE_SHMEM "whether to use POSIX shared memory for IPC" OFF)
+option(CMK_TASKQUEUE "use the task queue for work stealing" OFF)
 
 option(RECONVERSE_ATOMIC_QUEUE "whether to use atomic queue" ON)
 

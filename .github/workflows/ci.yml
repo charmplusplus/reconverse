@@ -39,6 +39,7 @@ jobs:
                 -DRECONVERSE_AUTOFETCH_LCI2=ON \
                 -DRECONVERSE_TEST_LAUNCHER="mpirun;--oversubscribe" \
                 -DLCT_PMI_BACKEND_ENABLE_MPI=ON \
+                -DCMK_TASKQUEUE=ON \
                 .
             cmake --build build --target all
             ctest --test-dir build --extra-verbose --timeout 60
@@ -52,6 +53,7 @@ jobs:
                 -DCMAKE_BUILD_TYPE=Debug \
                 -DRECONVERSE_AUTOFETCH_LCW=ON \
                 -DRECONVERSE_TEST_LAUNCHER="mpirun;--oversubscribe" \
+                -DCMK_TASKQUEUE=ON \
                 .
             cmake --build build --target all
             ctest --test-dir build --extra-verbose --timeout 60

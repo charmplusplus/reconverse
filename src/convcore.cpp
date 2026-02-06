@@ -2,6 +2,7 @@
 #include "barrier.h"
 #include "converse_internal.h"
 #include "queue.h"
+#include "taskqueue.h"
 #include "scheduler.h"
 
 #include <cinttypes>
@@ -31,6 +32,7 @@ std::vector<CmiHandlerInfo> **CmiHandlerTable; // array of handler vectors
 std::atomic<int> numPEsReadyForExit {0};
 ConverseNodeQueue<void *> *CmiNodeQueue;
 CpvDeclare(Queue, CsdSchedQueue);
+CpvDeclare(TaskQueue, CsdTaskQueue);
 CsvDeclare(Queue, CsdNodeQueue);
 CsvDeclare(CmiNodeLock, CsdNodeQueueLock);
 double Cmi_startTime;
@@ -125,6 +127,15 @@ void converseRunPe(int rank, int everReturn) {
   CmiInitState(rank);
   // init comm_backend
   comm_backend::initThread(rank, CmiMyNodeSize());
+
+  #if CMK_TASKQUEUE
+  // init per-PE task queue
+  CpvInitialize(TaskQueue, CsdTaskQueue);
+  CpvAccess(CsdTaskQueue) = TaskQueueCreate();
+
+  // init task queue work-stealing callbacks
+  CmiTaskQueueInit();
+  #endif
 
   // init things like cld module, ccs, etc
   CldModuleInit(CmiMyArgv);
