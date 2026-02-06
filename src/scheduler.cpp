@@ -94,6 +94,7 @@ void CsdScheduler() {
             CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
           }
         } else {
+          #if CMK_TASKQUEUE
           // Check local task queue before going idle
           void *task_msg = TaskQueuePopLocal();
           if (task_msg != NULL) {
@@ -104,6 +105,7 @@ void CsdScheduler() {
               CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
             }
           } else {
+          #endif
             // the processor is idle
             // if not already idle, set idle and raise condition
             if (!CmiGetIdle()) {
@@ -118,7 +120,9 @@ void CsdScheduler() {
                 CcdRaiseCondition(CcdPROCESSOR_LONG_IDLE);
               }
             }
+          #if CMK_TASKQUEUE
           }
+          #endif
         }
         }        
       } 
@@ -137,6 +141,7 @@ void CsdScheduler() {
             CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
           }
         } else {
+          #if CMK_TASKQUEUE
           // Check local task queue before going idle
           void *task_msg = TaskQueuePopLocal();
           if (task_msg != NULL) {
@@ -147,6 +152,7 @@ void CsdScheduler() {
               CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
             }
           } else {
+          #endif
             // the processor is idle
             // if not already idle, set idle and raise condition
             if (!CmiGetIdle()) {
@@ -161,7 +167,9 @@ void CsdScheduler() {
                 CcdRaiseCondition(CcdPROCESSOR_LONG_IDLE);
               }
             }
+          #if CMK_TASKQUEUE
           }
+          #endif
         }
       }
     }
@@ -257,6 +265,7 @@ void CsdSchedulePoll() {
           }
         } 
         else {
+          #if CMK_TASKQUEUE
           //because idle, check task queue
           void *task_msg = TaskQueuePopLocal();
           if (task_msg != NULL) {
@@ -269,9 +278,12 @@ void CsdSchedulePoll() {
           }
           else
           {
+          #endif
             comm_backend::progress();
             break; //break when queues are empty
+          #if CMK_TASKQUEUE
           }
+          #endif
         }
         }
       } 
@@ -291,6 +303,7 @@ void CsdSchedulePoll() {
           }
         } 
         else {
+          #if CMK_TASKQUEUE
           //because idle, check task queue
           void *task_msg = TaskQueuePopLocal();
           if (task_msg != NULL) {
@@ -303,9 +316,12 @@ void CsdSchedulePoll() {
           }
           else
           {
+          #endif
             comm_backend::progress();
             break; //break when queues are empty
+          #if CMK_TASKQUEUE
           }
+          #endif
         }
       }
     }
