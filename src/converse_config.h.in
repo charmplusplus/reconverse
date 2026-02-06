@@ -4,7 +4,7 @@
 #cmakedefine RECONVERSE_ENABLE_COMM_LCI2
 #cmakedefine RECONVERSE_ENABLE_COMM_LCW
 #cmakedefine RECONVERSE_ENABLE_CPU_AFFINITY
-#cmakedefine SPANTREE
+#cmakedefine01 SPANTREE
 #cmakedefine CMK_SMP
 #cmakedefine CMK_CPV_IS_SMP
 #cmakedefine CMK_USE_SHMEM
