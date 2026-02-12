@@ -3,6 +3,12 @@
 
 #include <cstddef>
 
+#define MEMPOOL_INIT_SIZE_MB_DEFAULT   32
+#define MEMPOOL_EXPAND_SIZE_MB_DEFAULT 64
+#define MEMPOOL_MAX_SIZE_MB_DEFAULT    512
+#define MEMPOOL_LB_DEFAULT             0
+#define MEMPOOL_RB_DEFAULT             134217728
+
 namespace comm_backend {
 
 struct Status {
@@ -22,6 +28,9 @@ void init(char **argv);
 /**
  * @brief Finalize the communication backend. Not thread-safe.
  */
+
+void init_mempool();
+
 void exit();
 /**
  * @brief Initialize the communication backend for a new thread. Not
@@ -88,6 +97,10 @@ size_t getRMR(mr_t mr, void *addr, size_t size);
  * @brief Deregister a memory region
  */
 void deregisterMemory(mr_t mr);
+
+void *malloc(int nbytes, int header);
+
+void free(void* msg);
 
 } // namespace comm_backend
 

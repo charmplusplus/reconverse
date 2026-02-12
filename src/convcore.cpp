@@ -145,6 +145,7 @@ void converseRunPe(int rank, int everReturn) {
   // Cmi_multicastHandler = CmiRegisterHandler(CmiMulticastHandler);
 
   // A global barrier to ensure all global structs are initialized
+  comm_backend::init_mempool();
   CmiNodeBarrier();
   if (rank == 0) {
     comm_backend::barrier();
@@ -491,6 +492,7 @@ void CmiPushPE(int destPE, int messageSize, void *msg) {
   Cmi_queues[rank]->push(msg);
 }
 
+
 void CmiPushPE(int destPE, void *msg) {
   CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
   int messageSize = header->messageSize;
@@ -506,23 +508,23 @@ void *CmiAlloc(int size) {
     CmiPrintf("CmiAlloc: size <= 0\n");
     return nullptr;
   }
+  CmiPrintf("CmiAlloc: Allocating size = %d\n", size);
+  // comm_backend::malloc returns a pointer to where CmiChunkHeader should be placed
+  // Layout after malloc: [mempool_header][CmiChunkHeader][user space]
+  //                                       ^ptr returned
+  void* res = comm_backend::malloc(size, sizeof(CmiChunkHeader));
 
-  char *blk = (char *)malloc(size + sizeof(CmiChunkHeader));
-
-  char *ptr = blk + sizeof(CmiChunkHeader);
-
-  // zero out some header fields
   if (size >= CmiMsgHeaderSizeBytes) {
     // Set zcMsgType in the converse message header to CMK_REG_NO_ZC_MSG
-    CMI_ZC_MSGTYPE((void *)ptr) = CMK_REG_NO_ZC_MSG;
-    CMI_MSG_NOKEEP((void *)ptr) = 0;
+    CMI_ZC_MSGTYPE((void *)res) = CMK_REG_NO_ZC_MSG;
+    CMI_MSG_NOKEEP((void *)res) = 0;
   }
 
-  REFFIELDSET(ptr, 1);
-  SIZEFIELD(ptr) =
-      size; // TODO: where is this used? just stole from old converse
-
-  return (void *)(ptr);
+  REFFIELDSET(res, 1);
+  SIZEFIELD(res) = size;
+  CmiPrintf("Allocated CmiChunkHeader at %p, user ptr = %p\n", res, res + sizeof(CmiChunkHeader));
+  // Return pointer to user data (after CmiChunkHeader)
+  return (char*)res + sizeof(CmiChunkHeader);
 }
 
 // header ref count methods
@@ -564,7 +566,8 @@ void CmiFree(void *msg) {
   #endif
 
   if (refCount == 1) {
-    free(BLKSTART(parentBlk));
+    //free(BLKSTART(parentBlk));
+    comm_backend::free(msg);
   }
   
 }
@@ -597,7 +600,7 @@ void CmiSyncSendAndFree(int destPE, int messageSize, void *msg) {
   if (CmiMyNode() == destNode) {
     CmiPushPE(destPE, messageSize, msg);
   } else {
-    comm_backend::issueAm(destNode, msg, messageSize, comm_backend::MR_NULL,
+    comm_backend::issueAm(destNode, msg, messageSize, MRFIELD(msg),
                           CommLocalHandler, g_amHandler,
                           nullptr); // Commlocalhandler will free msg
   }
@@ -627,7 +630,7 @@ void CmiInterSyncSendAndFree(int destPE, int partition, int messageSize,
   int globalDestPE = CmiGetPeGlobal(destPE, partition);
   header->destPE = globalDestPE;
   int destNode = CmiGetNodeGlobal(CmiNodeOf(globalDestPE), partition);
-  comm_backend::issueAm(destNode, msg, messageSize, comm_backend::MR_NULL,
+  comm_backend::issueAm(destNode, msg, messageSize, MRFIELD(msg),
                         CommLocalHandler, g_amHandler, nullptr);
 }
 
@@ -793,7 +796,7 @@ void CmiSyncNodeSendAndFree(unsigned int destNode, unsigned int size,
   if (CmiMyNode() == destNode) {
     CmiNodeQueue->push(msg);
   } else {
-    comm_backend::issueAm(destNode, msg, size, comm_backend::MR_NULL,
+    comm_backend::issueAm(destNode, msg, size, MRFIELD(msg),
                           CommLocalHandler, g_amHandler, nullptr);
   }
 }
@@ -819,7 +822,7 @@ void CmiInterSyncNodeSendAndFree(int destNode, int partition, int messageSize,
   // not my partition, use comm backend
   int globalDestNode = CmiGetNodeGlobal(destNode, partition);
   header->destPE = CmiMessageDestPENode;
-  comm_backend::issueAm(destNode, msg, messageSize, comm_backend::MR_NULL,
+  comm_backend::issueAm(destNode, msg, messageSize, MRFIELD(msg),
                         CommLocalHandler, g_amHandler, nullptr);
 }
 
