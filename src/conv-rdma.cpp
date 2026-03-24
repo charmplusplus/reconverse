@@ -4,8 +4,15 @@
 #include "conv-rdma.h"
 #include "converse_internal.h"
 #include <algorithm>
+#include <cstdlib>
 #include <cstring>
 #include <vector>
+
+#if CMK_CUDA
+#include <cuda_runtime.h>
+#elif CMK_HIP
+#include <hip/hip_runtime.h>
+#endif
 
 // User specified configuration
 // TODO: move to a better location
@@ -161,6 +168,66 @@ void CmiIssueRputCopyBased(NcpyOperationInfo *ncpyOpInfo) {
 
 void CommRputRemoteHandler(comm_backend::Status status);
 void CommRgetRemoteHandler(comm_backend::Status status);
+
+// Copy size bytes from src to dst, dispatching to the GPU runtime when either
+// pointer is a device allocation.  Falls back to host-staged copies if the
+// direct GPU transfer fails (e.g. peer access unavailable), and to plain
+// memcpy when neither pointer is a device allocation or no GPU support is
+// compiled in.
+static void memcpyAnyPtr(void *dst, const void *src, size_t size) {
+#if CMK_CUDA
+  {
+    cudaPointerAttributes srcAttr{}, dstAttr{};
+    bool srcIsDevice = (cudaPointerGetAttributes(&srcAttr, src) == cudaSuccess &&
+                        srcAttr.type == cudaMemoryTypeDevice);
+    bool dstIsDevice = (cudaPointerGetAttributes(&dstAttr, dst) == cudaSuccess &&
+                        dstAttr.type == cudaMemoryTypeDevice);
+    if (srcIsDevice || dstIsDevice) {
+      if (cudaMemcpy(dst, src, size, cudaMemcpyDefault) == cudaSuccess)
+        return;
+      // Host staging fallback (e.g. P2P not available between two devices)
+      void *h = malloc(size);
+      CmiAssert(h != nullptr);
+      if (srcIsDevice)
+        cudaMemcpy(h, src, size, cudaMemcpyDeviceToHost);
+      else
+        memcpy(h, src, size);
+      if (dstIsDevice)
+        cudaMemcpy(dst, h, size, cudaMemcpyHostToDevice);
+      else
+        memcpy(dst, h, size);
+      free(h);
+      return;
+    }
+  }
+#elif CMK_HIP
+  {
+    hipPointerAttribute_t srcAttr{}, dstAttr{};
+    bool srcIsDevice = (hipPointerGetAttributes(&srcAttr, src) == hipSuccess &&
+                        srcAttr.memoryType == hipMemoryTypeDevice);
+    bool dstIsDevice = (hipPointerGetAttributes(&dstAttr, dst) == hipSuccess &&
+                        dstAttr.memoryType == hipMemoryTypeDevice);
+    if (srcIsDevice || dstIsDevice) {
+      if (hipMemcpy(dst, src, size, hipMemcpyDefault) == hipSuccess)
+        return;
+      // Host staging fallback
+      void *h = malloc(size);
+      CmiAssert(h != nullptr);
+      if (srcIsDevice)
+        hipMemcpy(h, src, size, hipMemcpyDeviceToHost);
+      else
+        memcpy(h, src, size);
+      if (dstIsDevice)
+        hipMemcpy(dst, h, size, hipMemcpyHostToDevice);
+      else
+        memcpy(dst, h, size);
+      free(h);
+      return;
+    }
+  }
+#endif
+  memcpy(dst, src, size);
+}
 
 // Rget/Rput operations are implemented as normal converse messages
 // This method is invoked during converse initialization to initialize these
@@ -392,9 +459,9 @@ void CmiIssueRget(NcpyOperationInfo *ncpyOpInfo) {
 // #endif
   int target_node = CmiNodeOf(ncpyOpInfo->srcPe);
   if (target_node == CmiMyNode()) {
-    // loopback messages
-    memcpy((void *)ncpyOpInfo->destPtr, ncpyOpInfo->srcPtr,
-           ncpyOpInfo->srcSize);
+    // loopback: use GPU-aware copy if either pointer is a device allocation
+    memcpyAnyPtr((void *)ncpyOpInfo->destPtr, ncpyOpInfo->srcPtr,
+                 ncpyOpInfo->srcSize);
     comm_backend::Status status;
     status.local_buf = ncpyOpInfo->destPtr;
     status.size = ncpyOpInfo->srcSize;
@@ -423,8 +490,9 @@ void CmiIssueRput(NcpyOperationInfo *ncpyOpInfo) {
 // #endif
 int target_node = CmiNodeOf(ncpyOpInfo->destPe);
 if (target_node == CmiMyNode()) {
-  // loopback messages
-  memcpy((void *)ncpyOpInfo->destPtr, ncpyOpInfo->srcPtr, ncpyOpInfo->srcSize);
+  // loopback: use GPU-aware copy if either pointer is a device allocation
+  memcpyAnyPtr((void *)ncpyOpInfo->destPtr, ncpyOpInfo->srcPtr,
+               ncpyOpInfo->srcSize);
   comm_backend::Status status;
   status.local_buf = ncpyOpInfo->srcPtr;
   status.size = ncpyOpInfo->srcSize;
