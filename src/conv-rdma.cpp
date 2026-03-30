@@ -294,7 +294,7 @@ NcpyOperationInfo *CmiNcpyBuffer::createNcpyOpInfo(CmiNcpyBuffer &source,
                 (char *)(destination.layerInfo), layerInfoSize, destAck,
                 ackSize, destination.cnt, destination.regMode,
                 destination.deregMode, destination.isRegistered, destination.pe,
-                destination.ref, rootNode, ncpyOpInfo);
+                destination.ref, rootNode, ncpyOpInfo, destination.deviceRdmaOpInfo);
 
   ncpyOpInfo->opMode = opMode;
   ncpyOpInfo->refPtr = refPtr;

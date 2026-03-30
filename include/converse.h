@@ -868,6 +868,9 @@ typedef struct ncpystruct {
   int rootNode;
   void *refPtr;
 
+  // ipc specific
+  void* deviceRdmaOpInfo;
+
 } NcpyOperationInfo;
 
 enum ncpyOperationMode {

@@ -167,13 +167,22 @@ public:
   // ack handling pointer used for bcast and CMA p2p transfers
   const void *refAckInfo;
 
+  // ipc specific
+  void* deviceRdmaOpInfo;
+
   CmiNcpyBuffer()
       : isRegistered(false), ptr(NULL), cnt(0), pe(-1), regMode(CMK_BUFFER_REG),
         deregMode(CMK_BUFFER_DEREG), ref(NULL), refAckInfo(NULL) {}
 
   explicit CmiNcpyBuffer(const void *ptr_, size_t cnt_,
                          unsigned short int regMode_ = CMK_BUFFER_REG,
-                         unsigned short int deregMode_ = CMK_BUFFER_DEREG) {
+                         unsigned short int deregMode_ = CMK_BUFFER_DEREG) : deviceRdmaOpInfo(nullptr) {
+    init(ptr_, cnt_, regMode_, deregMode_);
+  }
+
+  explicit CmiNcpyBuffer(const void *ptr_, size_t cnt_, void* deviceRdmaOpInfo_,
+                         unsigned short int regMode_ = CMK_BUFFER_REG,
+                         unsigned short int deregMode_ = CMK_BUFFER_DEREG) : deviceRdmaOpInfo(deviceRdmaOpInfo_) {
     init(ptr_, cnt_, regMode_, deregMode_);
   }
 
