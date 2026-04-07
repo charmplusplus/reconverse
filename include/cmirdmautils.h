@@ -2,7 +2,6 @@
 #define _CKRDMAUTILS_H
 
 #include "converse.h"
-#include "converse_config.h"
 #include <stddef.h>
 #include <stdio.h>
 
