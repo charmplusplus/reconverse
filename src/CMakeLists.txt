@@ -5,7 +5,7 @@ target_sources(reconverse PRIVATE conv-conds.cpp convcore.cpp random.cpp
                 conv-rdma.cpp conv-topology.cpp msgmgr.cpp queueing.cpp cmishmem.cpp
                 conv-taskq.cpp)
 target_include_directories(
-  reconverse PRIVATE $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}>
+  reconverse PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}>
                      $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
                      
 add_subdirectory(comm_backend)
