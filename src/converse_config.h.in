@@ -9,7 +9,7 @@
 #cmakedefine CMK_CPV_IS_SMP
 #cmakedefine CMK_USE_SHMEM
 #cmakedefine01 CMK_TASKQUEUE
-#cmakedefine CMK_CUDA
-#cmakedefine CMK_HIP
+#cmakedefine01 CMK_CUDA
+#cmakedefine01 CMK_HIP
 
 #endif
