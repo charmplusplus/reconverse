@@ -120,11 +120,13 @@ find_package(Threads REQUIRED)
 if(RECONVERSE_ENABLE_CUDA)
   find_package(CUDAToolkit REQUIRED)
   set(CMK_CUDA ON)
+  add_definitions(-DCMK_CUDA=1)
 endif()
 
 if(RECONVERSE_ENABLE_HIP)
   find_package(hip REQUIRED CONFIG)
   set(CMK_HIP ON)
+  add_definitions(-DCMK_HIP=1)
 endif()
 
 if(RECONVERSE_ATOMIC_QUEUE)
