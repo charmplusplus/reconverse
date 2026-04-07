@@ -3,7 +3,6 @@
  */
 #include "conv-rdma.h"
 #include "converse_internal.h"
-#include "converse_config.h"
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
