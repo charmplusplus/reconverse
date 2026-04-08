@@ -740,6 +740,14 @@ void CmiFreeDecrementToEnqueue(DecrementToEnqueueMsg *dteMsg){
   free(dteMsg);
 }
 
+void CmiBarrier(void) {
+  CmiNodeBarrier();
+  if (CmiMyRank() == 0) {
+    comm_backend::barrier();
+  }
+  CmiNodeBarrier();
+}
+
 void CmiNodeBarrier(void) {
   static Barrier nodeBarrier(CmiMyNodeSize());
   int64_t ticket = nodeBarrier.arrive();
