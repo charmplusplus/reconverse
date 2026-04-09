@@ -758,7 +758,7 @@ void CmiNodeBarrier(void) {
 
 // TODO: in the original converse, this variant blocks comm thread as well.
 // CmiNodeBarrier does not.
-void CmiNodeAllBarrier() { CmiBarrier(); }
+void CmiNodeAllBarrier() { CmiNodeBarrier(); }
 
 void CmiAssignOnce(int *variable, int value) {
   if (CmiMyRank() == 0) {
