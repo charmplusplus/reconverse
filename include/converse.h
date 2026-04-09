@@ -457,9 +457,9 @@ void CmiNetworkProgress();
 #define CmiNetworkProgressAfter(p) CmiNetworkProgressAfter()
 
 // Barrier functions
+void CmiBarrier();
 void CmiNodeBarrier();
 void CmiNodeAllBarrier();
-#define CmiBarrier() CmiNodeBarrier()
 
 // scheduler
 void CsdExitScheduler();
