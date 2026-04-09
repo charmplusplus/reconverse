@@ -740,6 +740,14 @@ void CmiFreeDecrementToEnqueue(DecrementToEnqueueMsg *dteMsg){
   free(dteMsg);
 }
 
+void CmiBarrier(void) {
+  CmiNodeBarrier();
+  if (CmiMyRank() == 0) {
+    comm_backend::barrier();
+  }
+  CmiNodeBarrier();
+}
+
 void CmiNodeBarrier(void) {
   static Barrier nodeBarrier(CmiMyNodeSize());
   int64_t ticket = nodeBarrier.arrive();
@@ -750,7 +758,7 @@ void CmiNodeBarrier(void) {
 
 // TODO: in the original converse, this variant blocks comm thread as well.
 // CmiNodeBarrier does not.
-void CmiNodeAllBarrier() { CmiNodeBarrier(); }
+void CmiNodeAllBarrier() { CmiBarrier(); }
 
 void CmiAssignOnce(int *variable, int value) {
   if (CmiMyRank() == 0) {
