@@ -7,6 +7,7 @@
 #include <netinet/in.h> /* for sockaddr_in */
 #include <ifaddrs.h> /* for getifaddrs */
 #include <net/if.h> /* for IFF_RUNNING */
+#include <netdb.h> /* for getaddrinfo */
 #include <cstring>
 
 
@@ -63,6 +64,30 @@ skt_ip_t skt_my_ip(void)
 {
   char hostname[1000];
   skt_ip_t ip = _skt_invalid_ip;
+  
+  // Prefer hostname resolution so multi-interface nodes still resolve to a
+  // stable, routable node identity.
+  if (gethostname(hostname, sizeof(hostname)) == 0) {
+    struct addrinfo hints;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_flags = AI_ADDRCONFIG;
+
+    struct addrinfo* res = nullptr;
+    if (getaddrinfo(hostname, nullptr, &hints, &res) == 0 && res != nullptr) {
+      for (struct addrinfo* p = res; p != nullptr; p = p->ai_next) {
+        if (p->ai_family != AF_INET || p->ai_addr == nullptr) continue;
+        const struct sockaddr_in* addr =
+            reinterpret_cast<const struct sockaddr_in*>(p->ai_addr);
+        memcpy(&ip, &addr->sin_addr, sizeof(ip));
+        freeaddrinfo(res);
+        return ip;
+      }
+      freeaddrinfo(res);
+    }
+  }
+
   int ifcount = 0;
     /* Code snippet from  Jens Alfke
  *     http://lists.apple.com/archives/macnetworkprog/2008/May/msg00013.html */
@@ -81,7 +106,7 @@ skt_ip_t skt_my_ip(void)
         freeifaddrs(ifaces);
   }
   /* fprintf(stderr, "My IP is %d.%d.%d.%d\n", ip.data[0],ip.data[1],ip.data[2],ip.data[3]); */
-  if (ifcount==1) return ip;
+  if (ifcount >= 1) return ip;
 
   return _skt_invalid_ip;
 }
