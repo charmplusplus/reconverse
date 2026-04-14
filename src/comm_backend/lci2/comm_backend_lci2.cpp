@@ -66,9 +66,14 @@ void CommBackendLCI2::init(char **argv) {
 }
 
 void CommBackendLCI2::exit() {
-  for (auto device : m_devices) {
-    lci::free_device(&device);
-  }
+  printf("LCI exit called\n");
+  fflush(stdout);
+  
+//  for (auto device : m_devices) {
+//    lci::free_device(&device);
+//  }
+  printf("after free\n");
+  fflush(stdout);
   m_devices.clear();
   lci::free_comp(&m_local_comp);
   lci::free_comp(&m_remote_comp);

@@ -241,13 +241,21 @@ CmiStartFn mymain(int argc, char *argv[]) {
     CpvAccess(maxMsgSize) = 1 << 14;
     CpvAccess(factor) = 2;
   } else {
+    printf("HEy Mon\n");
+    fflush(stdout);
+  int num_nodes = CmiNumPhysicalNodes();
+  printf("running on this many physical nodes: %d\n", num_nodes);
+  fflush(stdout);
     if (CmiMyPe() == 0)
       CmiAbort("Usage: ./pingpong_device [<ncycles> <minsize> <maxsize> "
                "<factor>]\n");
   }
 
-  if (CmiNumPes() != 2 && CmiMyPe() == 0)
+  if (CmiNumPes() != 2 && CmiMyPe() == 0) {
+    printf("Aborting because I have less number of PEs\n");
+    fflush(stdout);
     CmiAbort("This test requires exactly 2 PEs (+p 2 or two nodes)\n");
+  }
 
   // Report which GPU each PE is bound to
   int dev = -1;
@@ -264,6 +272,9 @@ CmiStartFn mymain(int argc, char *argv[]) {
 
   CmiNodeBarrier();
 
+  int num_nodes = CmiNumPhysicalNodes();
+  printf("running on this many physical nodes: %d\n", num_nodes);
+  fflush(stdout);
   if (CmiMyPe() == 0)
     startRing();
 

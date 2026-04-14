@@ -106,7 +106,7 @@ void CommRemoteHandler(comm_backend::Status status) {
   if (destPE == CmiMessageDestPENode) {
     CmiNodeQueue->push(const_cast<void *>(status.local_buf));
   } else {
-    CmiPushPE(destPE, status.size, const_cast<void *>(status.local_buf));
+    CmiPushPE(CmiRankOf(destPE), status.size, const_cast<void *>(status.local_buf));
   }
 }
 
@@ -482,19 +482,19 @@ void CmiNumberHandlerEx(int n, CmiHandlerEx h, void *userPtr) {
   CmiGetHandlerTable()->at(n) = newEntry;
 }
 
-void CmiPushPE(int destPE, int messageSize, void *msg) {
-  int rank = CmiRankOf(destPE);
+void CmiPushPE(int destRank, int messageSize, void *msg) {
+  int rank = destRank;
   CmiAssertMsg(
       rank >= 0 && rank < Cmi_mynodesize,
-      "CmiPushPE(myPe: %d, destPe: %d, nodeSize: %d): rank out of range",
-      CmiMyPe(), destPE, Cmi_mynodesize);
+      "CmiPushPE(myPe: %d, destRank: %d, nodeSize: %d): rank out of range",
+      CmiMyPe(), destRank, Cmi_mynodesize);
   Cmi_queues[rank]->push(msg);
 }
 
-void CmiPushPE(int destPE, void *msg) {
+void CmiPushPE(int destRank, void *msg) {
   CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
   int messageSize = header->messageSize;
-  CmiPushPE(destPE, messageSize, msg);
+  CmiPushPE(destRank, messageSize, msg);
 }
 
 void CmiPushNode(void *msg) {
@@ -595,7 +595,7 @@ void CmiSyncSendAndFree(int destPE, int messageSize, void *msg) {
   }
 
   if (CmiMyNode() == destNode) {
-    CmiPushPE(destPE, messageSize, msg);
+    CmiPushPE(CmiRankOf(destPE), messageSize, msg);
   } else {
     comm_backend::issueAm(destNode, msg, messageSize, comm_backend::MR_NULL,
                           CommLocalHandler, g_amHandler,

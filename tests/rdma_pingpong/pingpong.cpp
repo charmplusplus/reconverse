@@ -18,6 +18,26 @@ CpvDeclare(int, setRemoteBufHIdx);
 CpvDeclare(int, rmaGetSignalHIdx);
 CpvDeclare(int, exitBenchmarkHIdx);
 
+struct LoopBackMsg {
+  CmiMessageHeader header;
+  void* msg;
+};
+
+void CkRdmaDeviceRecvHandler(void* msg) {
+  printf("[LoopBack bridge] Bridge successful for PE: %d, on Process: %d\n", CmiMyPe(), CmiMyNode());
+  fflush(stdout);
+}
+
+void* loopback_bridge(void* arg) {
+  printf("[LoopBack bridge] I am being called for PE: %d, on Process: %d\n", CmiMyPe(), CmiMyNode());
+  fflush(stdout);
+  LoopBackMsg* recv_msg = (LoopBackMsg*)arg;
+  CkRdmaDeviceRecvHandler(recv_msg->msg);
+  CmiFree(recv_msg);
+  return NULL;
+}
+
+int loopback_handler;
 
 void setupRMABuf();
 
@@ -65,6 +85,14 @@ void startWarmUp() {
 void doRMA() {
   CpvAccess(localBuf).rdmaGet(CpvAccess(remoteBuf), 0,
                           nullptr, nullptr);
+  LoopBackMsg* conv_msg = (LoopBackMsg*)CmiAlloc(sizeof(LoopBackMsg));
+  loopback_handler = CmiRegisterHandler((CmiHandler) loopback_bridge);
+
+  CmiSetHandler(conv_msg, loopback_handler);
+  CmiPushPE(1 - CmiMyPe(), conv_msg);
+  printf("[doRMA] Loopbacked the message to the correct pe : %d, for PE: %d, on Process: %d\n", 1 - CmiMyPe(), CmiMyPe(), CmiMyNode());
+  fflush(stdout);
+  return;
 }
 
 void rmaGetLocalComp(void *context) {
