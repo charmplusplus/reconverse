@@ -64,7 +64,7 @@ skt_ip_t skt_my_ip(void)
 {
   char hostname[1000];
   skt_ip_t ip = _skt_invalid_ip;
-
+  
   // Prefer hostname resolution so multi-interface nodes still resolve to a
   // stable, routable node identity.
   if (gethostname(hostname, sizeof(hostname)) == 0) {

@@ -486,7 +486,7 @@ void CmiPushPE(int destRank, int messageSize, void *msg) {
   int rank = destRank;
   CmiAssertMsg(
       rank >= 0 && rank < Cmi_mynodesize,
-      "CmiPushPE(myPe: %d, destRank: %d, nodeSize: %d): rank out of range",
+      "CmiPushPE(myPe: %d, destPe: %d, nodeSize: %d): rank out of range",
       CmiMyPe(), destRank, Cmi_mynodesize);
   Cmi_queues[rank]->push(msg);
 }
