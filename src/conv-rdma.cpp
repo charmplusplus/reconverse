@@ -81,7 +81,11 @@ static bool relayDirectAckIfNeeded(NcpyOperationInfo *ncpyOpInfo,
   relayMsg->ncpyOpInfo = ncpyOpInfo;
   relayMsg->freeMe = freeMe;
   CmiSetHandler(relayMsg, ncpy_ack_relay_handler_idx);
-  CmiSyncSendAndFree(targetPe, sizeof(NcpyAckRelayMsg), (char *)relayMsg);
+  if (CmiNodeOf(targetPe) == CmiMyNode()) {
+    CmiPushPE(CmiRankOf(targetPe), relayMsg);
+  } else {
+    CmiSyncSendAndFree(targetPe, sizeof(NcpyAckRelayMsg), (char *)relayMsg);
+  }
   return true;
 }
 
