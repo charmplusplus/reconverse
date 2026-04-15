@@ -44,6 +44,46 @@ typedef struct _converseRdmaMsg {
 static int remote_dereg_handler_idx;
 static int get_request_handler_idx;
 static int put_data_handler_idx;
+static int ncpy_ack_relay_handler_idx;
+
+typedef struct _ncpyAckRelayMsg {
+  char cmicore[CmiMsgHeaderSizeBytes];
+  NcpyOperationInfo *ncpyOpInfo;
+  unsigned char freeMe;
+} NcpyAckRelayMsg;
+
+static void ncpyAckRelayHandler(NcpyAckRelayMsg *relayMsg) {
+  NcpyOperationInfo *ncpyOpInfo = relayMsg->ncpyOpInfo;
+  unsigned char freeMe = relayMsg->freeMe;
+  CmiFree(relayMsg);
+
+  ncpyDirectAckHandlerFn(ncpyOpInfo);
+  if (freeMe == CMK_FREE_NCPYOPINFO) {
+    CmiFree(ncpyOpInfo);
+  }
+}
+
+static bool relayDirectAckIfNeeded(NcpyOperationInfo *ncpyOpInfo,
+                                   unsigned char freeMe) {
+  int targetPe = CmiMyPe();
+  if (ncpyOpInfo->ackMode == CMK_SRC_ACK) {
+    targetPe = ncpyOpInfo->srcPe;
+  } else if (ncpyOpInfo->ackMode == CMK_DEST_ACK) {
+    targetPe = ncpyOpInfo->destPe;
+  }
+
+  if (targetPe == CmiMyPe()) {
+    return false;
+  }
+
+  NcpyAckRelayMsg *relayMsg =
+      (NcpyAckRelayMsg *)CmiAlloc(sizeof(NcpyAckRelayMsg));
+  relayMsg->ncpyOpInfo = ncpyOpInfo;
+  relayMsg->freeMe = freeMe;
+  CmiSetHandler(relayMsg, ncpy_ack_relay_handler_idx);
+  CmiSyncSendAndFree(targetPe, sizeof(NcpyAckRelayMsg), (char *)relayMsg);
+  return true;
+}
 
 // Invoked when this PE has to deregister the local memory
 static void remoteDeregHandler(ConverseRdmaMsg *deregMsg) {
@@ -236,6 +276,7 @@ void CmiOnesidedDirectInit(void) {
   remote_dereg_handler_idx = CmiRegisterHandler((CmiHandler)remoteDeregHandler);
   get_request_handler_idx = CmiRegisterHandler((CmiHandler)getRequestHandler);
   put_data_handler_idx = CmiRegisterHandler((CmiHandler)putDataHandler);
+  ncpy_ack_relay_handler_idx = CmiRegisterHandler((CmiHandler)ncpyAckRelayHandler);
   zc_pup_handler_idx = CmiRegisterHandler((CmiHandler)zcPupHandler);
 }
 
@@ -432,6 +473,9 @@ void CommRputLocalHandler(comm_backend::Status status) {
   ncpyOpInfo->ackMode = CMK_SRC_ACK;
   auto realFreeMe = ncpyOpInfo->freeMe;
   ncpyOpInfo->freeMe = CMK_DONT_FREE_NCPYOPINFO;
+  if (relayDirectAckIfNeeded(ncpyOpInfo, realFreeMe)) {
+    return;
+  }
   ncpyDirectAckHandlerFn(ncpyOpInfo);
   if (realFreeMe == CMK_FREE_NCPYOPINFO)
     CmiFree(ncpyOpInfo);  
@@ -443,6 +487,9 @@ void CommRgetLocalHandler(comm_backend::Status status) {
   ncpyOpInfo->ackMode = CMK_DEST_ACK;
   auto realFreeMe = ncpyOpInfo->freeMe;
   ncpyOpInfo->freeMe = CMK_DONT_FREE_NCPYOPINFO;
+  if (relayDirectAckIfNeeded(ncpyOpInfo, realFreeMe)) {
+    return;
+  }
   ncpyDirectAckHandlerFn(ncpyOpInfo);
   if (realFreeMe == CMK_FREE_NCPYOPINFO)
     CmiFree(ncpyOpInfo);
