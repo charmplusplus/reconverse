@@ -402,23 +402,24 @@ void *CmiAlloc(int size) {
     CmiPrintf("CmiAlloc: size <= 0\n");
     return nullptr;
   }
-  CmiPrintf("CmiAlloc: Allocating size = %d\n", size);
+  //CmiPrintf("CmiAlloc: Allocating size = %d\n", size);
   // comm_backend::malloc returns a pointer to where CmiChunkHeader should be placed
   // Layout after malloc: [mempool_header][CmiChunkHeader][user space]
   //                                       ^ptr returned
   void* res = comm_backend::malloc(size, sizeof(CmiChunkHeader));
+  char* ptr = (char*)res + sizeof(CmiChunkHeader);
 
   if (size >= CmiMsgHeaderSizeBytes) {
     // Set zcMsgType in the converse message header to CMK_REG_NO_ZC_MSG
-    CMI_ZC_MSGTYPE((void *)res) = CMK_REG_NO_ZC_MSG;
-    CMI_MSG_NOKEEP((void *)res) = 0;
+    CMI_ZC_MSGTYPE((void *)ptr) = CMK_REG_NO_ZC_MSG;
+    CMI_MSG_NOKEEP((void *)ptr) = 0;
   }
 
-  REFFIELDSET(res, 1);
-  SIZEFIELD(res) = size;
-  CmiPrintf("Allocated CmiChunkHeader at %p, user ptr = %p\n", res, res + sizeof(CmiChunkHeader));
+  REFFIELDSET(ptr, 1);
+  SIZEFIELD(ptr) = size;
+  //CmiPrintf("Allocated CmiChunkHeader at %p, user ptr = %p\n", res, res + sizeof(CmiChunkHeader));
   // Return pointer to user data (after CmiChunkHeader)
-  return (char*)res + sizeof(CmiChunkHeader);
+  return ptr;
 }
 
 // header ref count methods
