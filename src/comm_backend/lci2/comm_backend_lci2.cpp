@@ -127,10 +127,11 @@ void CommBackendLCI2::issueAm(int rank, const void *local_buf, size_t size, mr_t
 }
 
 void CommBackendLCI2::issueRget(int rank, const void *local_buf, size_t size,
-                                mr_t local_mr, uintptr_t remote_disp, void *rmr,
+                                mr_t local_mr, void* remote_buf, void *rmr,
                                 CompHandler localComp, void *user_context) {
   auto args = new localCallbackArgs{localComp, user_context};
   lci::status_t status;
+  uintptr_t remote_disp = (uintptr_t)remote_buf - getThreadLocalRMR(rmr).base;
   do {
     status = lci::post_get_x(rank, const_cast<void *>(local_buf), size,
                              m_local_comp, remote_disp, getThreadLocalRMR(rmr))
