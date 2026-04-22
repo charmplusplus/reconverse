@@ -204,9 +204,9 @@ static void memcpyAnyPtr(void *dst, const void *src, size_t size) {
   {
     hipPointerAttribute_t srcAttr{}, dstAttr{};
     bool srcIsDevice = (hipPointerGetAttributes(&srcAttr, src) == hipSuccess &&
-                        srcAttr.memoryType == hipMemoryTypeDevice);
+                        srcAttr.type == hipMemoryTypeDevice);
     bool dstIsDevice = (hipPointerGetAttributes(&dstAttr, dst) == hipSuccess &&
-                        dstAttr.memoryType == hipMemoryTypeDevice);
+                        dstAttr.type == hipMemoryTypeDevice);
     if (srcIsDevice || dstIsDevice) {
       if (hipMemcpy(dst, src, size, hipMemcpyDefault) == hipSuccess)
         return;
@@ -501,8 +501,6 @@ if (target_node == CmiMyNode()) {
 } else if (!CmiUseCopyBasedRDMA) {
   auto mr = *(comm_backend::mr_t *)ncpyOpInfo->srcLayerInfo;
   void *rmr = ncpyOpInfo->destLayerInfo + sizeof(comm_backend::mr_t);
-  uintptr_t remote_disp = (uintptr_t)ncpyOpInfo->destPtr -
-                          comm_backend::getRMRBase(rmr);
   comm_backend::issueRput(CmiNodeOf(ncpyOpInfo->destPe), ncpyOpInfo->srcPtr,
                           ncpyOpInfo->srcSize, mr, 0, rmr,
                           CommRputLocalHandler, ncpyOpInfo);
