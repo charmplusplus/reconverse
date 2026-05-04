@@ -249,6 +249,7 @@ CthThread CthCreate(CthVoidFn fn, void *arg, int size) {
 }
 
 static void CthThreadBaseFree(CthThreadBase *th) {
+  struct CthThreadListener *l, *lnext;
   /*
    * remove the token if it is not queued in the converse scheduler
    */
@@ -260,9 +261,23 @@ static void CthThreadBaseFree(CthThreadBase *th) {
   /* Call the free function pointer on all the listeners on
      this thread and also delete the thread listener objects
      */
+  for (l = th->listener; l != NULL; l = lnext) {
+    lnext = l->next;
+    l->next = 0;
+    if (l->free)
+      l->free(l);
+  }
+  th->listener = NULL;
   free(th->data);
 
   if (th->stack != NULL) {
+    for (l = th->listener; l != NULL; l = lnext) {
+      lnext = l->next;
+      l->next = 0;
+      if (l->free)
+        l->free(l);
+    }
+    th->listener = NULL;
     free(th->stack);
   }
   th->stack = NULL;
@@ -280,6 +295,11 @@ static void CthThreadFree(CthThread t) {
 }
 
 static void CthBaseResume(CthThread t) {
+  struct CthThreadListener *l;
+  for (l = B(t)->listener; l != NULL; l = l->next) {
+    if (l->resume)
+      l->resume(l);
+  }
   CthFixData(t); /*Thread-local storage may have changed in other thread.*/
   CpvAccess(CthCurrent) = t;
   CpvAccess(CthData) = B(t)->data;
@@ -322,6 +342,12 @@ void CthSuspend(void) {
 
   if (cur->suspendable == 0)
     CmiAbort("Fatal Error> trying to suspend a non-suspendable thread!\n");
+
+  /* Call the suspend function on listeners */
+  for (l = cur->listener; l != NULL; l = l->next) {
+    if (l->suspend)
+      l->suspend(l);
+  }
 
   CthThFn choosefn = cur->choosefn;
   if (choosefn == 0)

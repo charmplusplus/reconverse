@@ -248,9 +248,9 @@ static void memcpyAnyPtr(void *dst, const void *src, size_t size) {
   {
     hipPointerAttribute_t srcAttr{}, dstAttr{};
     bool srcIsDevice = (hipPointerGetAttributes(&srcAttr, src) == hipSuccess &&
-                        srcAttr.memoryType == hipMemoryTypeDevice);
+                        srcAttr.type == hipMemoryTypeDevice);
     bool dstIsDevice = (hipPointerGetAttributes(&dstAttr, dst) == hipSuccess &&
-                        dstAttr.memoryType == hipMemoryTypeDevice);
+                        dstAttr.type == hipMemoryTypeDevice);
     if (srcIsDevice || dstIsDevice) {
       if (hipMemcpy(dst, src, size, hipMemcpyDefault) == hipSuccess)
         return;
@@ -521,10 +521,10 @@ void CmiIssueRget(NcpyOperationInfo *ncpyOpInfo) {
   } else if (!CmiUseCopyBasedRDMA) {
     auto mr = *(comm_backend::mr_t *)ncpyOpInfo->destLayerInfo;
     void *rmr = ncpyOpInfo->srcLayerInfo + sizeof(comm_backend::mr_t);
-    // FIXME: we assume the offset to the registered base address is 0 here
     comm_backend::issueRget(CmiNodeOf(ncpyOpInfo->srcPe), ncpyOpInfo->destPtr,
-                            ncpyOpInfo->srcSize, mr, 0, rmr,
+                            ncpyOpInfo->srcSize, mr, (void*)ncpyOpInfo->srcPtr, rmr,
                             CommRgetLocalHandler, ncpyOpInfo);
+    // printf("reconverse rgets from src pe %d to dest pe %d, baseptr %p, srcptr %p, dstptr %p, size %zu\n", ncpyOpInfo->srcPe, ncpyOpInfo->destPe, comm_backend::getRMRBase(rmr), ncpyOpInfo->srcPtr, ncpyOpInfo->destPtr, ncpyOpInfo->srcSize);
   } else {
     CmiIssueRgetCopyBased(ncpyOpInfo);
   }
@@ -552,10 +552,9 @@ if (target_node == CmiMyNode()) {
 } else if (!CmiUseCopyBasedRDMA) {
   auto mr = *(comm_backend::mr_t *)ncpyOpInfo->srcLayerInfo;
   void *rmr = ncpyOpInfo->destLayerInfo + sizeof(comm_backend::mr_t);
-  // FIXME: we assume the offset to the registered base address is 0 here
   comm_backend::issueRput(CmiNodeOf(ncpyOpInfo->destPe), ncpyOpInfo->srcPtr,
-                          ncpyOpInfo->srcSize, mr, 0, rmr, CommRputLocalHandler,
-                          ncpyOpInfo);
+                          ncpyOpInfo->srcSize, mr, 0, rmr,
+                          CommRputLocalHandler, ncpyOpInfo);
 } else {
   CmiIssueRputCopyBased(ncpyOpInfo);
 }

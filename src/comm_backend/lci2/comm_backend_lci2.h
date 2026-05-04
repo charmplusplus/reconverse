@@ -26,7 +26,7 @@ public:
   void issueAm(int rank, const void *local_buf, size_t size, mr_t mr,
                CompHandler localComp, AmHandler remoteComp, void *user_context) override;
   void issueRget(int rank, const void *local_buf, size_t size, mr_t local_mr,
-                 uintptr_t remote_disp, void *rmr,
+                 void* remote_buf, void *rmr,
                  CompHandler localComp, void *user_context) override;
   void issueRput(int rank, const void *local_buf, size_t size, mr_t local_mr,
                  uintptr_t remote_disp, void *rmr,
