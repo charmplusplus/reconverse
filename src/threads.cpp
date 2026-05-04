@@ -261,6 +261,13 @@ static void CthThreadBaseFree(CthThreadBase *th) {
   /* Call the free function pointer on all the listeners on
      this thread and also delete the thread listener objects
      */
+  for (l = th->listener; l != NULL; l = lnext) {
+    lnext = l->next;
+    l->next = 0;
+    if (l->free)
+      l->free(l);
+  }
+  th->listener = NULL;
   free(th->data);
 
   if (th->stack != NULL) {
