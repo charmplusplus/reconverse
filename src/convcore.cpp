@@ -145,11 +145,17 @@ void converseRunPe(int rank, int everReturn) {
   // Cmi_multicastHandler = CmiRegisterHandler(CmiMulticastHandler);
 
   // A global barrier to ensure all global structs are initialized
+  printf("[DBG] pe %d rank %d: converseRunPe nodebarrier1 start\n", CmiMyPe(), rank); fflush(stdout);
   CmiNodeBarrier();
+  printf("[DBG] pe %d rank %d: converseRunPe nodebarrier1 done\n", CmiMyPe(), rank); fflush(stdout);
   if (rank == 0) {
+    printf("[DBG] pe %d: converseRunPe global barrier start\n", CmiMyPe()); fflush(stdout);
     comm_backend::barrier();
+    printf("[DBG] pe %d: converseRunPe global barrier done\n", CmiMyPe()); fflush(stdout);
   }
+  printf("[DBG] pe %d rank %d: converseRunPe nodebarrier2 start\n", CmiMyPe(), rank); fflush(stdout);
   CmiNodeBarrier();
+  printf("[DBG] pe %d rank %d: converseRunPe nodebarrier2 done\n", CmiMyPe(), rank); fflush(stdout);
 
   CthInit(NULL);
   CthSchedInit();
@@ -367,7 +373,9 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
   CmiMemLock_lock = CmiCreateLock();
 
   // make sure the queues are allocated before PEs start sending messages around
+  if (Cmi_mynode == 0) { printf("[DBG] node 0: ConverseInit barrier start\n"); fflush(stdout); }
   comm_backend::barrier();
+  if (Cmi_mynode == 0) { printf("[DBG] node 0: ConverseInit barrier done\n"); fflush(stdout); }
 
   //launch threads on rank 1+
   CmiStartThreads();

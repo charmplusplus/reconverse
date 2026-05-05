@@ -50,12 +50,20 @@ void CommBackendLCI2::init(char **argv) {
       g_attr.npackets = 1024 * num_devices * 2;
     }
   }
+  // SMP mode has multiple PE threads per node sharing one device. The CXI
+  // provider is not thread-safe without FI_THREAD_SAFE, so enable LCI's
+  // built-in per-device trylock for all OFI operations.
+  g_attr.ofi_lock_mode = lci::LCI_NET_TRYLOCK_SEND |
+                         lci::LCI_NET_TRYLOCK_RECV |
+                         lci::LCI_NET_TRYLOCK_POLL;
   lci::set_g_default_attr(g_attr);
 
   lci::g_runtime_init_x().alloc_default_device(false)();
   m_devices.resize(num_devices);
+  m_progress_locks = std::vector<std::atomic<bool>>(num_devices);
   for (int i = 0; i < num_devices; i++) {
     m_devices[i] = lci::alloc_device();
+    m_progress_locks[i].store(false, std::memory_order_relaxed);
   }
 
   m_local_comp = lci::alloc_handler(localCallback);
@@ -166,19 +174,31 @@ void CommBackendLCI2::issueRput(int rank, const void *local_buf, size_t size,
 }
 
 bool CommBackendLCI2::progress(void) {
+  // OFI fi_cq_read is not thread-safe. Use a per-device trylock so at most
+  // one thread polls each device CQ at a time. Callers that lose the race
+  // simply return without making progress — the winning thread covers them.
   if (!detail::g_thread_context.tls_device.is_empty()) {
-    // If we are assigned a thread-local device, make progress on it.
-    auto ret = lci::progress_x().device(detail::g_thread_context.tls_device)();
-    if (ret.is_done())
-      return true;
-    else
+    int dev_idx = detail::g_thread_context.device_idx;
+    bool expected = false;
+    if (!m_progress_locks[dev_idx].compare_exchange_strong(
+            expected, true, std::memory_order_acquire,
+            std::memory_order_relaxed)) {
       return false;
+    }
+    auto ret = lci::progress_x().device(detail::g_thread_context.tls_device)();
+    m_progress_locks[dev_idx].store(false, std::memory_order_release);
+    return ret.is_done();
   } else {
-    // We are not assigned a thread-local device.
-    // We are the main thread. Make progress on all devices.
     bool did_progress = false;
-    for (auto &device : m_devices) {
-      auto ret = lci::progress_x().device(device)();
+    for (int i = 0; i < (int)m_devices.size(); i++) {
+      bool expected = false;
+      if (!m_progress_locks[i].compare_exchange_strong(
+              expected, true, std::memory_order_acquire,
+              std::memory_order_relaxed)) {
+        continue;
+      }
+      auto ret = lci::progress_x().device(m_devices[i])();
+      m_progress_locks[i].store(false, std::memory_order_release);
       if (ret.is_done())
         did_progress = true;
     }
