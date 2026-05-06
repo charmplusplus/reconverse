@@ -11,6 +11,13 @@ struct ThreadContext {
 };
 
 thread_local ThreadContext g_thread_context;
+
+// Set while a thread is inside lci::progress_x() (i.e., executing a completion
+// callback fired by progress). Used to break the reentrancy deadlock: if issueAm
+// or issueRget are called from within a callback, they must not spin-retry (which
+// would hold m_progress_locks indefinitely and prevent CQ polling). Instead they
+// push to the LCI backlog queue with allow_retry=false and return immediately.
+thread_local bool g_in_progress_callback = false;
 } // namespace detail
 
 std::vector<CompHandler> g_handlers;
@@ -118,6 +125,12 @@ void CommBackendLCI2::issueAm(int rank, const void *local_buf, size_t size, mr_t
                               CompHandler localComp, AmHandler remoteComp, void *user_context) {
   auto args = new localCallbackArgs{localComp, user_context};
   lci::status_t status;
+  // When called from inside a completion callback (g_in_progress_callback=true),
+  // m_progress_locks is held by the outer progress() frame. Spinning here would
+  // hold that lock indefinitely, preventing CQ polling and deadlocking the TX
+  // queue. Use allow_retry=false so LCI pushes to its backlog queue and returns
+  // immediately; the backlog is drained in the next progress() call.
+  bool allow_retry = !detail::g_in_progress_callback;
   do {
     // we use LCI tag to pass the remoteComp
     status = lci::post_am_x(rank, const_cast<void *>(local_buf), size,
@@ -125,8 +138,9 @@ void CommBackendLCI2::issueAm(int rank, const void *local_buf, size_t size, mr_t
                  .mr(getThreadLocalMR(mr))
                  .device(getThreadLocalDevice())
                  .tag(remoteComp)
-                 .user_context(args)();
-    progress();
+                 .user_context(args)
+                 .allow_retry(allow_retry)();
+    if (allow_retry) progress();
   } while (status.is_retry());
   if (status.is_done()) {
     localComp({local_buf, size, user_context});
@@ -140,13 +154,17 @@ void CommBackendLCI2::issueRget(int rank, const void *local_buf, size_t size,
   auto args = new localCallbackArgs{localComp, user_context};
   lci::status_t status;
   uintptr_t remote_disp = (uintptr_t)remote_buf - getThreadLocalRMR(rmr).base;
+  // Same reentrancy guard as issueAm: don't spin when called from a completion
+  // callback, push to backlog instead.
+  bool allow_retry = !detail::g_in_progress_callback;
   do {
     status = lci::post_get_x(rank, const_cast<void *>(local_buf), size,
                              m_local_comp, remote_disp, getThreadLocalRMR(rmr))
                  .mr(getThreadLocalMR(local_mr))
                  .device(getThreadLocalDevice())
-                 .user_context(args)();
-    progress();
+                 .user_context(args)
+                 .allow_retry(allow_retry)();
+    if (allow_retry) progress();
   } while (status.is_retry());
   if (status.is_done()) {
     localComp({local_buf, size, user_context});
@@ -185,7 +203,12 @@ bool CommBackendLCI2::progress(void) {
             std::memory_order_relaxed)) {
       return false;
     }
+    // Mark that completion callbacks fired inside progress_x() are reentrant.
+    // issueAm/issueRget check this flag to avoid spinning (which would hold
+    // m_progress_locks indefinitely and deadlock the TX queue drain path).
+    detail::g_in_progress_callback = true;
     auto ret = lci::progress_x().device(detail::g_thread_context.tls_device)();
+    detail::g_in_progress_callback = false;
     m_progress_locks[dev_idx].store(false, std::memory_order_release);
     return ret.is_done();
   } else {
@@ -197,7 +220,9 @@ bool CommBackendLCI2::progress(void) {
               std::memory_order_relaxed)) {
         continue;
       }
+      detail::g_in_progress_callback = true;
       auto ret = lci::progress_x().device(m_devices[i])();
+      detail::g_in_progress_callback = false;
       m_progress_locks[i].store(false, std::memory_order_release);
       if (ret.is_done())
         did_progress = true;
