@@ -125,18 +125,21 @@ extern CmiNodeLock CmiMemLock_lock;
 #define ALIGN_DEFAULT(x) CMIALIGN(x, ALIGN_BYTES)
 #define CMIPADDING(x, n) (CMIALIGN((x), (n)) - (size_t)(x))
 
-// Portable alignment specifier for structs
+// Portable alignment specifier for structs.
+// NOTE: __attribute__((aligned(n))) must be checked before _Alignas because
+// _Alignas is a variable specifier in C11/C17 and cannot appear between
+// 'struct' and the tag name, whereas __attribute__ can (GCC/Clang extension).
 #ifdef __cplusplus
 #define CMI_ALIGNAS(n) alignas(n)
+#elif defined(__GNUC__) || defined(__clang__)
+// GCC/Clang __attribute__ supports the 'struct __attribute__((aligned(n))) tag' form
+#define CMI_ALIGNAS(n) __attribute__((aligned(n)))
 #elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 202311L
 // C23 has alignas
 #define CMI_ALIGNAS(n) alignas(n)
 #elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
 // C11 has _Alignas
 #define CMI_ALIGNAS(n) _Alignas(n)
-#elif defined(__GNUC__) || defined(__clang__)
-// GCC/Clang attribute
-#define CMI_ALIGNAS(n) __attribute__((aligned(n)))
 #elif defined(_MSC_VER)
 // MSVC
 #define CMI_ALIGNAS(n) __declspec(align(n))
