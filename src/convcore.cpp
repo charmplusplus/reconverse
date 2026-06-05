@@ -111,11 +111,15 @@ void CommRemoteHandler(comm_backend::Status status) {
 }
 
 void CmiCallHandler(int handler, void *msg) {
-  CmiHandlerInfo h = CmiGetHandlerTable()->at(handler);
-  if (h.userPtr) {
-    h.exhdlr(msg, h.userPtr);
-  } else {
+  // Hot path: skip bounds check (handler IDs are runtime-internal and the
+  // table is grown by CmiRegisterHandler before any message can reference
+  // them). Bias the branch toward the common "plain hdlr, no userPtr" case
+  // taken by every chare entry method invocation.
+  const CmiHandlerInfo &h = (*CmiGetHandlerTable())[handler];
+  if (__builtin_expect(h.userPtr == nullptr, 1)) {
     h.hdlr(msg);
+  } else {
+    h.exhdlr(msg, h.userPtr);
   }
 }
 
