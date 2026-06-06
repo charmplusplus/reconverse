@@ -320,22 +320,28 @@ public:
 
 
 #ifdef ATOMIC_QUEUE_ENABLED
-// Per-PE inbox: many producers (any other PE sending to us), single consumer
-// (the owning PE). Use the bounded MPSC ring — strictly cheaper per op than
-// moodycamel for this access pattern.
+// Per-PE inbox: any other PE in the process is a producer, the owning PE
+// is the sole consumer.
 //
-// Define RECONVERSE_USE_MOODYCAMEL_PER_PE to fall back to the old behavior
-// for A/B comparison.
-#ifdef RECONVERSE_USE_MOODYCAMEL_PER_PE
-template <typename MessageType>
-using ConverseQueue = MPSCQueue<MessageType, AtomicAccessControl<MessageType>>;
-#else
+// Earlier we swapped to a Vyukov bounded MPSC ring (BoundedMPSCRing) based
+// on a pingpong profile that showed moodycamel taking ~26% of CPU. That was
+// the right call for 2-PE pingpong, but caused a 33% per-task slowdown at
+// compute-bound granularity in the real task-bench stencil_1d sweep with
+// factor=8 (32 producers contending on a single CAS-on-enqueue_pos_).
+// moodycamel's per-producer implicit-block design scales much better under
+// many-producer contention. Keep moodycamel here.
+//
+// Define RECONVERSE_USE_MPSC_RING_PER_PE to opt back into the bounded ring
+// for the low-producer-count case (microbenchmarks, etc.).
+#ifdef RECONVERSE_USE_MPSC_RING_PER_PE
 template <typename MessageType>
 using ConverseQueue = MPSCQueue<MessageType, MPSCRingAccessControl<MessageType>>;
+#else
+template <typename MessageType>
+using ConverseQueue = MPSCQueue<MessageType, AtomicAccessControl<MessageType>>;
 #endif
 
-// Node queue stays MPMC (multiple producers, multiple consumers). Keep
-// moodycamel here.
+// Node queue is genuinely MPMC; moodycamel is the right choice.
 template <typename MessageType>
 using ConverseNodeQueue = MPMCQueue<MessageType, AtomicAccessControl<MessageType>>;
 
