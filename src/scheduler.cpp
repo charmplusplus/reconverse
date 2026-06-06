@@ -24,16 +24,16 @@ void CsdScheduler() {
   //   and calls CmiWallTimer. Fastest periodic level is 1 ms; at ~1 µs/iter,
   //   256 iters keeps us well inside the budget.
   //
-  //   SCHEDLOOP_THROTTLE — CcdRaiseCondition(CcdSCHEDLOOP) fires the
-  //   condcb_keep list for that condition, which on a CUDA build includes
-  //   hapiPollEvents (driver cudaEventQuery). HAPI tolerates a few-µs
-  //   polling delay (kernel completion sees it on the next iter). At
-  //   ~1 µs/iter, throttle=16 means HAPI polls every ~16 µs — well within
-  //   tolerance for any realistic GPU workload. Profile still showed
-  //   call_cblist_keep + vector::size at ~6% even with throttle=4; this
-  //   bump should cut both another 4x.
+  //   SCHEDLOOP_THROTTLE — fire CcdRaiseCondition(CcdSCHEDLOOP) every
+  //   iteration. The earlier hypothesis (this is just HAPI polling, GPU
+  //   workloads tolerate a few-µs delay) turned out to be wrong: task-bench
+  //   showed a 33% per-task regression at compute-bound granularity with
+  //   throttle=16, because every kernel completion waits ~half-throttle-
+  //   period of scheduler time before hapiPollEvents notices. Keep at 1.
+  //   The ccd-cblist cost saved on pingpong was real but small; it's not
+  //   worth a GPU regression of this magnitude.
   constexpr int CCD_CALLBACKS_THROTTLE = 256;
-  constexpr int SCHEDLOOP_THROTTLE = 16;
+  constexpr int SCHEDLOOP_THROTTLE = 1;
   int ccd_callbacks_counter = 0;
   int schedloop_counter = 0;
 
