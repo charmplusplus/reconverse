@@ -293,6 +293,15 @@ public:
         return policy.pop_result();
     }
 
+    // Pointer-returning fast pop: same SFINAE pattern as MPSCQueue.
+    // Avoids std::optional construction on the scheduler hot path
+    // (~3.7% of CPU in the profile).
+    template<typename P = AccessControlPolicy>
+    auto try_pop_ptr() -> decltype(std::declval<P&>().try_pop_ptr())
+    {
+        return policy.try_pop_ptr();
+    }
+
     void push(MessageType message)
     {
         policy.push(message);

@@ -26,12 +26,14 @@ void CsdScheduler() {
   //
   //   SCHEDLOOP_THROTTLE — CcdRaiseCondition(CcdSCHEDLOOP) fires the
   //   condcb_keep list for that condition, which on a CUDA build includes
-  //   hapiPollEvents (driver cudaEventQuery). Profile showed call_cblist_keep
-  //   at 2.3% and vector::size at 2.2% — both downstream of this. HAPI
-  //   tolerates a few-µs polling delay (kernel completion sees it on the
-  //   next iter), so every 4 iters is conservative.
+  //   hapiPollEvents (driver cudaEventQuery). HAPI tolerates a few-µs
+  //   polling delay (kernel completion sees it on the next iter). At
+  //   ~1 µs/iter, throttle=16 means HAPI polls every ~16 µs — well within
+  //   tolerance for any realistic GPU workload. Profile still showed
+  //   call_cblist_keep + vector::size at ~6% even with throttle=4; this
+  //   bump should cut both another 4x.
   constexpr int CCD_CALLBACKS_THROTTLE = 256;
-  constexpr int SCHEDLOOP_THROTTLE = 4;
+  constexpr int SCHEDLOOP_THROTTLE = 16;
   int ccd_callbacks_counter = 0;
   int schedloop_counter = 0;
 
@@ -49,10 +51,10 @@ void CsdScheduler() {
         }
     #endif
 
-    // poll node queue (still moodycamel — MPMC pattern). One try_dequeue
-    // returns fast when empty; cheaper than empty()+pop().
-    if (auto result = nodeQueue->pop()) {
-      void *msg = result.value();
+    // poll node queue — moodycamel under the hood, but try_pop_ptr returns
+    // a raw void* (nullptr = empty) so we skip std::optional construction
+    // on every poll (~3.7% of CPU).
+    if (void *msg = nodeQueue->try_pop_ptr()) {
       CmiHandleMessage(msg);
       if (CmiGetIdle()) {
         CmiSetIdle(false);
@@ -60,8 +62,8 @@ void CsdScheduler() {
       }
     }
 
-    // poll thread queue — bounded MPSC ring with a pointer-return fast path
-    // (no std::optional construction on every poll). nullptr means empty.
+    // poll thread queue — bounded MPSC ring with the same pointer-return
+    // fast path.
     else if (void *msg = queue->try_pop_ptr()) {
       CmiHandleMessage(msg);
       if (CmiGetIdle()) {
@@ -252,9 +254,8 @@ void CsdSchedulePoll() {
 
     CcdRaiseCondition(CcdSCHEDLOOP);
 
-    // poll node queue (still moodycamel — MPMC pattern)
-    if (auto result = nodeQueue->pop()) {
-      void *msg = result.value();
+    // poll node queue — pointer-return fast path (no std::optional ctor)
+    if (void *msg = nodeQueue->try_pop_ptr()) {
       CmiHandleMessage(msg);
       if (CmiGetIdle()) {
         CmiSetIdle(false);
