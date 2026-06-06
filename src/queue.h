@@ -191,15 +191,34 @@ template<typename MessageType>
 class AtomicAccessControl {
     // what default size?
     moodycamel::ConcurrentQueue<MessageType> q{8192};
+    // Atomic size counter for fast-empty short-circuit. Profile of the
+    // Charm++ pingpong showed ~19% of CPU went to moodycamel's try_dequeue
+    // on the node queue, which is empty 100% of the time in this workload
+    // — but moodycamel's MPMC machinery still walks producers and block
+    // indices to discover that. With this counter, the scheduler can skip
+    // try_dequeue entirely when nothing has been pushed (single relaxed
+    // load + branch instead of a producer-list walk).
+    //
+    // The counter is approximate (relaxed ordering): a producer might see
+    // size==0 momentarily after pushing because moodycamel's enqueue
+    // happens before the counter increment. That's a benign one-iter
+    // delay; the message gets picked up next time around. Crucially, we
+    // never lose a message — the counter is incremented strictly AFTER
+    // moodycamel sees the push.
+    alignas(64) std::atomic<size_t> approx_size_{0};
 
     public:
     void push(MessageType message) {
         q.enqueue(message);
+        approx_size_.fetch_add(1, std::memory_order_relaxed);
     }
 
     QueueResult<MessageType> pop_result() {
+        if (approx_size_.load(std::memory_order_relaxed) == 0)
+            return std::nullopt;
         MessageType message;
         bool success = q.try_dequeue(message);
+        if (success) approx_size_.fetch_sub(1, std::memory_order_relaxed);
         return success ? QueueResult<MessageType>(message) : std::nullopt;
     }
 
@@ -209,17 +228,19 @@ class AtomicAccessControl {
     // std::optional construction on the hot path.
     template<typename M = MessageType>
     typename std::enable_if<std::is_pointer<M>::value, M>::type try_pop_ptr() {
+        if (approx_size_.load(std::memory_order_relaxed) == 0) return nullptr;
         M message = nullptr;
-        q.try_dequeue(message);
+        bool success = q.try_dequeue(message);
+        if (success) approx_size_.fetch_sub(1, std::memory_order_relaxed);
         return message;
     }
 
     size_t size() {
-        return q.size_approx();
+        return approx_size_.load(std::memory_order_relaxed);
     }
 
     bool empty() {
-        return q.size_approx() == 0;
+        return approx_size_.load(std::memory_order_relaxed) == 0;
     }
 };
 
