@@ -18,17 +18,29 @@ void CsdScheduler() {
   ConverseNodeQueue<void *> *nodeQueue = CmiGetNodeQueue();
 
   int loop_counter = 0;
-  // Throttle CcdCallBacks: it calls CmiWallTimer + walks the periodic-callback
-  // heap on every iteration. The fastest periodic level is 1 ms, so even at
-  // ~1 µs/iter, firing it every 256 iters is well within the tightest budget
-  // and removes the timer/heap walk from the hot path. Profile showed
-  // getCurrentTime + ccd_heap_update were ~2-3% of total CPU.
+  // Throttle two pieces of per-iteration housekeeping:
+  //
+  //   CCD_CALLBACKS_THROTTLE — CcdCallBacks walks the periodic-callback heap
+  //   and calls CmiWallTimer. Fastest periodic level is 1 ms; at ~1 µs/iter,
+  //   256 iters keeps us well inside the budget.
+  //
+  //   SCHEDLOOP_THROTTLE — CcdRaiseCondition(CcdSCHEDLOOP) fires the
+  //   condcb_keep list for that condition, which on a CUDA build includes
+  //   hapiPollEvents (driver cudaEventQuery). Profile showed call_cblist_keep
+  //   at 2.3% and vector::size at 2.2% — both downstream of this. HAPI
+  //   tolerates a few-µs polling delay (kernel completion sees it on the
+  //   next iter), so every 4 iters is conservative.
   constexpr int CCD_CALLBACKS_THROTTLE = 256;
+  constexpr int SCHEDLOOP_THROTTLE = 4;
   int ccd_callbacks_counter = 0;
+  int schedloop_counter = 0;
 
   while (CmiStopFlag() == 0) {
 
-    CcdRaiseCondition(CcdSCHEDLOOP);
+    if (++schedloop_counter >= SCHEDLOOP_THROTTLE) {
+      schedloop_counter = 0;
+      CcdRaiseCondition(CcdSCHEDLOOP);
+    }
 
     #ifdef CMK_USE_SHMEM
         CmiIpcBlock* block = CmiPopIpcBlock(CsvAccess(coreIpcManager_));
@@ -91,7 +103,12 @@ void CsdScheduler() {
             CcdRaiseCondition(CcdPROCESSOR_BEGIN_IDLE);
           } else {
             CcdRaiseCondition(CcdPROCESSOR_STILL_IDLE);
-            if (CmiWallTimer() - CmiGetIdleTime() > 10.0) {
+            // Throttle the long-idle wallclock check. Firing CmiWallTimer
+            // every iteration while spinning was ~1.7% of CPU in the profile;
+            // a 10-second threshold tolerates a few-hundred-iter delay just
+            // fine.
+            if (ccd_callbacks_counter == 0
+                && CmiWallTimer() - CmiGetIdleTime() > 10.0) {
               CcdRaiseCondition(CcdPROCESSOR_LONG_IDLE);
             }
           }
