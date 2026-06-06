@@ -63,8 +63,42 @@ void CsdScheduler() {
 
         // poll node prio queue
     else {
+      // Fast-empty short-circuit: if both priority queues are observed empty
+      // by their cached size field, skip the trylock + nested empty walks
+      // entirely. In workloads that never send prioritized messages (which is
+      // most of them), this collapses the bottom of the scheduler loop to
+      // two loads + a branch. Profile showed pthread_mutex_trylock alone was
+      // ~2% of CPU. A concurrent push we miss here gets picked up on the
+      // next iteration; QueuePush updates size under whatever lock the
+      // caller holds.
+      Queue csdNodeQ = CsvAccess(CsdNodeQueue);
+      Queue csdSchedQ = CpvAccess(CsdSchedQueue);
+      if (QueueFastEmpty(csdNodeQ) && QueueFastEmpty(csdSchedQ)) {
+        #if CMK_TASKQUEUE
+        void *task_msg = TaskQueuePopLocal();
+        if (task_msg != NULL) {
+          CmiHandleMessage(task_msg);
+          if (CmiGetIdle()) {
+            CmiSetIdle(false);
+            CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
+          }
+        } else
+        #endif
+        {
+          if (!CmiGetIdle()) {
+            CmiSetIdle(true);
+            CmiSetIdleTime(CmiWallTimer());
+            CcdRaiseCondition(CcdPROCESSOR_BEGIN_IDLE);
+          } else {
+            CcdRaiseCondition(CcdPROCESSOR_STILL_IDLE);
+            if (CmiWallTimer() - CmiGetIdleTime() > 10.0) {
+              CcdRaiseCondition(CcdPROCESSOR_LONG_IDLE);
+            }
+          }
+        }
+      }
       // Try to acquire lock without blocking
-      if (CmiTryLock(CsvAccess(CsdNodeQueueLock)) == 0) {
+      else if (CmiTryLock(CsvAccess(CsdNodeQueueLock)) == 0) {
         if (!QueueEmpty(CsvAccess(CsdNodeQueue))) {
           void* msg = QueueTop(CsvAccess(CsdNodeQueue));
           QueuePop(CsvAccess(CsdNodeQueue));
@@ -77,7 +111,7 @@ void CsdScheduler() {
             CmiSetIdle(false);
             CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
           }
-        } 
+        }
         else {
           CmiUnlock(CsvAccess(CsdNodeQueueLock));
           //empty queue so check thread prio queue

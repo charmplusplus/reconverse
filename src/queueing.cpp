@@ -7,6 +7,7 @@ void QueueInit(Queue q)
     q->pq_neg = new std::priority_queue<MessagePriorityPair, std::vector<MessagePriorityPair>, MessagePriorityComparator>();
     q->pq_zero = new std::queue<void*>();
     q->pq_pos = new std::priority_queue<MessagePriorityPair, std::vector<MessagePriorityPair>, MessagePriorityComparator>();
+    q->size.store(0, std::memory_order_relaxed);
 }
 
 void QueueDestroy(Queue q)
@@ -51,6 +52,10 @@ void QueuePush(Queue q, void* message, long long priority)
         auto pq_zero = static_cast<std::queue<void*>*>(q->pq_zero);
         pq_zero->push(message);
     }
+    // Relaxed: producer holds whatever lock the queue requires (CsdNodeQueueLock
+    // for the node queue, none for per-PE). The relaxed store pairs with the
+    // relaxed load in QueueFastEmpty for a benign-race fast-empty check.
+    q->size.fetch_add(1, std::memory_order_relaxed);
 }
 
 void* QueueTop(Queue q)
@@ -76,13 +81,24 @@ void QueuePop(Queue q)
     auto pq_neg = static_cast<std::priority_queue<MessagePriorityPair, std::vector<MessagePriorityPair>, MessagePriorityComparator>*>(q->pq_neg);
     auto pq_zero = static_cast<std::queue<void*>*>(q->pq_zero);
     auto pq_pos = static_cast<std::priority_queue<MessagePriorityPair, std::vector<MessagePriorityPair>, MessagePriorityComparator>*>(q->pq_pos);
-    
+
+    bool popped = false;
     if (!pq_neg->empty()) {
         pq_neg->pop();
+        popped = true;
     } else if (!pq_zero->empty()) {
         pq_zero->pop();
+        popped = true;
     } else if (!pq_pos->empty()) {
         pq_pos->pop();
+        popped = true;
+    }
+    if (popped) {
+        // Consumer also holds the queue's lock when applicable; matched relaxed
+        // ordering with QueuePush is sufficient because the count is only
+        // consumed for the empty-check fast path, not for ordering data.
+        size_t prev = q->size.load(std::memory_order_relaxed);
+        if (prev > 0) q->size.store(prev - 1, std::memory_order_relaxed);
     }
 }
 

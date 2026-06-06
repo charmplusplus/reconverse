@@ -491,7 +491,26 @@ typedef struct QueueImpl
   void *pq_neg; // negative priorities
   void *pq_zero; // zero priority
   void *pq_pos; // positive priorities
+  // Cached element count, kept consistent by QueuePush/QueuePop. Lets callers
+  // do a single-load fast-empty check (QueueFastEmpty) instead of three
+  // indirected pq->empty() calls.
+  //
+  // For CsdNodeQueue (cross-PE), QueuePush/QueuePop run under CsdNodeQueueLock
+  // but the scheduler reads QueueFastEmpty WITHOUT the lock. atomic<size_t>
+  // with memory_order_relaxed makes the load lock-free and well-defined on
+  // weakly-ordered architectures (it's free on x86). The race is benign:
+  // a producer push that hasn't propagated yet is picked up on the next
+  // scheduler iteration.
+  //
+  // For CsdSchedQueue (per-PE, never cross-thread), the atomic is overkill
+  // but costless: relaxed atomic ops compile to plain loads/stores.
+  std::atomic<size_t> size;
 } *Queue;
+
+// Fast-empty: single relaxed load, no indirection. Use this on the scheduler
+// hot path; the slower QueueEmpty walks the three inner containers.
+// Returns true if the queue is observed empty at the moment of the load.
+#define QueueFastEmpty(q) ((q)->size.load(std::memory_order_relaxed) == 0)
 
 void QueueInit(Queue q);
 void QueueDestroy(Queue q);
