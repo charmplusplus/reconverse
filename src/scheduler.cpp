@@ -49,11 +49,8 @@ void CsdScheduler() {
         }
     #endif
 
-    // poll node queue
-    // Profile showed moodycamel::size_approx (called by empty()) was the
-    // single hottest symbol. Skip the empty-check entirely; try_dequeue
-    // already returns false fast when the queue is empty, and one call is
-    // strictly cheaper than empty() + pop().
+    // poll node queue (still moodycamel — MPMC pattern). One try_dequeue
+    // returns fast when empty; cheaper than empty()+pop().
     if (auto result = nodeQueue->pop()) {
       void *msg = result.value();
       CmiHandleMessage(msg);
@@ -63,9 +60,9 @@ void CsdScheduler() {
       }
     }
 
-    // poll thread queue (same single-pop-no-empty-check pattern)
-    else if (auto result = queue->pop()) {
-      void *msg = result.value();
+    // poll thread queue — bounded MPSC ring with a pointer-return fast path
+    // (no std::optional construction on every poll). nullptr means empty.
+    else if (void *msg = queue->try_pop_ptr()) {
       CmiHandleMessage(msg);
       if (CmiGetIdle()) {
         CmiSetIdle(false);
@@ -255,7 +252,7 @@ void CsdSchedulePoll() {
 
     CcdRaiseCondition(CcdSCHEDLOOP);
 
-    // poll node queue (single-pop, no empty-check — see CsdScheduler)
+    // poll node queue (still moodycamel — MPMC pattern)
     if (auto result = nodeQueue->pop()) {
       void *msg = result.value();
       CmiHandleMessage(msg);
@@ -265,9 +262,8 @@ void CsdSchedulePoll() {
       }
     }
 
-    // poll thread queue
-    else if (auto result = queue->pop()) {
-      void *msg = result.value();
+    // poll thread queue — bounded MPSC ring fast path
+    else if (void *msg = queue->try_pop_ptr()) {
       CmiHandleMessage(msg);
       if (CmiGetIdle()) {
         CmiSetIdle(false);
