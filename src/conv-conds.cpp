@@ -33,10 +33,19 @@ struct ccd_periodic_callback {
 };
 
 /**
- * A list of cond callbacks
+ * A list of cond callbacks.
+ *
+ * Backing store is std::vector, not std::deque. Profile (perf record on the
+ * Charm++ pingpong) showed std::__deque_buf_size + Deque_iterator ops alone
+ * cost ~5% of total CPU because the scheduler walks these lists every loop
+ * iteration. Vector iteration is contiguous and a single load to size().
+ *
+ * Safe because both call_cblist_keep and call_cblist_remove snapshot the size
+ * once before iterating and re-index by `i` every iteration — a callback that
+ * triggers vector growth via append_elem doesn't dangle the cached reference.
  */
 struct ccd_cblist {
-  std::deque<ccd_cond_callback> elems{};
+  std::vector<ccd_cond_callback> elems{};
   bool flag = false;
 };
 

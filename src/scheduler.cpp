@@ -18,6 +18,13 @@ void CsdScheduler() {
   ConverseNodeQueue<void *> *nodeQueue = CmiGetNodeQueue();
 
   int loop_counter = 0;
+  // Throttle CcdCallBacks: it calls CmiWallTimer + walks the periodic-callback
+  // heap on every iteration. The fastest periodic level is 1 ms, so even at
+  // ~1 µs/iter, firing it every 256 iters is well within the tightest budget
+  // and removes the timer/heap walk from the hot path. Profile showed
+  // getCurrentTime + ccd_heap_update were ~2-3% of total CPU.
+  constexpr int CCD_CALLBACKS_THROTTLE = 256;
+  int ccd_callbacks_counter = 0;
 
   while (CmiStopFlag() == 0) {
 
@@ -31,30 +38,23 @@ void CsdScheduler() {
     #endif
 
     // poll node queue
-    if (!nodeQueue->empty()) {
-      auto result = nodeQueue->pop();
-      if (result) {
-        void *msg = result.value();
-        // process event
-        CmiHandleMessage(msg);
-
-        // release idle if necessary
-        if (CmiGetIdle()) {
-          CmiSetIdle(false);
-          CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
-        }
+    // Profile showed moodycamel::size_approx (called by empty()) was the
+    // single hottest symbol. Skip the empty-check entirely; try_dequeue
+    // already returns false fast when the queue is empty, and one call is
+    // strictly cheaper than empty() + pop().
+    if (auto result = nodeQueue->pop()) {
+      void *msg = result.value();
+      CmiHandleMessage(msg);
+      if (CmiGetIdle()) {
+        CmiSetIdle(false);
+        CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
       }
     }
 
-    // poll thread queue
-    else if (!queue->empty()) {
-      // get next event (guaranteed to be there because only single consumer)
-      void *msg = queue->pop().value();
-
-      // process event
+    // poll thread queue (same single-pop-no-empty-check pattern)
+    else if (auto result = queue->pop()) {
+      void *msg = result.value();
       CmiHandleMessage(msg);
-
-      // release idle if necessary
       if (CmiGetIdle()) {
         CmiSetIdle(false);
         CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
@@ -179,7 +179,10 @@ void CsdScheduler() {
       comm_backend::progress();
     }
 
-    CcdCallBacks();
+    if (++ccd_callbacks_counter >= CCD_CALLBACKS_THROTTLE) {
+      ccd_callbacks_counter = 0;
+      CcdCallBacks();
+    }
 
   }
 }
@@ -201,31 +204,20 @@ void CsdSchedulePoll() {
 
     CcdRaiseCondition(CcdSCHEDLOOP);
 
-    // poll node queue
-    if (!nodeQueue->empty()) {
-      auto result = nodeQueue->pop();
-      if (result) {
-        void *msg = result.value();
-        // process event
-        CmiHandleMessage(msg);
-
-        // release idle if necessary
-        if (CmiGetIdle()) {
-          CmiSetIdle(false);
-          CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
-        }
+    // poll node queue (single-pop, no empty-check — see CsdScheduler)
+    if (auto result = nodeQueue->pop()) {
+      void *msg = result.value();
+      CmiHandleMessage(msg);
+      if (CmiGetIdle()) {
+        CmiSetIdle(false);
+        CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
       }
     }
 
     // poll thread queue
-    else if (!queue->empty()) {
-      // get next event (guaranteed to be there because only single consumer)
-      void *msg = queue->pop().value();
-
-      // process event
+    else if (auto result = queue->pop()) {
+      void *msg = result.value();
       CmiHandleMessage(msg);
-
-      // release idle if necessary
       if (CmiGetIdle()) {
         CmiSetIdle(false);
         CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
