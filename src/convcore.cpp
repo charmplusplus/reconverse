@@ -158,7 +158,7 @@ void converseRunPe(int rank, int everReturn) {
   CpvAccess(isHelperOn) = 0;
 
   if (CmiTraceFn)
-    CmiTraceFn(Cmi_argv);
+    CmiTraceFn(CmiMyArgv);
 
   /*Converse modes:
   * usched=0, initret/everReturn=0: normal mode, converse starts scheduler for you
