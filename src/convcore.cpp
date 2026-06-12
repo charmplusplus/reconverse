@@ -272,7 +272,6 @@ void CmiStartThreads() {
 void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
                   int initret) {
 
-  Cmi_startTime = getCurrentTime();
 
   Cmi_npes = 1; // default to 1
   int plusPeSet = CmiGetArgInt(argv, "+pe", &Cmi_npes); //total number of pes
@@ -298,6 +297,8 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
   comm_backend::init(argv);
   Cmi_mynode = comm_backend::getMyNodeId();
   Cmi_numnodes = comm_backend::getNumNodes();
+  comm_backend::barrier();
+  Cmi_startTime = getCurrentTime();
   RDMAInit(argv);
   if (plusPeSet && plusPorPPNSet && Cmi_npes != Cmi_mynodesize * Cmi_numnodes) {
     fprintf(stderr,
