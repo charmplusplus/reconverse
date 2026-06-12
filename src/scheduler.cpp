@@ -33,9 +33,9 @@ bool pollConverseNodeQueue() {
     auto result = nodeQueue->pop();
     if (result) {
       void *msg = result.value();
+      releaseIdle();
       // process event
       CmiHandleMessage(msg);
-      releaseIdle();
       return true;
     }
   }
@@ -48,9 +48,9 @@ bool pollConverseThreadQueue() {
   if (!queue->empty()) {
     // get next event (guaranteed to be there because only single consumer)
     void *msg = queue->pop().value();
+    releaseIdle();
     // process event
     CmiHandleMessage(msg);
-    releaseIdle();
     return true;
   }
   return false;
@@ -64,9 +64,9 @@ bool pollNodePrioQueue() {
       void *msg = QueueTop(CsvAccess(CsdNodeQueue));
       QueuePop(CsvAccess(CsdNodeQueue));
       CmiUnlock(CsvAccess(CsdNodeQueueLock));
+      releaseIdle();
       // process event
       CmiHandleMessage(msg);
-      releaseIdle();
       return true;
     } else {
       CmiUnlock(CsvAccess(CsdNodeQueueLock));
@@ -80,9 +80,9 @@ bool pollThreadPrioQueue() {
   if (!QueueEmpty(CpvAccess(CsdSchedQueue))) {
     void *msg = QueueTop(CpvAccess(CsdSchedQueue));
     QueuePop(CpvAccess(CsdSchedQueue));
+    releaseIdle();
     // process event
     CmiHandleMessage(msg);
-    releaseIdle();
     return true;
   }
   return false;
