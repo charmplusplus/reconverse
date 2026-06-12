@@ -1,5 +1,6 @@
 # reconverse
-Basic implementation of a new communication layer for Charm++
+Complete an mostly backward compatible implementation of a new scheduling and communication layer, primarily used for Charm++. 
+This is a clean reimplementation of Converse without the complexities and deadcode that had accumulated in the old Converse. It is a complete task-based runtime system, that can be used in a stand-alone mode (i.e without Charm++), and with support for message-driven scheduling, multiple queues, user-level threads and communication. It schedules execution on CPUs as well as GPGPUs.   
 
 ## Build Reconverse
 
