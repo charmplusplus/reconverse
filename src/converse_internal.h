@@ -29,7 +29,7 @@ typedef struct GroupDef_s {
 #define  DEBUGF(...)    //CmiPrintf(__VA_ARGS__)
 
 void CmiStartThreads(char **argv);
-void converseRunPe(int rank);
+void converseRunPe(int rank, int everReturn);
 void collectiveInit(void);
 
 // HANDLERS
@@ -70,7 +70,7 @@ void CmiInitState(int pe);
 ConverseQueue<void *> *CmiGetQueue(int pe);
 void CrnInit(void);
 
-void CmiPushPE(int destPE, int messageSize, void *msg);
+void CmiPushPE(int destRank, int messageSize, void *msg);
 
 // node queue
 ConverseNodeQueue<void *> *CmiGetNodeQueue();
