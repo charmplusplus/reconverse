@@ -51,17 +51,23 @@ void *alloc_mempool_block(size_t *size, void **mem_hndl, int expand_flag)
         CmiAbort("alloc_mempool_block");
     }
 
-    void *pool;
-    posix_memalign(&pool,ALIGNBUF,*size);
+    void *pool = NULL;
+    if (posix_memalign(&pool, ALIGNBUF, *size) != 0 || pool == NULL)
+    {
+        CmiAbort("alloc_mempool_block: posix_memalign failed");
+    }
     printf("LCI2: Allocated mempool block of size %zu, %zu at %p\n", *size, ALIGNBUF, pool);
-    registerMemory(pool, *size);
+    // Keep the registration handle so the block can be deregistered at teardown.
+    *mem_hndl = registerMemory(pool, *size);
     return pool;
 }
 
 void free_mempool_block(void *ptr, void* mem_hndl)
 {
+    // Deregister the MR before releasing the host pages it covers.
+    if (mem_hndl != NULL)
+        deregisterMemory((mr_t) mem_hndl);
     free(ptr);
-    deregisterMemory((mr_t) mem_hndl);
 }
 
 void CommBackendLCI2::init_mempool()
@@ -211,6 +217,14 @@ void CommBackendLCI2::initThread(int thread_id, int num_threads) {
 }
 
 void CommBackendLCI2::exitThread() {
+  // Destroy this PE's mempool while the LCI devices and runtime are still alive,
+  // so its registered memory blocks are deregistered (deregisterMemory uses
+  // m_devices, and the devices/runtime are only torn down later in exit() on
+  // rank 0). The mempool is a per-PE Cpv, so each thread destroys its own.
+  if (CpvInitialized(mempool) && CpvAccess(mempool) != NULL) {
+    mempool_destroy(CpvAccess(mempool));
+    CpvAccess(mempool) = NULL;
+  }
   detail::g_thread_context.tls_device = lci::device_t();
   detail::g_thread_context.device_idx = -1;
   detail::g_thread_context.thread_id = -1;

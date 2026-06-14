@@ -11,7 +11,10 @@ typedef void* (*mempool_newblockfn)(size_t* size, mem_handle_t* mem_hndl, int ex
 typedef void (*mempool_freeblock)(void* ptr, mem_handle_t mem_hndl);
 
 //NOTE make this a configurable value
-#define cutOffNum 26 
+// cutOffPoints[] in mempool.C has 25 entries (indices 0..24, covering 2^6..2^30).
+// which_pow2() loops `i <= cutOffNum` and uses cutOffPoints[cutOffNum] as the upper
+// sentinel, so cutOffNum must be <= (array length - 1) == 24 to stay in bounds.
+#define cutOffNum 24
 
 //given x as mptr get
 #define MEMPOOL_GetBlockHead(x) (&((x)->block_head))
