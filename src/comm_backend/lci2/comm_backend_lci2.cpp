@@ -145,7 +145,6 @@ void CommBackendLCI2::free(void *msg)
   // Layout: [mempool_header][CmiChunkHeader][user data (msg)]
   char *aligned_addr = (char *)msg - headersize - sizeof(mempool_header);
   uint size = SIZEFIELD((char*)msg);
-  printf("LCI2: Freeing message %p of size %u\n", msg, size);
   if (size <= mempool_options.mempool_lb_size)
     CmiAbort("LCI: mempool lower boundary violation");
   else
