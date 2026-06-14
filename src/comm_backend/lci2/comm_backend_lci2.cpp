@@ -102,10 +102,15 @@ void* CommBackendLCI2::malloc(int n_bytes, int header)
         // that points to where the CmiChunkHeader is located.
         // Layout: [mempool_header][CmiChunkHeader][user data]
         // So CmiChunkHeader starts at: res + sizeof(mempool_header)
-        if (res) ptr = res + sizeof(mempool_header);
-
-        size_t offset1=GetMemOffsetFromBase(res);
-        mr_t* extractedmr  = (mr_t *) GetMemHndl(res);
+        if (res)
+        {
+          ptr = res + sizeof(mempool_header);
+          // Record the pool block's registration handle in the chunk header so
+          // inter-node sends pass a valid MR to LCI. Otherwise MRFIELD(msg) reads
+          // uninitialized bytes from a reused slot and getThreadLocalMR()
+          // dereferences a garbage pointer.
+          ((CmiChunkHeader *)ptr)->mr = GetMemHndl(res);
+        }
       }
     else
       {
@@ -131,6 +136,8 @@ void* CommBackendLCI2::malloc(int n_bytes, int header)
         // Return pointer to where CmiChunkHeader should be placed
         // Layout: [out_of_pool_header = block_header + mempool_header][CmiChunkHeader][user data]
         ptr=(char *) res + sizeof(out_of_pool_header);
+        // Same as the pooled path: record the MR for inter-node sends.
+        ((CmiChunkHeader *)ptr)->mr = mr;
       }
     }
 
