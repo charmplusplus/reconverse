@@ -127,6 +127,19 @@ add_subdirectory(include)
 add_subdirectory(src)
 target_link_libraries(reconverse PUBLIC Threads::Threads)
 
+if(RECONVERSE_ROOT_PROJECT)
+  # When building standalone, set CMK_OPTIMIZE based on build type.
+  # Can be overridden on the cmake command line with -DCMK_OPTIMIZE=1.
+  if(NOT DEFINED CMK_OPTIMIZE)
+    if(CMAKE_BUILD_TYPE MATCHES "Release" OR CMAKE_BUILD_TYPE MATCHES "RelWithDebInfo")
+      set(CMK_OPTIMIZE 1)
+    else()
+      set(CMK_OPTIMIZE 0)
+    endif()
+  endif()
+  target_compile_definitions(reconverse PUBLIC CMK_OPTIMIZE=${CMK_OPTIMIZE})
+endif()
+
 if(RECONVERSE_ENABLE_CPU_AFFINITY)
   target_link_libraries(reconverse PUBLIC HWLOC::HWLOC)
 endif()
