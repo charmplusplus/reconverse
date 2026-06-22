@@ -125,18 +125,21 @@ extern CmiNodeLock CmiMemLock_lock;
 #define ALIGN_DEFAULT(x) CMIALIGN(x, ALIGN_BYTES)
 #define CMIPADDING(x, n) (CMIALIGN((x), (n)) - (size_t)(x))
 
-// Portable alignment specifier for structs
+// Portable alignment specifier for structs.
+// NOTE: __attribute__((aligned(n))) must be checked before _Alignas because
+// _Alignas is a variable specifier in C11/C17 and cannot appear between
+// 'struct' and the tag name, whereas __attribute__ can (GCC/Clang extension).
 #ifdef __cplusplus
 #define CMI_ALIGNAS(n) alignas(n)
+#elif defined(__GNUC__) || defined(__clang__)
+// GCC/Clang __attribute__ supports the 'struct __attribute__((aligned(n))) tag' form
+#define CMI_ALIGNAS(n) __attribute__((aligned(n)))
 #elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 202311L
 // C23 has alignas
 #define CMI_ALIGNAS(n) alignas(n)
 #elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
 // C11 has _Alignas
 #define CMI_ALIGNAS(n) _Alignas(n)
-#elif defined(__GNUC__) || defined(__clang__)
-// GCC/Clang attribute
-#define CMI_ALIGNAS(n) __attribute__((aligned(n)))
 #elif defined(_MSC_VER)
 // MSVC
 #define CMI_ALIGNAS(n) __declspec(align(n))
@@ -414,7 +417,7 @@ void CmiSyncSend(int destPE, int messageSize, void *msg);
 void CmiSyncSendAndFree(int destPE, int messageSize, void *msg);
 void CmiSyncListSend(int npes, const int *pes, int len, void *msg);
 void CmiSyncListSendAndFree(int npes, const int *pes, int len, void *msg);
-void CmiPushPE(int destPE, void *msg);
+void CmiPushPE(int destRank, void *msg);
 void CmiPushNode(void *msg);
 
 void CmiSyncSendFn(int destPE, int messageSize, char *msg);
@@ -457,9 +460,9 @@ void CmiNetworkProgress();
 #define CmiNetworkProgressAfter(p) CmiNetworkProgressAfter()
 
 // Barrier functions
+void CmiBarrier();
 void CmiNodeBarrier();
 void CmiNodeAllBarrier();
-#define CmiBarrier() CmiNodeBarrier()
 
 // scheduler
 void CsdExitScheduler();
@@ -732,15 +735,11 @@ int CmiArgGivingUsage(void);
 void CmiDeprecateArgInt(char **argv, const char *arg, const char *desc,
                         const char *warning);
 
-#define CmiCreateImmediateLock() (0)
-#define CmiImmediateLock(ignored)                                              \
-  { _immediateLock++; }
-#define CmiImmediateUnlock(ignored)                                            \
-  { _immediateLock--; }
-#define CmiCheckImmediateLock(ignored)                                         \
-  ((_immediateLock) ? ((_immediateFlag = 1), 1) : 0)
-#define CmiClearImmediateFlag()                                                \
-  { _immediateFlag = 0; }
+#define CmiCreateImmediateLock() CmiCreateLock()
+#define CmiImmediateLock(immediateLock) CmiLock((immediateLock))
+#define CmiImmediateUnlock(immediateLock) CmiUnlock((immediateLock))
+#define CmiCheckImmediateLock(ignored)  (0)
+#define CmiClearImmediateFlag() 
 #define CmiBecomeImmediate(msg) /* empty */
 #define CmiResetImmediate(msg)  /* empty */
 #define CmiIsImmediate(msg) (0)
@@ -1336,5 +1335,37 @@ inline const std::size_t& CmiRecommendedIpcBlockCutoff(void) {
 #endif /* __cplusplus */
 
 CsvExtern(CmiIpcManager*, coreIpcManager_);
+
+/* Task Queue Macros */
+#include "taskqueue.h"
+CpvExtern(TaskQueue, CsdTaskQueue);
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* Steal a task from another PE on the same node */
+void StealTask(void);
+
+/* Initialize task queue work-stealing callbacks */
+void CmiTaskQueueInit(void);
+
+/* Check if the local task queue has work available */
+int TaskQueueHasWork(void);
+
+/* Pop a task from the local task queue */
+void* TaskQueuePopLocal(void);
+
+/* Push a task to the local task queue */
+void TaskQueuePushLocal(void *task);
+
+/* Process all tasks in the local queue and steal if idle */
+int ProcessLocalTasks(void);
+
+#ifdef __cplusplus
+}
+#endif
+#define CsdTaskEnqueue(x) TaskQueuePushLocal((void*)(x))
+#define CsdTaskPop() TaskQueuePopLocal()
 
 #endif // CONVERSE_H

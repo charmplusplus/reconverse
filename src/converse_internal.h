@@ -67,7 +67,7 @@ CmiState *CmiGetState(void);
 void CmiInitState(int pe);
 ConverseQueue<void *> *CmiGetQueue(int pe);
 void CrnInit(void);
-void CmiPushPE(int destPE, int messageSize, void *msg);
+void CmiPushPE(int destRank, int messageSize, void *msg);
 
 //queue reg init
 void CmiQueueRegisterInit(void);

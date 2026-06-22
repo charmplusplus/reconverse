@@ -1,4 +1,8 @@
 #include "scheduler.h"
+#if CMK_TASKQUEUE
+#include "taskqueue.h"
+CpvExtern(TaskQueue, CsdTaskQueue);
+#endif
 
 extern std::vector<QueuePollHandler> g_handlers; //list of handlers
 extern Groups g_groups; //groups of handlers by index
@@ -94,6 +98,18 @@ bool pollProgress()
   return false; //polling progress doesn't count
 }
 
+#if CMK_TASKQUEUE
+bool pollTaskQueue() {
+  void *task_msg = TaskQueuePopLocal();
+  if (task_msg != nullptr) {
+    releaseIdle();
+    CmiHandleMessage(task_msg);
+    return true;
+  }
+  return false;
+}
+#endif
+
 void CmiQueueRegisterInitThread() {
   std::vector<std::pair<QueuePollHandlerFn, unsigned int>> handlers;
   handlers.push_back(std::make_pair(pollConverseNodeQueue, 8));
@@ -101,6 +117,9 @@ void CmiQueueRegisterInitThread() {
   handlers.push_back(std::make_pair(pollNodePrioQueue, 16));
   handlers.push_back(std::make_pair(pollThreadPrioQueue, 1));
   handlers.push_back(std::make_pair(pollProgress, 1));
+#if CMK_TASKQUEUE
+  handlers.push_back(std::make_pair(pollTaskQueue, 1));
+#endif
   add_list_of_handlers(handlers);
 }
 
@@ -112,6 +131,9 @@ void CmiQueueRegisterInit() {
   add_handler(pollNodePrioQueue, 16);
   add_handler(pollThreadPrioQueue, 1);
   add_handler(pollProgress, backend_poll_freq);
+#if CMK_TASKQUEUE
+  add_handler(pollTaskQueue, 1);
+#endif
 }
 
 /**
@@ -190,7 +212,7 @@ int CsdScheduler(int maxmsgs){
   }
   else CsdSchedulePoll(); //not implementing CsdScheduleCount
   return 0;
-  
+
 }
 
 void CqsEnqueueGeneral(Queue q, void *Message, int strategy, int priobits,
@@ -223,4 +245,3 @@ void CqsEnqueueGeneral(Queue q, void *Message, int strategy, int priobits,
 void CmiNetworkProgress(){
   comm_backend::progress();
 }
-

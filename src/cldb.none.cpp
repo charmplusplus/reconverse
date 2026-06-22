@@ -21,7 +21,7 @@ void CldHandler(char *msg) {
   ifn = (CldInfoFn)CmiHandlerToFunction(CmiGetInfo(msg));
   ifn(msg, &pfn, &len, &queueing, &priobits, &prioptr);
   // CsdEnqueueGeneral(msg, queueing, priobits, prioptr);
-  CmiPushPE(CmiMyPe(), len,
+  CmiPushPE(CmiMyRank(), len,
             msg); // use priority queue when we add priority queue
 }
 
@@ -89,7 +89,7 @@ void CldEnqueue(int pe, void *msg, int infofn) {
     ifn(msg, &pfn, &len, &queueing, &priobits, &prioptr);
     /* CsdEnqueueGeneral is not thread or SIGIO safe */
     // CsdEnqueueGeneral(msg, queueing, priobits, prioptr);
-    CmiPushPE(CmiMyPe(), len,
+    CmiPushPE(CmiMyRank(), len,
               msg); // use priority queue when we add priority queue
   } else {
     ifn(msg, &pfn, &len, &queueing, &priobits, &prioptr);

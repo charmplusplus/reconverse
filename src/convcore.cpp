@@ -2,6 +2,7 @@
 #include "barrier.h"
 #include "converse_internal.h"
 #include "queue.h"
+#include "taskqueue.h"
 #include "scheduler.h"
 
 #include <cinttypes>
@@ -31,6 +32,7 @@ std::vector<CmiHandlerInfo> **CmiHandlerTable; // array of handler vectors
 std::atomic<int> numPEsReadyForExit {0};
 ConverseNodeQueue<void *> *CmiNodeQueue;
 CpvDeclare(Queue, CsdSchedQueue);
+CpvDeclare(TaskQueue, CsdTaskQueue);
 CsvDeclare(Queue, CsdNodeQueue);
 CsvDeclare(CmiNodeLock, CsdNodeQueueLock);
 double Cmi_startTime;
@@ -104,7 +106,7 @@ void CommRemoteHandler(comm_backend::Status status) {
   if (destPE == CmiMessageDestPENode) {
     CmiNodeQueue->push(const_cast<void *>(status.local_buf));
   } else {
-    CmiPushPE(destPE, status.size, const_cast<void *>(status.local_buf));
+    CmiPushPE(CmiRankOf(destPE), status.size, const_cast<void *>(status.local_buf));
   }
 }
 
@@ -125,6 +127,15 @@ void converseRunPe(int rank, int everReturn) {
   CmiInitState(rank);
   // init comm_backend
   comm_backend::initThread(rank, CmiMyNodeSize());
+
+  #if CMK_TASKQUEUE
+  // init per-PE task queue
+  CpvInitialize(TaskQueue, CsdTaskQueue);
+  CpvAccess(CsdTaskQueue) = TaskQueueCreate();
+
+  // init task queue work-stealing callbacks
+  CmiTaskQueueInit();
+  #endif
 
   CmiQueueRegisterInitThread();
 
@@ -149,7 +160,7 @@ void converseRunPe(int rank, int everReturn) {
   CpvAccess(isHelperOn) = 0;
 
   if (CmiTraceFn)
-    CmiTraceFn(Cmi_argv);
+    CmiTraceFn(CmiMyArgv);
 
   /*Converse modes:
   * usched=0, initret/everReturn=0: normal mode, converse starts scheduler for you
@@ -263,7 +274,6 @@ void CmiStartThreads() {
 void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
                   int initret) {
 
-  Cmi_startTime = getCurrentTime();
 
   Cmi_npes = 1; // default to 1
   int plusPeSet = CmiGetArgInt(argv, "+pe", &Cmi_npes); //total number of pes
@@ -289,6 +299,8 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
   comm_backend::init(argv);
   Cmi_mynode = comm_backend::getMyNodeId();
   Cmi_numnodes = comm_backend::getNumNodes();
+  comm_backend::barrier();
+  Cmi_startTime = getCurrentTime();
   RDMAInit(argv);
   if (plusPeSet && plusPorPPNSet && Cmi_npes != Cmi_mynodesize * Cmi_numnodes) {
     fprintf(stderr,
@@ -476,19 +488,19 @@ void CmiNumberHandlerEx(int n, CmiHandlerEx h, void *userPtr) {
   CmiGetHandlerTable()->at(n) = newEntry;
 }
 
-void CmiPushPE(int destPE, int messageSize, void *msg) {
-  int rank = CmiRankOf(destPE);
+void CmiPushPE(int destRank, int messageSize, void *msg) {
+  int rank = destRank;
   CmiAssertMsg(
       rank >= 0 && rank < Cmi_mynodesize,
       "CmiPushPE(myPe: %d, destPe: %d, nodeSize: %d): rank out of range",
-      CmiMyPe(), destPE, Cmi_mynodesize);
+      CmiMyPe(), destRank, Cmi_mynodesize);
   Cmi_queues[rank]->push(msg);
 }
 
-void CmiPushPE(int destPE, void *msg) {
+void CmiPushPE(int destRank, void *msg) {
   CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
   int messageSize = header->messageSize;
-  CmiPushPE(destPE, messageSize, msg);
+  CmiPushPE(destRank, messageSize, msg);
 }
 
 void CmiPushNode(void *msg) {
@@ -589,7 +601,7 @@ void CmiSyncSendAndFree(int destPE, int messageSize, void *msg) {
   }
 
   if (CmiMyNode() == destNode) {
-    CmiPushPE(destPE, messageSize, msg);
+    CmiPushPE(CmiRankOf(destPE), messageSize, msg);
   } else {
     comm_backend::issueAm(destNode, msg, messageSize, comm_backend::MR_NULL,
                           CommLocalHandler, g_amHandler,
@@ -732,6 +744,14 @@ void CmiFreeDecrementToEnqueue(DecrementToEnqueueMsg *dteMsg){
   }
   free(dteMsg->counter);
   free(dteMsg);
+}
+
+void CmiBarrier(void) {
+  CmiNodeBarrier();
+  if (CmiMyRank() == 0) {
+    comm_backend::barrier();
+  }
+  CmiNodeBarrier();
 }
 
 void CmiNodeBarrier(void) {
