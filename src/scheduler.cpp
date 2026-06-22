@@ -31,10 +31,6 @@ void CsdScheduler() {
     #endif
 
     // poll node queue
-    // CmiNodeQueue is MPMC so the pop itself is thread-safe, but Charm++ node-level
-    // handlers (e.g. CkCreateLocalNodeGroup) modify shared data structures that are
-    // NOT thread-safe.  Serialize dispatch with CsdNodeQueueLock, matching the
-    // serialization guarantee that original Charm++ SMP provides for node messages.
     if (!nodeQueue->empty()) {
       auto result = nodeQueue->pop();
       if (result) {
@@ -211,7 +207,7 @@ void CsdSchedulePoll() {
 
     CcdRaiseCondition(CcdSCHEDLOOP);
 
-    // poll node queue (same lock as CsdScheduler — see comment there)
+    // poll node queue
     if (!nodeQueue->empty()) {
       auto result = nodeQueue->pop();
       if (result) {
