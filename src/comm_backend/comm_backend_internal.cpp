@@ -124,19 +124,29 @@ void issueRput(int rank, const void *local_buf, size_t size, mr_t local_mr,
 
 void *malloc(int nbytes, int header)
 {
-  if (gCommBackend == nullptr) {
-    return std::malloc(nbytes + header);
+  if (gCommBackend) {
+    if (void *p = gCommBackend->malloc(nbytes, header)) {
+      return p;
+    }
   }
-  return gCommBackend->malloc(nbytes, header);
+  void *p = std::malloc(nbytes + header);
+  if (p != nullptr) {
+    // Mark fallback allocations so comm_backend::free can dispatch correctly.
+    static_cast<CmiChunkHeader *>(p)->mr = MR_NULL;
+  }
+  return p;
 }
 
-void free(void* msg)
+void free(void *msg)
 {
-  if (gCommBackend == nullptr) {
-    std::free(static_cast<char*>(msg) - sizeof(CmiChunkHeader));
+  if (msg == nullptr) {
     return;
   }
-  return gCommBackend->free(msg);
+  if (gCommBackend == nullptr || MRFIELD(msg) == MR_NULL) {
+    std::free(static_cast<char *>(msg) - sizeof(CmiChunkHeader));
+    return;
+  }
+  gCommBackend->free(msg);
 }
 
 bool progress(void) {
