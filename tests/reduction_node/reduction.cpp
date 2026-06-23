@@ -43,7 +43,7 @@ CmiStartFn mymain(int argc, char **argv) {
   int handlerId = CmiRegisterHandler(ping_handler);
 
   // create a message
-  Message *msg = new Message;
+  Message *msg = (Message *)CmiAlloc(sizeof(Message));
   msg->header.handlerId = handlerId;
   msg->header.messageSize = sizeof(Message);
   msg->myReductionData = CmiMyNode();
