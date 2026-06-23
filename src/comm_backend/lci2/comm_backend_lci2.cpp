@@ -67,7 +67,10 @@ void free_mempool_block(void *ptr, void* mem_hndl)
     // Deregister the MR before releasing the host pages it covers.
     if (mem_hndl != NULL)
         deregisterMemory((mr_t) mem_hndl);
-    free(ptr);
+    // Use ::free explicitly: unqualified `free` here resolves to comm_backend::free,
+    // which expects a CmiChunkHeader-prefixed user pointer. This function receives
+    // a raw posix_memalign block, so we need the C standard library free.
+    ::free(ptr);
 }
 
 void CommBackendLCI2::init_mempool()
