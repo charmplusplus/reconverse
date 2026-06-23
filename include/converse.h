@@ -3,6 +3,7 @@
 #ifndef CONVERSE_H
 #define CONVERSE_H
 
+// note: this file is included by both C and C++ files, so it should always have valid C code
 #ifdef __cplusplus
 #include <atomic>
 #include <queue>
@@ -11,8 +12,6 @@
 #include <stdatomic.h>
 #endif
 #include <pthread.h>
-#include <atomic>
-//#include "comm_backend/comm_backend.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
