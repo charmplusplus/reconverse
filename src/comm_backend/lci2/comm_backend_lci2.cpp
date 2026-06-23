@@ -154,7 +154,7 @@ void CommBackendLCI2::free(void *msg)
   // msg points to user data, we need to go back to find mempool_header
   // Layout: [mempool_header][CmiChunkHeader][user data (msg)]
   char *aligned_addr = (char *)msg - headersize - sizeof(mempool_header);
-  uint size = SIZEFIELD((char*)msg);
+  size_t size = static_cast<size_t>(SIZEFIELD((char *)msg));
   if (size <= mempool_options.mempool_lb_size)
     CmiAbort("LCI: mempool lower boundary violation");
   else
