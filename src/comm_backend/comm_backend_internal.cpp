@@ -137,13 +137,16 @@ void *malloc(int nbytes, int header)
   return p;
 }
 
-void free(void* msg)
+void free(void *msg)
 {
-  if (gCommBackend == nullptr) {
-    std::free(static_cast<char*>(msg) - sizeof(CmiChunkHeader));
+  if (msg == nullptr) {
     return;
   }
-  return gCommBackend->free(msg);
+  if (gCommBackend == nullptr || MRFIELD(msg) == MR_NULL) {
+    std::free(static_cast<char *>(msg) - sizeof(CmiChunkHeader));
+    return;
+  }
+  gCommBackend->free(msg);
 }
 
 bool progress(void) {
