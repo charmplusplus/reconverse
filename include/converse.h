@@ -738,15 +738,11 @@ int CmiArgGivingUsage(void);
 void CmiDeprecateArgInt(char **argv, const char *arg, const char *desc,
                         const char *warning);
 
-#define CmiCreateImmediateLock() (0)
-#define CmiImmediateLock(ignored)                                              \
-  { _immediateLock++; }
-#define CmiImmediateUnlock(ignored)                                            \
-  { _immediateLock--; }
-#define CmiCheckImmediateLock(ignored)                                         \
-  ((_immediateLock) ? ((_immediateFlag = 1), 1) : 0)
-#define CmiClearImmediateFlag()                                                \
-  { _immediateFlag = 0; }
+#define CmiCreateImmediateLock() CmiCreateLock()
+#define CmiImmediateLock(immediateLock) CmiLock((immediateLock))
+#define CmiImmediateUnlock(immediateLock) CmiUnlock((immediateLock))
+#define CmiCheckImmediateLock(ignored)  (0)
+#define CmiClearImmediateFlag() 
 #define CmiBecomeImmediate(msg) /* empty */
 #define CmiResetImmediate(msg)  /* empty */
 #define CmiIsImmediate(msg) (0)
