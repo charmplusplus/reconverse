@@ -55,8 +55,8 @@ public:
   size_t getRMR(mr_t mr, void *addr, size_t size) override;
   void deregisterMemory(mr_t mr) override;
 
-  void *malloc(int n_bytes, int header);
-  void free(void* msg);
+  void *malloc(int n_bytes, int header) override;
+  void free(void* msg) override;
 private:
   struct threadContext {
     int thread_id;

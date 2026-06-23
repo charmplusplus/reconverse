@@ -41,7 +41,7 @@ public:
   virtual mr_t registerMemory(void *addr, size_t size) { return MR_NULL; }
   virtual size_t getRMR(mr_t mr, void *addr, size_t size) { return 0; }
   virtual void deregisterMemory(mr_t mr) {}
-  virtual void *malloc(int nbytes, int header) {};
+  virtual void *malloc(int nbytes, int header) { return nullptr; };
   virtual void free(void* msg) {};
   virtual ~CommBackendBase() {};
 };
