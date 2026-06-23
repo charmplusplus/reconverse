@@ -5,13 +5,8 @@
 
 #include <cstring>
 #include "converse.h"
-
-#include "converse.h"
 #include "converse_config.h"
 #include "queue.h"
-
-#include "queue.h"
-
 #include "comm_backend/comm_backend.h"
 #include "comm_backend/comm_backend_internal.h"
 
