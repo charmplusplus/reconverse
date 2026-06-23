@@ -13,7 +13,7 @@ Generalized by Gengbin Zheng  10/5/2011
 Heavily modified by Nikhil Jain 11/28/2011
 */
 
-#define MEMPOOL_DEBUG 1
+#define MEMPOOL_DEBUG 0
 #if MEMPOOL_DEBUG
 #define DEBUG_PRINT(...) CmiPrintf(__VA_ARGS__)
 #else
@@ -281,14 +281,15 @@ void mempool_destroy(mempool_type* mptr)
 // append slot_header size before the real memory buffer
 void* mempool_malloc(mempool_type* mptr, size_t size, int expand)
 {
-  CmiLock(mptr->mempoolLock);
-
   size_t size_with_used_header = size + sizeof(used_header); // "bestfit"?
   int power = which_pow2(size_with_used_header); //closest power of cutoffpoint
   if (power >= cutOffNum)
   {
+    // mempool_large_malloc acquires/releases the lock itself
     return mempool_large_malloc(mptr, size, expand);
   }
+
+  CmiLock(mptr->mempoolLock);
 
   size_t bestfit_size = cutOffPoints[power];
   DEBUG_PRINT("Request size is %d, power value is %d, size is %d\n", size, power, bestfit_size);
@@ -311,7 +312,11 @@ void* mempool_malloc(mempool_type* mptr, size_t size, int expand)
   //no space in current blocks, get a new one
   if (head_free == NULL)
   {
-    if (!expand) return NULL;
+    if (!expand)
+    {
+      CmiUnlock(mptr->mempoolLock);
+      return NULL;
+    }
 
     DEBUG_PRINT("Expanding size %lld limit %lld\n", mptr->size, mptr->limit);
     //free blocks which are not being used
@@ -327,6 +332,7 @@ void* mempool_malloc(mempool_type* mptr, size_t size, int expand)
     if (pool == NULL)
     {
       DEBUG_PRINT("Mempool-Did not get memory while expanding\n");
+      CmiUnlock(mptr->mempoolLock);
       return NULL;
     }
 
@@ -375,6 +381,8 @@ void* mempool_malloc(mempool_type* mptr, size_t size, int expand)
 
 void* mempool_large_malloc(mempool_type* mptr, size_t size, int expand)
 {
+  CmiLock(mptr->mempoolLock);
+
   size_t expand_size = size + sizeof(large_block_header) + sizeof(used_header);
   DEBUG_PRINT("Mempool-Large block allocation\n");
   mem_handle_t mem_hndl;
@@ -383,6 +391,7 @@ void* mempool_large_malloc(mempool_type* mptr, size_t size, int expand)
   if (pool == NULL)
   {
     DEBUG_PRINT("Mempool-Did not get memory while expanding\n");
+    CmiUnlock(mptr->mempoolLock);
     return NULL;
   }
 

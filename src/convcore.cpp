@@ -2,6 +2,7 @@
 #include "barrier.h"
 #include "converse_internal.h"
 #include "queue.h"
+#include "taskqueue.h"
 #include "scheduler.h"
 
 #include <cinttypes>
@@ -31,6 +32,7 @@ std::vector<CmiHandlerInfo> **CmiHandlerTable; // array of handler vectors
 std::atomic<int> numPEsReadyForExit {0};
 ConverseNodeQueue<void *> *CmiNodeQueue;
 CpvDeclare(Queue, CsdSchedQueue);
+CpvDeclare(TaskQueue, CsdTaskQueue);
 CsvDeclare(Queue, CsdNodeQueue);
 CsvDeclare(CmiNodeLock, CsdNodeQueueLock);
 double Cmi_startTime;
@@ -104,7 +106,7 @@ void CommRemoteHandler(comm_backend::Status status) {
   if (destPE == CmiMessageDestPENode) {
     CmiNodeQueue->push(const_cast<void *>(status.local_buf));
   } else {
-    CmiPushPE(destPE, status.size, const_cast<void *>(status.local_buf));
+    CmiPushPE(CmiRankOf(destPE), status.size, const_cast<void *>(status.local_buf));
   }
 }
 
@@ -125,6 +127,15 @@ void converseRunPe(int rank, int everReturn) {
   CmiInitState(rank);
   // init comm_backend
   comm_backend::initThread(rank, CmiMyNodeSize());
+
+  #if CMK_TASKQUEUE
+  // init per-PE task queue
+  CpvInitialize(TaskQueue, CsdTaskQueue);
+  CpvAccess(CsdTaskQueue) = TaskQueueCreate();
+
+  // init task queue work-stealing callbacks
+  CmiTaskQueueInit();
+  #endif
 
   // init things like cld module, ccs, etc
   CldModuleInit(CmiMyArgv);
@@ -148,7 +159,7 @@ void converseRunPe(int rank, int everReturn) {
   CpvAccess(isHelperOn) = 0;
 
   if (CmiTraceFn)
-    CmiTraceFn(Cmi_argv);
+    CmiTraceFn(CmiMyArgv);
 
   /*Converse modes:
   * usched=0, initret/everReturn=0: normal mode, converse starts scheduler for you
@@ -262,7 +273,6 @@ void CmiStartThreads() {
 void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
                   int initret) {
 
-  Cmi_startTime = getCurrentTime();
 
   Cmi_npes = 1; // default to 1
   int plusPeSet = CmiGetArgInt(argv, "+pe", &Cmi_npes); //total number of pes
@@ -288,6 +298,8 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
   comm_backend::init(argv);
   Cmi_mynode = comm_backend::getMyNodeId();
   Cmi_numnodes = comm_backend::getNumNodes();
+  comm_backend::barrier();
+  Cmi_startTime = getCurrentTime();
   RDMAInit(argv);
   if (plusPeSet && plusPorPPNSet && Cmi_npes != Cmi_mynodesize * Cmi_numnodes) {
     fprintf(stderr,
@@ -472,20 +484,19 @@ void CmiNumberHandlerEx(int n, CmiHandlerEx h, void *userPtr) {
   CmiGetHandlerTable()->at(n) = newEntry;
 }
 
-void CmiPushPE(int destPE, int messageSize, void *msg) {
-  int rank = CmiRankOf(destPE);
+void CmiPushPE(int destRank, int messageSize, void *msg) {
+  int rank = destRank;
   CmiAssertMsg(
       rank >= 0 && rank < Cmi_mynodesize,
       "CmiPushPE(myPe: %d, destPe: %d, nodeSize: %d): rank out of range",
-      CmiMyPe(), destPE, Cmi_mynodesize);
+      CmiMyPe(), destRank, Cmi_mynodesize);
   Cmi_queues[rank]->push(msg);
 }
 
-
-void CmiPushPE(int destPE, void *msg) {
+void CmiPushPE(int destRank, void *msg) {
   CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
   int messageSize = header->messageSize;
-  CmiPushPE(destPE, messageSize, msg);
+  CmiPushPE(destRank, messageSize, msg);
 }
 
 void CmiPushNode(void *msg) {
@@ -497,23 +508,24 @@ void *CmiAlloc(int size) {
     CmiPrintf("CmiAlloc: size <= 0\n");
     return nullptr;
   }
-  CmiPrintf("CmiAlloc: Allocating size = %d\n", size);
+  //CmiPrintf("CmiAlloc: Allocating size = %d\n", size);
   // comm_backend::malloc returns a pointer to where CmiChunkHeader should be placed
   // Layout after malloc: [mempool_header][CmiChunkHeader][user space]
   //                                       ^ptr returned
   void* res = comm_backend::malloc(size, sizeof(CmiChunkHeader));
+  char* ptr = (char*)res + sizeof(CmiChunkHeader);
 
   if (size >= CmiMsgHeaderSizeBytes) {
     // Set zcMsgType in the converse message header to CMK_REG_NO_ZC_MSG
-    CMI_ZC_MSGTYPE((void *)res) = CMK_REG_NO_ZC_MSG;
-    CMI_MSG_NOKEEP((void *)res) = 0;
+    CMI_ZC_MSGTYPE((void *)ptr) = CMK_REG_NO_ZC_MSG;
+    CMI_MSG_NOKEEP((void *)ptr) = 0;
   }
 
-  REFFIELDSET(res, 1);
-  SIZEFIELD(res) = size;
-  CmiPrintf("Allocated CmiChunkHeader at %p, user ptr = %p\n", res, res + sizeof(CmiChunkHeader));
+  REFFIELDSET(ptr, 1);
+  SIZEFIELD(ptr) = size;
+  //CmiPrintf("Allocated CmiChunkHeader at %p, user ptr = %p\n", res, res + sizeof(CmiChunkHeader));
   // Return pointer to user data (after CmiChunkHeader)
-  return (char*)res + sizeof(CmiChunkHeader);
+  return ptr;
 }
 
 // header ref count methods
@@ -587,7 +599,7 @@ void CmiSyncSendAndFree(int destPE, int messageSize, void *msg) {
   }
 
   if (CmiMyNode() == destNode) {
-    CmiPushPE(destPE, messageSize, msg);
+    CmiPushPE(CmiRankOf(destPE), messageSize, msg);
   } else {
     comm_backend::issueAm(destNode, msg, messageSize, MRFIELD(msg),
                           CommLocalHandler, g_amHandler,
@@ -665,6 +677,79 @@ int CmiRegisterHandlerEx(CmiHandlerEx h, void *userPtr) {
   newEntry.userPtr = userPtr;
   handlerVector->push_back(newEntry);
   return handlerVector->size() - 1;
+}
+
+//decrement to enqueue
+
+DecrementToEnqueueMsg *CmiCreateDecrementToEnqueue(void *msg, unsigned int initialCount){
+  if(initialCount == 0){
+    CmiAbort("CmiCreateDecrementToEnqueue: initialCount cannot be zero\n");
+  }
+  DecrementToEnqueueMsg *dteMsg = static_cast<DecrementToEnqueueMsg *>(malloc(sizeof(DecrementToEnqueueMsg)));
+  dteMsg->counter = static_cast<unsigned int *>(malloc(sizeof(unsigned int)));
+  *(dteMsg->counter) = initialCount;
+  dteMsg->msg = msg;
+  return dteMsg;
+}
+
+void CmiDecrementCounter(DecrementToEnqueueMsg *dteMsg){
+  if(dteMsg == nullptr){
+    CmiAbort("CmiDecrementCounter: dteMsg is nullptr\n");
+  }
+  if(dteMsg->counter == nullptr){
+    // In concurrent scenarios the counter pointer may have been freed by
+    // another thread (race between decrements). Instead of aborting, be
+    // tolerant and return silently since the counter has already been
+    // consumed.
+    return;
+  }
+  unsigned int oldValue = __atomic_fetch_sub(dteMsg->counter, 1, __ATOMIC_SEQ_CST);
+  if(oldValue == 0){
+    CmiAbort("CmiDecrementCounter: counter already zero, cannot decrement further\n");
+  }
+  if(oldValue == 1){
+    //get dest PE from message header
+    CmiMessageHeader *header = static_cast<CmiMessageHeader *>(dteMsg->msg);
+    int destPE = header->destPE;
+    CmiAssertMsg(
+      destPE >= 0 && destPE < Cmi_npes,
+      "CmiDecrementCounter: destPE out of range"
+    );
+    // enqueue the message without freeing
+    CmiSyncSend(destPE, header->messageSize, dteMsg->msg);
+  }
+}
+
+void CmiResetCounter(DecrementToEnqueueMsg *dteMsg, unsigned int newCount){
+  if(dteMsg == nullptr){
+    CmiAbort("CmiResetCounter: dteMsg is nullptr\n");
+  }
+  if(dteMsg->counter == nullptr){
+    CmiAbort("CmiResetCounter: counter is nullptr\n");
+  }
+  if(newCount == 0){
+    CmiAbort("CmiResetCounter: newCount cannot be zero\n");
+  }
+  __atomic_store_n(dteMsg->counter, newCount, __ATOMIC_SEQ_CST);
+}
+
+void CmiFreeDecrementToEnqueue(DecrementToEnqueueMsg *dteMsg){
+  if(dteMsg == nullptr){
+    CmiAbort("CmiFreeDecrementToEnqueue: dteMsg is nullptr\n");
+  }
+  if(dteMsg->counter == nullptr){
+    CmiAbort("CmiFreeDecrementToEnqueue: counter is nullptr\n");
+  }
+  free(dteMsg->counter);
+  free(dteMsg);
+}
+
+void CmiBarrier(void) {
+  CmiNodeBarrier();
+  if (CmiMyRank() == 0) {
+    comm_backend::barrier();
+  }
+  CmiNodeBarrier();
 }
 
 void CmiNodeBarrier(void) {

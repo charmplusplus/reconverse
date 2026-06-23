@@ -57,7 +57,7 @@ void ringFinished(char *msg) {
         CmiMsgHeaderSizeBytes;
 
     // start the ring again
-    CmiPrintf("Start ring again\n");
+    //CmiPrintf("Start ring again\n");
     startRing();
   } else {
     // exit
