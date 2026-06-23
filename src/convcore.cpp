@@ -831,7 +831,7 @@ void CmiInterSyncNodeSendAndFree(int destNode, int partition, int messageSize,
   // not my partition, use comm backend
   int globalDestNode = CmiGetNodeGlobal(destNode, partition);
   header->destPE = CmiMessageDestPENode;
-  comm_backend::issueAm(destNode, msg, messageSize, MRFIELD(msg),
+  comm_backend::issueAm(globalDestNode, msg, messageSize, MRFIELD(msg),
                         CommLocalHandler, g_amHandler, nullptr);
 }
 
