@@ -3,6 +3,7 @@
 
 #include <cstdio>
 #include <vector>
+#include <cstring>
 
 #include "mempool.h"
 #include "comm_backend/comm_backend.h"
