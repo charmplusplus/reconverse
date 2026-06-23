@@ -165,6 +165,7 @@ void CommBackendLCI2::free(void *msg)
     // Layout: [out_of_pool_header][CmiChunkHeader][user data (msg)]
     deregisterMemory((mr_t)MRFIELD(msg));
     ::free((char *)msg - headersize - sizeof(out_of_pool_header));
+  }
   else
   {
     // For in-pool messages, free from mempool_header position
