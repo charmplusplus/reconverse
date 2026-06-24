@@ -16,3 +16,14 @@ void CldRestoreHandler(char *);
 void CldSwitchHandler(char *, int);
 void CldModuleGeneralInit(char **);
 // void seedBalancerExit(void);
+
+// Token queue: stealable work items placed in the scheduler queue.
+// CldPutToken enqueues msg so it can be stolen; CldGetToken extracts
+// one for sending to another PE; CldCountTokens returns the current count.
+void CldPutToken(char *msg);
+void CldGetToken(char **msg);
+int CldCountTokens();
+
+// Called by the active strategy after a token is processed (load decreased).
+// Each strategy file must provide its own definition.
+void LoadNotifyFn(int load);

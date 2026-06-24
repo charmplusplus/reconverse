@@ -1,7 +1,12 @@
 target_include_directories(reconverse PRIVATE .)
-target_sources(reconverse PRIVATE conv-conds.cpp convcore.cpp random.cpp 
+set(RECONVERSE_SEED_LB "workstealing" CACHE STRING
+    "Seed load balancer strategy: workstealing (default) or rand or none")
+set_property(CACHE RECONVERSE_SEED_LB PROPERTY STRINGS workstealing rand none)
+
+target_sources(reconverse PRIVATE conv-conds.cpp convcore.cpp random.cpp
                 scheduler.cpp cpuaffinity.cpp collectives.cpp
-                comm_backend/comm_backend_internal.cpp threads.cpp cldb.rand.cpp cldb.cpp cmirdmautils.cpp 
+                comm_backend/comm_backend_internal.cpp threads.cpp
+                cldb.${RECONVERSE_SEED_LB}.cpp cldb.cpp cmirdmautils.cpp
                 conv-rdma.cpp conv-topology.cpp msgmgr.cpp queueing.cpp cmishmem.cpp
                 conv-taskq.cpp)
 target_include_directories(
