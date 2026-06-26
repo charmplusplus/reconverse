@@ -25,6 +25,7 @@ struct device_t {
 class CommBackendLCW : public CommBackendBase {
 public:
   void init(char **argv) override;
+  void init_mempool() override {}
   void exit() override;
   void initThread(int thread_id, int num_threads) override;
   void exitThread() override;

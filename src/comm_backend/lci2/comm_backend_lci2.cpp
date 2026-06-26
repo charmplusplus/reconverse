@@ -1,4 +1,9 @@
-#include "converse_internal.h"
+#include "mempool.h"
+#include "lci.hpp"
+#include "comm_backend/lci2/comm_backend_lci2.h"
+#include <vector>
+
+CpvDeclare(mempool_type*, mempool);
 
 namespace comm_backend {
 namespace lci2_impl {
@@ -32,6 +37,140 @@ void remoteCallback(lci::status_t status) {
   auto am_handler = static_cast<AmHandler>(status.get_tag());
   auto handler = g_handlers[am_handler];
   handler({status.get_buffer(), status.get_size(), nullptr});
+}
+
+void *alloc_mempool_block(size_t *size, void **mem_hndl, int expand_flag)
+{
+    size_t alloc_size =  expand_flag ? mempool_options.mempool_expand_size : mempool_options.mempool_init_size;
+    if (*size < alloc_size) *size = alloc_size;
+    if (*size > mempool_options.mempool_max_size)
+    {
+        CmiPrintf("Error: there is attempt to allocate memory block with size %ld which is greater than the maximum mempool allowed %lld.\n"
+                  "Please increase the maximum mempool size by using +ofi-mempool-max-size\n",
+                  *size, mempool_options.mempool_max_size);
+        CmiAbort("alloc_mempool_block");
+    }
+
+    void *pool = NULL;
+    if (posix_memalign(&pool, ALIGNBUF, *size) != 0 || pool == NULL)
+    {
+        CmiAbort("alloc_mempool_block: posix_memalign failed");
+    }
+    printf("LCI2: Allocated mempool block of size %zu, %zu at %p\n", *size, ALIGNBUF, pool);
+    // Keep the registration handle so the block can be deregistered at teardown.
+    *mem_hndl = registerMemory(pool, *size);
+    return pool;
+}
+
+void free_mempool_block(void *ptr, void* mem_hndl)
+{
+    // Deregister the MR before releasing the host pages it covers.
+    if (mem_hndl != NULL)
+        deregisterMemory((mr_t) mem_hndl);
+    // Use ::free explicitly: unqualified `free` here resolves to comm_backend::free,
+    // which expects a CmiChunkHeader-prefixed user pointer. This function receives
+    // a raw posix_memalign block, so we need the C standard library free.
+    ::free(ptr);
+}
+
+void CommBackendLCI2::init_mempool()
+{
+  CpvInitialize(mempool_type*, mempool);
+
+  CpvAccess(mempool) = mempool_init(mempool_options.mempool_init_size,
+    alloc_mempool_block,
+    free_mempool_block,
+    mempool_options.mempool_max_size);
+}
+
+void* CommBackendLCI2::malloc(int n_bytes, int header)
+{
+  char *ptr = NULL;
+  size_t size = n_bytes + header;
+  if (size <= mempool_options.mempool_lb_size)
+  {
+    CmiAbort("OFI pool lower boundary violation");
+  }
+  else
+  {
+    // Ensure mempool_header + CmiChunkHeader fit within ALIGNBUF
+    CmiAssert(header+sizeof(mempool_header) <= ALIGNBUF);
+    n_bytes=ALIGN64(n_bytes);
+    if( n_bytes < BIG_MSG)
+      {
+        // Allocate ALIGNBUF for headers + n_bytes for user data
+        char *res = (char *)mempool_malloc(CpvAccess(mempool), ALIGNBUF+n_bytes, 1);
+
+        // res points to the mempool_header. We need to return a pointer
+        // that points to where the CmiChunkHeader is located.
+        // Layout: [mempool_header][CmiChunkHeader][user data]
+        // So CmiChunkHeader starts at: res + sizeof(mempool_header)
+        if (res)
+        {
+          ptr = res + sizeof(mempool_header);
+          // Record the pool block's registration handle in the chunk header so
+          // inter-node sends pass a valid MR to LCI. Otherwise MRFIELD(msg) reads
+          // uninitialized bytes from a reused slot and getThreadLocalMR()
+          // dereferences a garbage pointer.
+          ((CmiChunkHeader *)ptr)->mr = GetMemHndl(res);
+        }
+      }
+    else
+      {
+        CmiPrintf("Allocating out of pool\n");
+        // For out-of-pool, we need space for out_of_pool_header which contains
+        // block_header and mempool_header, then CmiChunkHeader, then user data
+        n_bytes = size + sizeof(out_of_pool_header);
+        n_bytes = ALIGN64(n_bytes);
+        char *res;
+
+        posix_memalign((void **)&res, ALIGNBUF, n_bytes);
+        out_of_pool_header *mptr= (out_of_pool_header*) res;
+        // construct the minimal version of the
+        // mempool_header+block_header like a memory pool message
+        // so that all messages can be handled the same way with
+        // the same macros and functions.  We need the mptr,
+        // block_ptr, and mem_hndl fields and can test the size to
+        // know to not put it back in the normal pool on free
+        mr_t mr = registerMemory(res, n_bytes);
+        mptr->block_head.mem_hndl=mr;
+        mptr->block_head.mptr=(struct mempool_type*) res;
+        mptr->block.block_ptr=(struct block_header *)res;
+        // Return pointer to where CmiChunkHeader should be placed
+        // Layout: [out_of_pool_header = block_header + mempool_header][CmiChunkHeader][user data]
+        ptr=(char *) res + sizeof(out_of_pool_header);
+        // Same as the pooled path: record the MR for inter-node sends.
+        ((CmiChunkHeader *)ptr)->mr = mr;
+      }
+    }
+
+  if (!ptr) CmiAbort("LrtsAlloc");
+  return ptr;
+}
+
+void CommBackendLCI2::free(void *msg)
+{
+  int headersize = sizeof(CmiChunkHeader);
+  // msg points to user data, we need to go back to find mempool_header
+  // Layout: [mempool_header][CmiChunkHeader][user data (msg)]
+  char *aligned_addr = (char *)msg - headersize - sizeof(mempool_header);
+  size_t size = static_cast<size_t>(SIZEFIELD((char *)msg));
+  if (size <= mempool_options.mempool_lb_size)
+    CmiAbort("LCI: mempool lower boundary violation");
+  else
+    size = ALIGN64(size);
+  if(size>=BIG_MSG)
+  {
+    // For out-of-pool messages, go back to out_of_pool_header
+    // Layout: [out_of_pool_header][CmiChunkHeader][user data (msg)]
+    deregisterMemory((mr_t)MRFIELD(msg));
+    ::free((char *)msg - headersize - sizeof(out_of_pool_header));
+  }
+  else
+  {
+    // For in-pool messages, free from mempool_header position
+    mempool_free_thread(aligned_addr);
+  }
 }
 
 void CommBackendLCI2::init(char **argv) {
@@ -87,6 +226,14 @@ void CommBackendLCI2::initThread(int thread_id, int num_threads) {
 }
 
 void CommBackendLCI2::exitThread() {
+  // Destroy this PE's mempool while the LCI devices and runtime are still alive,
+  // so its registered memory blocks are deregistered (deregisterMemory uses
+  // m_devices, and the devices/runtime are only torn down later in exit() on
+  // rank 0). The mempool is a per-PE Cpv, so each thread destroys its own.
+  if (CpvInitialized(mempool) && CpvAccess(mempool) != NULL) {
+    mempool_destroy(CpvAccess(mempool));
+    CpvAccess(mempool) = NULL;
+  }
   detail::g_thread_context.tls_device = lci::device_t();
   detail::g_thread_context.device_idx = -1;
   detail::g_thread_context.thread_id = -1;

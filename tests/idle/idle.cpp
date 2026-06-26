@@ -25,7 +25,7 @@ void stillIdle(void *vmsg) {
 
 void longIdle(void *vmsg) {
   printf("LONG IDLE HANDLER CALLED on pe %d\n", CmiMyRank());
-  Message *msg = new Message;
+  Message *msg = (Message *)CmiAlloc(sizeof(Message));
   msg->header.handlerId = CpvAccess(exitHandlerId);
   msg->header.messageSize = sizeof(Message);
   CmiSyncSendAndFree(CmiMyRank(), msg->header.messageSize, msg);
@@ -37,7 +37,7 @@ void nodeQueueTest(void *msg) {
 
 void ping_handler(void *vmsg) {
   printf("PING HANDLER CALLED\n");
-  Message *msg = new Message;
+  Message *msg = (Message *)CmiAlloc(sizeof(Message));
   msg->header.handlerId = CpvAccess(nodeHandlerId);
   msg->header.messageSize = sizeof(Message);
   CmiSyncNodeSendAndFree(0, msg->header.messageSize, msg);
@@ -66,7 +66,7 @@ CmiStartFn mymain(int argc, char **argv) {
   else if (CmiMyNodeSize() == 1) {
     printf("Only one node, send self test\n");
     // create a message
-    Message *msg = new Message;
+    Message *msg = (Message *)CmiAlloc(sizeof(Message));
     msg->header.handlerId = handlerId;
     msg->header.messageSize = sizeof(Message);
 
