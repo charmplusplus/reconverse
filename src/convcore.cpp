@@ -35,6 +35,10 @@ CpvDeclare(Queue, CsdSchedQueue);
 CpvDeclare(TaskQueue, CsdTaskQueue);
 CsvDeclare(Queue, CsdNodeQueue);
 CsvDeclare(CmiNodeLock, CsdNodeQueueLock);
+CsvDeclare(CsdNodeFifoQueueType, CsdNodeFifoQueue);
+CsvDeclare(CmiNodeLock, CsdNodeFifoQueueLock);
+CsvDeclare(CsdNodeLifoQueueType, CsdNodeLifoQueue);
+CsvDeclare(CmiNodeLock, CsdNodeLifoQueueLock);
 double Cmi_startTime;
 CmiSpanningTreeInfo *_topoTree = NULL;
 int CharmLibInterOperate;
@@ -421,10 +425,14 @@ void CmiInitState(int rank) {
   CpvAccess(CsdSchedQueue) = (Queue)malloc(sizeof(QueueImpl));
   QueueInit(CpvAccess(CsdSchedQueue));
   CsvInitialize(Queue, CsdNodeQueue);
+  CsvInitialize(CsdNodeFifoQueueType, CsdNodeFifoQueue);
+  CsvInitialize(CsdNodeLifoQueueType, CsdNodeLifoQueue);
   if (CmiMyRank() == 0) {
     CsvAccess(CsdNodeQueueLock) = CmiCreateLock();
     CsvAccess(CsdNodeQueue) = (Queue)malloc(sizeof(QueueImpl));
     QueueInit(CsvAccess(CsdNodeQueue));
+    CsvAccess(CsdNodeFifoQueueLock) = CmiCreateLock();
+    CsvAccess(CsdNodeLifoQueueLock) = CmiCreateLock();
   }
   CmiNodeBarrier();
 }
@@ -506,6 +514,18 @@ void CmiPushPE(int destRank, void *msg) {
 
 void CmiPushNode(void *msg) {
   CmiNodeQueue->push(msg);
+}
+
+void CmiEnqueueNodeFifo(void *msg) {
+  CmiLock(CsvAccess(CsdNodeFifoQueueLock));
+  CsvAccess(CsdNodeFifoQueue).push(msg);
+  CmiUnlock(CsvAccess(CsdNodeFifoQueueLock));
+}
+
+void CmiEnqueueNodeLifo(void *msg) {
+  CmiLock(CsvAccess(CsdNodeLifoQueueLock));
+  CsvAccess(CsdNodeLifoQueue).push(msg);
+  CmiUnlock(CsvAccess(CsdNodeLifoQueueLock));
 }
 
 void *CmiAlloc(int size) {

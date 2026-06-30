@@ -520,6 +520,9 @@ void CqsEnqueueGeneral(Queue q, void *Message, int strategy, int priobits,
           CmiUnlock(CsvAccess(CsdNodeQueueLock)); \
         } while(0)
 
+void CmiEnqueueNodeFifo(void *msg);
+void CmiEnqueueNodeLifo(void *msg);
+
 void CmiAssignOnce(int *variable, int value);
 
 // Reduction functions

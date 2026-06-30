@@ -92,6 +92,36 @@ bool pollThreadPrioQueue() {
   return false;
 }
 
+bool pollNodeFifoQueue() {
+  if (CmiTryLock(CsvAccess(CsdNodeFifoQueueLock)) == 0) {
+    if (!CsvAccess(CsdNodeFifoQueue).empty()) {
+      void *msg = CsvAccess(CsdNodeFifoQueue).front();
+      CsvAccess(CsdNodeFifoQueue).pop();
+      CmiUnlock(CsvAccess(CsdNodeFifoQueueLock));
+      releaseIdle();
+      CmiHandleMessage(msg);
+      return true;
+    }
+    CmiUnlock(CsvAccess(CsdNodeFifoQueueLock));
+  }
+  return false;
+}
+
+bool pollNodeLifoQueue() {
+  if (CmiTryLock(CsvAccess(CsdNodeLifoQueueLock)) == 0) {
+    if (!CsvAccess(CsdNodeLifoQueue).empty()) {
+      void *msg = CsvAccess(CsdNodeLifoQueue).top();
+      CsvAccess(CsdNodeLifoQueue).pop();
+      CmiUnlock(CsvAccess(CsdNodeLifoQueueLock));
+      releaseIdle();
+      CmiHandleMessage(msg);
+      return true;
+    }
+    CmiUnlock(CsvAccess(CsdNodeLifoQueueLock));
+  }
+  return false;
+}
+
 bool pollProgress()
 {
   if(CmiMyRank() % backend_poll_thread == 0) comm_backend::progress();
@@ -117,6 +147,8 @@ void CmiQueueRegisterInitThread() {
   handlers.push_back(std::make_pair(pollNodePrioQueue, 16));
   handlers.push_back(std::make_pair(pollThreadPrioQueue, 1));
   handlers.push_back(std::make_pair(pollProgress, 1));
+  handlers.push_back(std::make_pair(pollNodeFifoQueue, 1));
+  handlers.push_back(std::make_pair(pollNodeLifoQueue, 1));
 #if CMK_TASKQUEUE
   handlers.push_back(std::make_pair(pollTaskQueue, 1));
 #endif
@@ -131,6 +163,8 @@ void CmiQueueRegisterInit() {
   add_handler(pollNodePrioQueue, 16);
   add_handler(pollThreadPrioQueue, 1);
   add_handler(pollProgress, backend_poll_freq);
+  add_handler(pollNodeFifoQueue, 1);
+  add_handler(pollNodeLifoQueue, 1);
 #if CMK_TASKQUEUE
   add_handler(pollTaskQueue, 1);
 #endif
