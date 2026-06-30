@@ -1,191 +1,172 @@
 #include "scheduler.h"
-#include "converse.h"
-#include "converse_internal.h"
-#include "queue.h"
+#if CMK_TASKQUEUE
 #include "taskqueue.h"
-#include <thread>
-
 CpvExtern(TaskQueue, CsdTaskQueue);
+#endif
+
+extern std::vector<QueuePollHandler> g_handlers; //list of handlers
+extern Groups g_groups; //groups of handlers by index
+CpvExtern(QueuePollHandlerFn *, poll_handlers);
+
+static inline void releaseIdle() {
+  if (CmiGetIdle()) {
+    CmiSetIdle(false);
+    CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
+  }
+}
+
+static inline void setIdle() {
+  if (!CmiGetIdle()) {
+    CmiSetIdle(true);
+    CmiSetIdleTime(CmiWallTimer());
+    CcdRaiseCondition(CcdPROCESSOR_BEGIN_IDLE);
+  }
+  // if already idle, call still idle and (maybe) long idle
+  else {
+    CcdRaiseCondition(CcdPROCESSOR_STILL_IDLE);
+    if (CmiWallTimer() - CmiGetIdleTime() > 10.0) {
+      CcdRaiseCondition(CcdPROCESSOR_LONG_IDLE);
+    }
+  }
+}
+
+//poll converse-level node queue
+bool pollConverseNodeQueue() {
+  ConverseNodeQueue<void *> *nodeQueue = CmiGetNodeQueue();
+  if (!nodeQueue->empty()) {
+    auto result = nodeQueue->pop();
+    if (result) {
+      void *msg = result.value();
+      releaseIdle();
+      // process event
+      CmiHandleMessage(msg);
+      return true;
+    }
+  }
+  return false;
+}
+
+//poll converse-level thread queue
+bool pollConverseThreadQueue() {
+  ConverseQueue<void *> *queue = CmiGetQueue(CmiMyRank());
+  if (!queue->empty()) {
+    // get next event (guaranteed to be there because only single consumer)
+    void *msg = queue->pop().value();
+    releaseIdle();
+    // process event
+    CmiHandleMessage(msg);
+    return true;
+  }
+  return false;
+}
+
+//poll node priority queue
+bool pollNodePrioQueue() {
+  // Try to acquire lock without blocking
+  if (CmiTryLock(CsvAccess(CsdNodeQueueLock)) == 0) {
+    if (!QueueEmpty(CsvAccess(CsdNodeQueue))) {
+      void *msg = QueueTop(CsvAccess(CsdNodeQueue));
+      QueuePop(CsvAccess(CsdNodeQueue));
+      CmiUnlock(CsvAccess(CsdNodeQueueLock));
+      releaseIdle();
+      // process event
+      CmiHandleMessage(msg);
+      return true;
+    } else {
+      CmiUnlock(CsvAccess(CsdNodeQueueLock));
+    }
+  }
+  return false;
+}
+
+//poll thread priority queue
+bool pollThreadPrioQueue() {
+  if (!QueueEmpty(CpvAccess(CsdSchedQueue))) {
+    void *msg = QueueTop(CpvAccess(CsdSchedQueue));
+    QueuePop(CpvAccess(CsdSchedQueue));
+    releaseIdle();
+    // process event
+    CmiHandleMessage(msg);
+    return true;
+  }
+  return false;
+}
+
+bool pollProgress()
+{
+  if(CmiMyRank() % backend_poll_thread == 0) comm_backend::progress();
+  return false; //polling progress doesn't count
+}
+
+#if CMK_TASKQUEUE
+bool pollTaskQueue() {
+  void *task_msg = TaskQueuePopLocal();
+  if (task_msg != nullptr) {
+    releaseIdle();
+    CmiHandleMessage(task_msg);
+    return true;
+  }
+  return false;
+}
+#endif
+
+void CmiQueueRegisterInitThread() {
+  std::vector<std::pair<QueuePollHandlerFn, unsigned int>> handlers;
+  handlers.push_back(std::make_pair(pollConverseNodeQueue, 8));
+  handlers.push_back(std::make_pair(pollConverseThreadQueue, 1));
+  handlers.push_back(std::make_pair(pollNodePrioQueue, 16));
+  handlers.push_back(std::make_pair(pollThreadPrioQueue, 1));
+  handlers.push_back(std::make_pair(pollProgress, 1));
+#if CMK_TASKQUEUE
+  handlers.push_back(std::make_pair(pollTaskQueue, 1));
+#endif
+  add_list_of_handlers(handlers);
+}
+
+//will add queue polling functions
+//called at node level (before threads created)
+void CmiQueueRegisterInit() {
+  add_handler(pollConverseNodeQueue, 8);
+  add_handler(pollConverseThreadQueue, 1);
+  add_handler(pollNodePrioQueue, 16);
+  add_handler(pollThreadPrioQueue, 1);
+  add_handler(pollProgress, backend_poll_freq);
+#if CMK_TASKQUEUE
+  add_handler(pollTaskQueue, 1);
+#endif
+}
 
 /**
  * The main scheduler loop for the Charm++ runtime.
  */
 void CsdScheduler() {
-  // get pthread level queue
-  ConverseQueue<void *> *queue = CmiGetQueue(CmiMyRank());
 
-  // get node level queue
-  ConverseNodeQueue<void *> *nodeQueue = CmiGetNodeQueue();
-
-  int loop_counter = 0;
+  uint64_t loop_counter = 0;
 
   while (CmiStopFlag() == 0) {
 
     CcdRaiseCondition(CcdSCHEDLOOP);
-
+    //always deliver shmem messages first
     #ifdef CMK_USE_SHMEM
         CmiIpcBlock* block = CmiPopIpcBlock(CsvAccess(coreIpcManager_));
         if (block != nullptr) {
           CmiDeliverIpcBlockMsg(block);
         }
     #endif
-
-    // poll node queue
-    if (!nodeQueue->empty()) {
-      auto result = nodeQueue->pop();
-      if (result) {
-        void *msg = result.value();
-
-        // release idle if necessary
-        if (CmiGetIdle()) {
-          CmiSetIdle(false);
-          CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
-        }
-
-        // process event
-        CmiHandleMessage(msg);
-      }
+    //poll queues
+    unsigned idx = static_cast<unsigned>(loop_counter & 63ULL);
+    bool workDone = false;
+    /*
+    for (auto fn : g_groups[idx]) {
+        workDone |= fn();
     }
-
-    // poll thread queue
-    else if (!queue->empty()) {
-      // get next event (guaranteed to be there because only single consumer)
-      void *msg = queue->pop().value();
-
-      // release idle if necessary
-      if (CmiGetIdle()) {
-        CmiSetIdle(false);
-        CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
-      }
-        
-      // process event
-      CmiHandleMessage(msg);
+        */
+    workDone |= CpvAccess(poll_handlers)[idx]();
+    if(!workDone) {
+      setIdle();
     }
-
-        // poll node prio queue
-    else {
-      // Try to acquire lock without blocking
-      if (CmiTryLock(CsvAccess(CsdNodeQueueLock)) == 0) {
-        if (!QueueEmpty(CsvAccess(CsdNodeQueue))) {
-          void* msg = QueueTop(CsvAccess(CsdNodeQueue));
-          QueuePop(CsvAccess(CsdNodeQueue));
-          CmiUnlock(CsvAccess(CsdNodeQueueLock));
-
-          // release idle if necessary
-          if (CmiGetIdle()) {
-            CmiSetIdle(false);
-            CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
-          }
-        
-          // process event
-          CmiHandleMessage(msg);
-        } 
-        else {
-          CmiUnlock(CsvAccess(CsdNodeQueueLock));
-          //empty queue so check thread prio queue
-          if (!QueueEmpty(CpvAccess(CsdSchedQueue))) {
-          void *msg = QueueTop(CpvAccess(CsdSchedQueue));
-          QueuePop(CpvAccess(CsdSchedQueue));
-
-          // release idle if necessary
-          if (CmiGetIdle()) {
-            CmiSetIdle(false);
-            CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
-          }
-        
-          // process event
-          CmiHandleMessage(msg);
-        } else {
-          #if CMK_TASKQUEUE
-          // Check local task queue before going idle
-          void *task_msg = TaskQueuePopLocal();
-          if (task_msg != NULL) {
-            if (CmiGetIdle()) {
-              CmiSetIdle(false);
-              CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
-            }
-            // Found a task in our local queue
-            CmiHandleMessage(task_msg);
-          } else {
-          #endif
-            // the processor is idle
-            // if not already idle, set idle and raise condition
-            if (!CmiGetIdle()) {
-              CmiSetIdle(true);
-              CmiSetIdleTime(CmiWallTimer());
-              CcdRaiseCondition(CcdPROCESSOR_BEGIN_IDLE);
-            }
-            // if already idle, call still idle and (maybe) long idle
-            else {
-              CcdRaiseCondition(CcdPROCESSOR_STILL_IDLE);
-              if (CmiWallTimer() - CmiGetIdleTime() > 10.0) {
-                CcdRaiseCondition(CcdPROCESSOR_LONG_IDLE);
-              }
-            }
-          #if CMK_TASKQUEUE
-          }
-          #endif
-        }
-        }        
-      } 
-      else {
-        // Could not acquire node queue lock, skip to thread prio queue
-        if (!QueueEmpty(CpvAccess(CsdSchedQueue))) {
-          void *msg = QueueTop(CpvAccess(CsdSchedQueue));
-          QueuePop(CpvAccess(CsdSchedQueue));
-
-          // release idle if necessary
-          if (CmiGetIdle()) {
-            CmiSetIdle(false);
-            CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
-          }
-
-          // process event
-          CmiHandleMessage(msg);
-
-        } else {
-          #if CMK_TASKQUEUE
-          // Check local task queue before going idle
-          void *task_msg = TaskQueuePopLocal();
-          if (task_msg != NULL) {
-            
-            if (CmiGetIdle()) {
-              CmiSetIdle(false);
-              CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
-            }
-
-            // Found a task in our local queue
-            CmiHandleMessage(task_msg);
-
-          } else {
-          #endif
-            // the processor is idle
-            // if not already idle, set idle and raise condition
-            if (!CmiGetIdle()) {
-              CmiSetIdle(true);
-              CmiSetIdleTime(CmiWallTimer());
-              CcdRaiseCondition(CcdPROCESSOR_BEGIN_IDLE);
-            }
-            // if already idle, call still idle and (maybe) long idle
-            else {
-              CcdRaiseCondition(CcdPROCESSOR_STILL_IDLE);
-              if (CmiWallTimer() - CmiGetIdleTime() > 10.0) {
-                CcdRaiseCondition(CcdPROCESSOR_LONG_IDLE);
-              }
-            }
-          #if CMK_TASKQUEUE
-          }
-          #endif
-        }
-      }
-    }
-    if((CmiMyRank() % backend_poll_thread == 0) && (loop_counter++ == (backend_poll_freq - 1)))
-    {
-      loop_counter = 0;
-      comm_backend::progress();
-    }
-
     CcdCallBacks();
+    loop_counter++;
 
   }
 }
@@ -195,155 +176,31 @@ void CsdScheduler() {
  * are empty, not when the scheduler is stopped.
  */
 void CsdSchedulePoll() {
-  // get pthread level queue
-  ConverseQueue<void *> *queue = CmiGetQueue(CmiMyRank());
-
-  // get node level queue
-  ConverseNodeQueue<void *> *nodeQueue = CmiGetNodeQueue();
+  uint64_t loop_counter = 0;
+  int current_empty = 0; //number of empty queues
 
   while(1){
 
-    CcdCallBacks();
-
     CcdRaiseCondition(CcdSCHEDLOOP);
-
-    // poll node queue
-    if (!nodeQueue->empty()) {
-      auto result = nodeQueue->pop();
-      if (result) {
-        void *msg = result.value();
-
-        // release idle if necessary
-        if (CmiGetIdle()) {
-          CmiSetIdle(false);
-          CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
-        }
-
-        // process event
-        CmiHandleMessage(msg);
-
+    //poll queues
+    unsigned idx = static_cast<unsigned>(loop_counter & 63ULL);
+    /*
+    for (auto fn : g_groups[idx]) {
+        workDone |= fn();
+    }
+        */
+    bool workDone = CpvAccess(poll_handlers)[idx]();
+    if(!workDone) {
+      setIdle();
+      current_empty++;
+      //if all queues empty, return
+      if(current_empty >= ARRAY_SIZE){
+        return;
       }
     }
+    CcdCallBacks();
+    loop_counter++;
 
-    // poll thread queue
-    else if (!queue->empty()) {
-      // get next event (guaranteed to be there because only single consumer)
-      void *msg = queue->pop().value();
-
-      // release idle if necessary
-      if (CmiGetIdle()) {
-        CmiSetIdle(false);
-        CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
-      }
-
-      // process event
-      CmiHandleMessage(msg);
-
-    }
-
-    // poll node prio queue
-    else {
-      // Try to acquire lock without blocking
-      if (CmiTryLock(CsvAccess(CsdNodeQueueLock)) == 0) {
-        if (!QueueEmpty(CsvAccess(CsdNodeQueue))) {
-          void *msg = QueueTop(CsvAccess(CsdNodeQueue));
-          QueuePop(CsvAccess(CsdNodeQueue));
-          CmiUnlock(CsvAccess(CsdNodeQueueLock));
-
-          // release idle if necessary
-          if (CmiGetIdle()) {
-            CmiSetIdle(false);
-            CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
-          }
-
-          // process event
-          CmiHandleMessage(msg);
-
-        } 
-        else {
-          CmiUnlock(CsvAccess(CsdNodeQueueLock));
-          if (!QueueEmpty(CpvAccess(CsdSchedQueue))) {
-          void *msg = QueueTop(CpvAccess(CsdSchedQueue));
-          QueuePop(CpvAccess(CsdSchedQueue));
-
-          // release idle if necessary
-          if (CmiGetIdle()) {
-            CmiSetIdle(false);
-            CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
-          }
-
-          // process event
-          CmiHandleMessage(msg);
-
-        } 
-        else {
-          #if CMK_TASKQUEUE
-          //because idle, check task queue
-          void *task_msg = TaskQueuePopLocal();
-          if (task_msg != NULL) {
-          
-            if (CmiGetIdle()) {
-              CmiSetIdle(false);
-              CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
-            }
-
-            // Found a task in our local queue
-            CmiHandleMessage(task_msg);
-
-          }
-          else
-          {
-          #endif
-            comm_backend::progress();
-            break; //break when queues are empty
-          #if CMK_TASKQUEUE
-          }
-          #endif
-        }
-        }
-      } 
-      else {
-        // Could not acquire node queue lock, skip to thread prio queue
-        if (!QueueEmpty(CpvAccess(CsdSchedQueue))) {
-          void *msg = QueueTop(CpvAccess(CsdSchedQueue));
-          QueuePop(CpvAccess(CsdSchedQueue));
-
-          // release idle if necessary
-          if (CmiGetIdle()) {
-            CmiSetIdle(false);
-            CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
-          }
-
-          // process event
-          CmiHandleMessage(msg);
-
-        } 
-        else {
-          #if CMK_TASKQUEUE
-          //because idle, check task queue
-          void *task_msg = TaskQueuePopLocal();
-          if (task_msg != NULL) {
-            
-            if (CmiGetIdle()) {
-              CmiSetIdle(false);
-              CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
-            }
-
-            // Found a task in our local queue
-            CmiHandleMessage(task_msg);
-            
-          }
-          else
-          {
-          #endif
-            comm_backend::progress();
-            break; //break when queues are empty
-          #if CMK_TASKQUEUE
-          }
-          #endif
-        }
-      }
-    }
   }
 }
 
@@ -355,7 +212,7 @@ int CsdScheduler(int maxmsgs){
   }
   else CsdSchedulePoll(); //not implementing CsdScheduleCount
   return 0;
-  
+
 }
 
 void CqsEnqueueGeneral(Queue q, void *Message, int strategy, int priobits,
@@ -388,4 +245,3 @@ void CqsEnqueueGeneral(Queue q, void *Message, int strategy, int priobits,
 void CmiNetworkProgress(){
   comm_backend::progress();
 }
-
