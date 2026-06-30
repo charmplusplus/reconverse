@@ -80,13 +80,13 @@ CmiStartFn mymain(int argc, char **argv) {
   int handlerId = CmiRegisterHandler(ping_handler);
 
   // create a message
-  Message *msg1 = new Message;
+  Message *msg1 = (Message *)CmiAlloc(sizeof(Message));
   msg1->header.handlerId = handlerId;
   msg1->header.messageSize = sizeof(Message);
   msg1->addition_data = CmiMyPe();
   msg1->prod_data = 0;
 
-  Message *msg2 = new Message;
+  Message *msg2 = (Message *)CmiAlloc(sizeof(Message));
   msg2->header.handlerId = handlerId;
   msg2->header.messageSize = sizeof(Message);
   msg2->addition_data = 0;
