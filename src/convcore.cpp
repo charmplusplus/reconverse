@@ -106,11 +106,20 @@ void CommLocalHandler(comm_backend::Status status) {
 
 void CommRemoteHandler(comm_backend::Status status) {
   CmiMessageHeader *header = (CmiMessageHeader *)status.local_buf;
-  int destPE = header->destPE;
+  CmiUInt4 destPE = header->destPE;
+  void *msg = const_cast<void *>(status.local_buf);
   if (destPE == CmiMessageDestPENode) {
-    CmiNodeQueue->push(const_cast<void *>(status.local_buf));
+    CmiNodeQueue->push(msg);
+  } else if (destPE == CmiMessageDestPENodeFifo) {
+    CmiLock(CsvAccess(CsdNodeFifoQueueLock));
+    CsvAccess(CsdNodeFifoQueue).push(msg);
+    CmiUnlock(CsvAccess(CsdNodeFifoQueueLock));
+  } else if (destPE == CmiMessageDestPENodeLifo) {
+    CmiLock(CsvAccess(CsdNodeLifoQueueLock));
+    CsvAccess(CsdNodeLifoQueue).push(msg);
+    CmiUnlock(CsvAccess(CsdNodeLifoQueueLock));
   } else {
-    CmiPushPE(CmiRankOf(destPE), status.size, const_cast<void *>(status.local_buf));
+    CmiPushPE(CmiRankOf(destPE), status.size, msg);
   }
 }
 
@@ -516,16 +525,30 @@ void CmiPushNode(void *msg) {
   CmiNodeQueue->push(msg);
 }
 
-void CmiEnqueueNodeFifo(void *msg) {
-  CmiLock(CsvAccess(CsdNodeFifoQueueLock));
-  CsvAccess(CsdNodeFifoQueue).push(msg);
-  CmiUnlock(CsvAccess(CsdNodeFifoQueueLock));
+void CmiEnqueueNodeFifo(int destNode, int size, void *msg) {
+  CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
+  header->destPE = CmiMessageDestPENodeFifo;
+  if (CmiMyNode() == destNode) {
+    CmiLock(CsvAccess(CsdNodeFifoQueueLock));
+    CsvAccess(CsdNodeFifoQueue).push(msg);
+    CmiUnlock(CsvAccess(CsdNodeFifoQueueLock));
+  } else {
+    comm_backend::issueAm(destNode, msg, size, MRFIELD(msg),
+                          CommLocalHandler, g_amHandler, nullptr);
+  }
 }
 
-void CmiEnqueueNodeLifo(void *msg) {
-  CmiLock(CsvAccess(CsdNodeLifoQueueLock));
-  CsvAccess(CsdNodeLifoQueue).push(msg);
-  CmiUnlock(CsvAccess(CsdNodeLifoQueueLock));
+void CmiEnqueueNodeLifo(int destNode, int size, void *msg) {
+  CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
+  header->destPE = CmiMessageDestPENodeLifo;
+  if (CmiMyNode() == destNode) {
+    CmiLock(CsvAccess(CsdNodeLifoQueueLock));
+    CsvAccess(CsdNodeLifoQueue).push(msg);
+    CmiUnlock(CsvAccess(CsdNodeLifoQueueLock));
+  } else {
+    comm_backend::issueAm(destNode, msg, size, MRFIELD(msg),
+                          CommLocalHandler, g_amHandler, nullptr);
+  }
 }
 
 void *CmiAlloc(int size) {

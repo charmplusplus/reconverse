@@ -162,9 +162,13 @@ typedef void (*CldInfoFn)(void *msg, CldPackFn *packer, int *len, int *queueing,
 typedef int (*CldEstimator)(void);
 
 #ifdef __cplusplus
-#define CmiMessageDestPENode static_cast<CmiUInt4>(-1)
+#define CmiMessageDestPENode     static_cast<CmiUInt4>(-1)
+#define CmiMessageDestPENodeFifo static_cast<CmiUInt4>(-2)
+#define CmiMessageDestPENodeLifo static_cast<CmiUInt4>(-3)
 #else
-#define CmiMessageDestPENode ((CmiUInt4)(-1))
+#define CmiMessageDestPENode     ((CmiUInt4)(-1))
+#define CmiMessageDestPENodeFifo ((CmiUInt4)(-2))
+#define CmiMessageDestPENodeLifo ((CmiUInt4)(-3))
 #endif
 
 typedef struct Header {
@@ -520,8 +524,8 @@ void CqsEnqueueGeneral(Queue q, void *Message, int strategy, int priobits,
           CmiUnlock(CsvAccess(CsdNodeQueueLock)); \
         } while(0)
 
-void CmiEnqueueNodeFifo(void *msg);
-void CmiEnqueueNodeLifo(void *msg);
+void CmiEnqueueNodeFifo(int destNode, int size, void *msg);
+void CmiEnqueueNodeLifo(int destNode, int size, void *msg);
 
 void CmiAssignOnce(int *variable, int value);
 
