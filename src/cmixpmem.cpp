@@ -113,8 +113,14 @@ static void handleInitialize_(void* msg) {
       meta, imsg->from, imsg->shared, sizeof(ipc_shared_));
   // then free the message
   CmiFree(imsg);
+  // count the segments attached so far (the vector is pre-sized, so
+  // occupancy -- not size -- tracks received peer messages)
+  int nAttached = 0;
+  for (auto& seg : meta->shared) {
+    if (seg.load(std::memory_order_relaxed) != nullptr) nAttached++;
+  }
   // if we received messages from all our peers:
-  if (meta->nPeers == meta->shared.size()) {
+  if (meta->nPeers == nAttached) {
     // resume the sleeping thread
     if (CmiMyPe() == 0) {
       printIpcStartupMessage_("xpmem");

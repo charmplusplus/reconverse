@@ -78,12 +78,12 @@ void CmiDeliverIpcBlockMsg(CmiIpcBlock* block) {
 }
 
 inline static bool metadataReady_(CmiIpcManager* meta) {
-  return meta && meta->shared[meta->mine];
+  return meta && meta->shared[meta->mine].load(std::memory_order_acquire);
 }
 
 CmiIpcBlock* CmiPopIpcBlock(CmiIpcManager* meta) {
   if (metadataReady_(meta)) {
-    auto& shared = meta->shared[meta->mine];
+    auto* shared = meta->shared[meta->mine].load(std::memory_order_acquire);
     return popBlock_(shared->queue, shared);
   } else {
     return nullptr;
@@ -91,7 +91,7 @@ CmiIpcBlock* CmiPopIpcBlock(CmiIpcManager* meta) {
 }
 
 bool CmiPushIpcBlock(CmiIpcManager* meta, CmiIpcBlock* block) {
-  auto& shared = meta->shared[block->src];
+  auto* shared = meta->shared[block->src].load(std::memory_order_acquire);
   auto& queue = shared->queue;
   CmiAssert(meta->mine == block->dst);
   return pushBlock_(queue, block->orig, shared);
@@ -106,7 +106,11 @@ std::pair<CmiIpcBlock*, CmiIpcAllocStatus> CmiAllocIpcBlock(CmiIpcManager* meta,
     return std::make_pair((CmiIpcBlock*)nullptr, CMI_IPC_REMOTE_DESTINATION);
   }
 
-  auto& shared = meta->shared[dstProc];
+  auto* shared = meta->shared[dstProc].load(std::memory_order_acquire);
+  if (shared == nullptr) {
+    // the destination's segment hasn't been attached yet (startup window)
+    return std::make_pair((CmiIpcBlock*)nullptr, CMI_IPC_TIMEOUT);
+  }
   auto bin = whichBin_(size);
   CmiAssert(bin < kNumCutOffPoints);
 
@@ -138,14 +142,15 @@ std::pair<CmiIpcBlock*, CmiIpcAllocStatus> CmiAllocIpcBlock(CmiIpcManager* meta,
 void CmiFreeIpcBlock(CmiIpcManager* meta, CmiIpcBlock* block) {
   auto bin = whichBin_(block->size);
   CmiAssert(bin < kNumCutOffPoints);
-  auto& shared = meta->shared[block->src];
+  auto* shared = meta->shared[block->src].load(std::memory_order_acquire);
   auto& free = shared->free[bin];
   while (!pushBlock_(free, block->orig, shared))
     ;
 }
 
 CmiIpcBlock* CmiIsIpcBlock(CmiIpcManager* meta, void* addr, int node) {
-  auto* shared = meta ? meta->shared[node] : nullptr;
+  auto* shared =
+      meta ? meta->shared[node].load(std::memory_order_acquire) : nullptr;
   if (shared == nullptr) {
     return nullptr;
   }

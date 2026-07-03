@@ -553,11 +553,15 @@ void CmiFree(void *msg) {
   // zero */
   //   CmiAbort("CmiFree reference count was zero-- is this a duplicate free?");
 
+  if (refCount == 1) {
   #ifdef CMK_USE_SHMEM
     // we should only free _our_ IPC blocks -- so calling CmiFree on
     // an IPC block issued by another process will cause a bad free!
     // (note -- this would only occur if you alloc an ipc block then
     //          decide not to send it; that should be avoided! )
+    // NOTE: this must only happen once the last reference drops --
+    // recycling the block into the shared free list while other
+    // references remain lets two senders allocate the same block.
     CmiIpcBlock* ipc;
     auto* manager = CsvAccess(coreIpcManager_);
     if (msg && (ipc = CmiIsIpcBlock(manager, BLKSTART(msg), CmiMyNode()))) {
@@ -566,7 +570,6 @@ void CmiFree(void *msg) {
     }
   #endif
 
-  if (refCount == 1) {
     //free(BLKSTART(parentBlk));
     comm_backend::free(msg);
   }

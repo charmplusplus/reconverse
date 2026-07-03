@@ -71,10 +71,11 @@ struct CmiIpcManager : public ipc_metadata_ {
   CmiIpcManager(std::size_t key) : ipc_metadata_(key) {
     auto firstPe = CmiNodeFirst(CmiMyNode());
     auto thisRank = CmiPhysicalRank(firstPe);
-    // cache map size and node pid while CPV/CSV systems are valid
+    // cache map size while CPV/CSV systems are valid; node_pid_val is
+    // captured in openAllShared_ once the node pid is actually known
     this->mapped_size = CpvAccess(kSegmentSize) + sizeof(ipc_shared_);
     CsvInitialize(pid_t, node_pid);
-    this->node_pid_val = (std::size_t)CsvAccess(node_pid);
+    this->node_pid_val = 0;
     if (thisRank == 0) {
       if (sendPid_(this) == 1) {
         openAllShared_(this);
@@ -93,9 +94,11 @@ struct CmiIpcManager : public ipc_metadata_ {
       auto proc = pair.first;
       auto fd = pair.second;
       // only unmap if we have a valid pointer and a non-zero mapping size
-      auto it = this->shared.find(proc);
-      if (it != this->shared.end() && it->second != nullptr && map_size > 0) {
-        munmap(it->second, map_size);
+      auto* seg = (proc >= 0 && proc < (int)this->shared.size())
+                      ? this->shared[proc].load(std::memory_order_relaxed)
+                      : nullptr;
+      if (seg != nullptr && map_size > 0) {
+        munmap(seg, map_size);
       }
       // close the file if valid
       if (fd >= 0) close(fd);
@@ -118,6 +121,9 @@ static void openAllShared_(CmiIpcManager* meta) {
   CmiGetPesOnPhysicalNode(thisNode, &pes, &nPes);
   int nSize = CmiMyNodeSize();
   int nProcs = nPes / nSize;
+  // the node pid is known by now (set by sendPid_/nodePidHandler_);
+  // cache it for the destructor's shm_unlink
+  meta->node_pid_val = (std::size_t)CsvAccess(node_pid);
   // for each rank in this physical node:
   for (auto rank = 0; rank < nProcs; rank++) {
     // open its shared segment
@@ -128,7 +134,9 @@ static void openAllShared_(CmiIpcManager* meta) {
     if (proc == meta->mine) initIpcShared_(res.second);
     // store the retrieved data
     meta->fds[proc] = res.first;
-    meta->shared[proc] = res.second;
+    // release-store: publishes the mapped (and, for ours, initialized)
+    // segment to PE threads polling metadataReady_/CmiAllocIpcBlock
+    meta->shared[proc].store(res.second, std::memory_order_release);
   }
   DEBUGF(("%d> finished opening all shared\n", meta->mine));
 }
