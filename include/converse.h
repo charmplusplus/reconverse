@@ -504,13 +504,26 @@ typedef struct QueueImpl
   //
   // For CsdSchedQueue (per-PE, never cross-thread), the atomic is overkill
   // but costless: relaxed atomic ops compile to plain loads/stores.
+  //
+  // Plain size_t in C: this header is included by C sources (e.g. GKlib)
+  // that never touch Queue objects; the C view only needs matching layout.
+#ifdef __cplusplus
   std::atomic<size_t> size;
+#else
+  size_t size;
+#endif
 } *Queue;
+
+#ifdef __cplusplus
+static_assert(sizeof(std::atomic<size_t>) == sizeof(size_t) &&
+              alignof(std::atomic<size_t>) == alignof(size_t),
+              "QueueImpl layout must match between C and C++");
 
 // Fast-empty: single relaxed load, no indirection. Use this on the scheduler
 // hot path; the slower QueueEmpty walks the three inner containers.
 // Returns true if the queue is observed empty at the moment of the load.
 #define QueueFastEmpty(q) ((q)->size.load(std::memory_order_relaxed) == 0)
+#endif
 
 void QueueInit(Queue q);
 void QueueDestroy(Queue q);
