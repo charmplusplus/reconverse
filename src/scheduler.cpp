@@ -112,11 +112,11 @@ bool pollTaskQueue() {
 
 void CmiQueueRegisterInitThread() {
   std::vector<std::pair<QueuePollHandlerFn, unsigned int>> handlers;
-  handlers.push_back(std::make_pair(pollConverseNodeQueue, 8));
-  handlers.push_back(std::make_pair(pollConverseThreadQueue, 1));
-  handlers.push_back(std::make_pair(pollNodePrioQueue, 16));
-  handlers.push_back(std::make_pair(pollThreadPrioQueue, 1));
-  handlers.push_back(std::make_pair(pollProgress, 1));
+  handlers.push_back(std::make_pair(pollConverseNodeQueue, 1));
+  handlers.push_back(std::make_pair(pollConverseThreadQueue, 16));
+  handlers.push_back(std::make_pair(pollNodePrioQueue, 1));
+  handlers.push_back(std::make_pair(pollThreadPrioQueue, 16));
+  handlers.push_back(std::make_pair(pollProgress, 4));
 #if CMK_TASKQUEUE
   handlers.push_back(std::make_pair(pollTaskQueue, 1));
 #endif
@@ -126,10 +126,10 @@ void CmiQueueRegisterInitThread() {
 //will add queue polling functions
 //called at node level (before threads created)
 void CmiQueueRegisterInit() {
-  add_handler(pollConverseNodeQueue, 8);
-  add_handler(pollConverseThreadQueue, 1);
-  add_handler(pollNodePrioQueue, 16);
-  add_handler(pollThreadPrioQueue, 1);
+  add_handler(pollConverseNodeQueue, 1);
+  add_handler(pollConverseThreadQueue, 16);
+  add_handler(pollNodePrioQueue, 1);
+  add_handler(pollThreadPrioQueue, 16);
   add_handler(pollProgress, backend_poll_freq);
 #if CMK_TASKQUEUE
   add_handler(pollTaskQueue, 1);
