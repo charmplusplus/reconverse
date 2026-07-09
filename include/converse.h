@@ -61,6 +61,15 @@ extern CmiNodeLock CmiMemLock_lock;
 #define CMK_TAG(x, y) x##y##_
 #define CMK_CONCAT(x, y) x##y
 
+//used in charm files such as ck128bitHash.h
+#if defined _MSC_VER
+# define CMI_FORCE_INLINE __forceinline
+#elif defined __GNUC__
+# define CMI_FORCE_INLINE inline __attribute__((always_inline))
+#else
+# define CMI_FORCE_INLINE inline
+#endif
+
 #ifdef __cplusplus
 /* In C++, use new so t's constructor gets called */
 # define CpvInit_Alloc(t,n) new t[n]()
