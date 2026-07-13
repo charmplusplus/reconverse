@@ -120,6 +120,7 @@ void CmiQueueRegisterInitThread() {
 #if CMK_TASKQUEUE
   handlers.push_back(std::make_pair(pollTaskQueue, 1));
 #endif
+  CldAddPollHandlers(handlers); // strategy-specific queues (may add none)
   add_list_of_handlers(handlers);
 }
 
