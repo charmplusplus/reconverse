@@ -1,7 +1,12 @@
 target_include_directories(reconverse PRIVATE .)
-target_sources(reconverse PRIVATE conv-conds.cpp convcore.cpp random.cpp 
+
+# Seed load-balancing strategy: compiles cldb.${RECONVERSE_CLDB}.cpp
+set(RECONVERSE_CLDB "neighborhood" CACHE STRING
+    "Seed LB strategy (rand | neighborhood)")
+
+target_sources(reconverse PRIVATE conv-conds.cpp convcore.cpp random.cpp
                 scheduler.cpp scheduler_helpers.cpp cpuaffinity.cpp mempool.C collectives.cpp
-                comm_backend/comm_backend_internal.cpp threads.cpp cldb.rand.cpp cldb.cpp cmirdmautils.cpp 
+                comm_backend/comm_backend_internal.cpp threads.cpp cldb.${RECONVERSE_CLDB}.cpp cldb.cpp cmirdmautils.cpp
                 conv-rdma.cpp conv-topology.cpp msgmgr.cpp queueing.cpp cmishmem.cpp
                 conv-taskq.cpp)
 target_include_directories(
