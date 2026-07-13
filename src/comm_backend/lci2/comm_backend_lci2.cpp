@@ -117,7 +117,6 @@ void* CommBackendLCI2::malloc(int n_bytes, int header)
       }
     else
       {
-        CmiPrintf("Allocating out of pool\n");
         // For out-of-pool, we need space for out_of_pool_header which contains
         // block_header and mempool_header, then CmiChunkHeader, then user data
         n_bytes = size + sizeof(out_of_pool_header);
