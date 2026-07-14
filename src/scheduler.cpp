@@ -153,15 +153,14 @@ void CsdScheduler() {
           CmiDeliverIpcBlockMsg(block);
         }
     #endif
-    //poll queues
-    unsigned idx = static_cast<unsigned>(loop_counter & 63ULL);
+    //poll queues: sweep forward from idx until work is found or a full
+    //cycle of the table has been checked, so a message doesn't have to
+    //wait for loop_counter to rotate back around to its slot
     bool workDone = false;
-    /*
-    for (auto fn : g_groups[idx]) {
-        workDone |= fn();
+    for (unsigned t = 0; t < ARRAY_SIZE && !workDone; ++t) {
+      unsigned idx = static_cast<unsigned>((loop_counter + t) & 63ULL);
+      workDone = CpvAccess(poll_handlers)[idx]();
     }
-        */
-    workDone |= CpvAccess(poll_handlers)[idx]();
     if(!workDone) {
       setIdle();
     }
@@ -177,26 +176,22 @@ void CsdScheduler() {
  */
 void CsdSchedulePoll() {
   uint64_t loop_counter = 0;
-  int current_empty = 0; //number of empty queues
 
   while(1){
 
     CcdRaiseCondition(CcdSCHEDLOOP);
-    //poll queues
-    unsigned idx = static_cast<unsigned>(loop_counter & 63ULL);
-    /*
-    for (auto fn : g_groups[idx]) {
-        workDone |= fn();
+    //poll queues: sweep the full table before concluding it's empty, so
+    //a message doesn't have to wait for loop_counter to rotate back
+    //around to its slot
+    bool workDone = false;
+    for (unsigned t = 0; t < ARRAY_SIZE && !workDone; ++t) {
+      unsigned idx = static_cast<unsigned>((loop_counter + t) & 63ULL);
+      workDone = CpvAccess(poll_handlers)[idx]();
     }
-        */
-    bool workDone = CpvAccess(poll_handlers)[idx]();
     if(!workDone) {
+      //swept the whole table and every slot was empty: done
       setIdle();
-      current_empty++;
-      //if all queues empty, return
-      if(current_empty >= ARRAY_SIZE){
-        return;
-      }
+      return;
     }
     CcdCallBacks();
     loop_counter++;
