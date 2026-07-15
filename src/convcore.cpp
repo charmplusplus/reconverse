@@ -568,7 +568,7 @@ void CmiFree(void *msg) {
 
   if (refCount == 1) {
     //free(BLKSTART(parentBlk));
-    comm_backend::free(msg);
+    comm_backend::free(parentBlk);
   }
   
 }
