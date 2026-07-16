@@ -116,7 +116,7 @@ void CmiQueueRegisterInitThread() {
   handlers.push_back(std::make_pair(pollConverseThreadQueue, 16));
   handlers.push_back(std::make_pair(pollNodePrioQueue, 1));
   handlers.push_back(std::make_pair(pollThreadPrioQueue, 16));
-  handlers.push_back(std::make_pair(pollProgress, 4));
+  handlers.push_back(std::make_pair(pollProgress, 32));
 #if CMK_TASKQUEUE
   handlers.push_back(std::make_pair(pollTaskQueue, 1));
 #endif
