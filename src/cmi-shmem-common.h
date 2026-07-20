@@ -4,6 +4,7 @@
 #include "converse_internal.h"
 
 #include <array>
+#include <atomic>
 #include <limits>
 #include <map>
 #include <memory>
@@ -41,23 +42,29 @@ struct ipc_shared_ {
   std::uintptr_t max;
 
   ipc_shared_(std::uintptr_t begin, std::uintptr_t end)
-      : queue(cmi::ipc::max), heap(begin), max(end) {
+      : queue(cmi::ipc::max), heap(cmi::ipc::nil), max(end) {
     for (auto& f : this->free) {
       f.store(cmi::ipc::max);
     }
+    // publish the heap last -- remote peers treat (heap == nil) as "not
+    // ready" (timeout), so this release-store is what makes the segment
+    // visible for allocation with all other fields initialized
+    this->heap.store(begin, std::memory_order_release);
   }
 };
 
 // shared data for each pe
 struct ipc_metadata_ {
-  // maps ranks to shared segments
-  std::map<int, ipc_shared_*> shared;
+  // maps procs to shared segments; pre-sized so lookups never mutate the
+  // container (PE threads poll this concurrently with segment attachment)
+  std::vector<std::atomic<ipc_shared_*>> shared;
   // physical node rank
   int mine;
   // key of this instance
   std::size_t key;
   // base constructor
-  ipc_metadata_(std::size_t key_) : mine(CmiMyNode()), key(key_) {}
+  ipc_metadata_(std::size_t key_)
+      : shared(CmiNumNodes()), mine(CmiMyNode()), key(key_) {}
   // virtual destructor may be needed
   virtual ~ipc_metadata_() {}
 };

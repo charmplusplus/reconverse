@@ -35,14 +35,15 @@ void CsdScheduler() {
       auto result = nodeQueue->pop();
       if (result) {
         void *msg = result.value();
-        // process event
-        CmiHandleMessage(msg);
 
         // release idle if necessary
         if (CmiGetIdle()) {
           CmiSetIdle(false);
           CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
         }
+
+        // process event
+        CmiHandleMessage(msg);
       }
     }
 
@@ -51,14 +52,14 @@ void CsdScheduler() {
       // get next event (guaranteed to be there because only single consumer)
       void *msg = queue->pop().value();
 
-      // process event
-      CmiHandleMessage(msg);
-
       // release idle if necessary
       if (CmiGetIdle()) {
         CmiSetIdle(false);
         CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
       }
+        
+      // process event
+      CmiHandleMessage(msg);
     }
 
         // poll node prio queue
@@ -69,14 +70,15 @@ void CsdScheduler() {
           void* msg = QueueTop(CsvAccess(CsdNodeQueue));
           QueuePop(CsvAccess(CsdNodeQueue));
           CmiUnlock(CsvAccess(CsdNodeQueueLock));
-          // process event
-          CmiHandleMessage(msg);
 
           // release idle if necessary
           if (CmiGetIdle()) {
             CmiSetIdle(false);
             CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
           }
+        
+          // process event
+          CmiHandleMessage(msg);
         } 
         else {
           CmiUnlock(CsvAccess(CsdNodeQueueLock));
@@ -85,25 +87,25 @@ void CsdScheduler() {
           void *msg = QueueTop(CpvAccess(CsdSchedQueue));
           QueuePop(CpvAccess(CsdSchedQueue));
 
-          // process event
-          CmiHandleMessage(msg);
-
           // release idle if necessary
           if (CmiGetIdle()) {
             CmiSetIdle(false);
             CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
           }
+        
+          // process event
+          CmiHandleMessage(msg);
         } else {
           #if CMK_TASKQUEUE
           // Check local task queue before going idle
           void *task_msg = TaskQueuePopLocal();
           if (task_msg != NULL) {
-            // Found a task in our local queue
-            CmiHandleMessage(task_msg);
             if (CmiGetIdle()) {
               CmiSetIdle(false);
               CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
             }
+            // Found a task in our local queue
+            CmiHandleMessage(task_msg);
           } else {
           #endif
             // the processor is idle
@@ -132,25 +134,29 @@ void CsdScheduler() {
           void *msg = QueueTop(CpvAccess(CsdSchedQueue));
           QueuePop(CpvAccess(CsdSchedQueue));
 
-          // process event
-          CmiHandleMessage(msg);
-
           // release idle if necessary
           if (CmiGetIdle()) {
             CmiSetIdle(false);
             CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
           }
+
+          // process event
+          CmiHandleMessage(msg);
+
         } else {
           #if CMK_TASKQUEUE
           // Check local task queue before going idle
           void *task_msg = TaskQueuePopLocal();
           if (task_msg != NULL) {
-            // Found a task in our local queue
-            CmiHandleMessage(task_msg);
+            
             if (CmiGetIdle()) {
               CmiSetIdle(false);
               CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
             }
+
+            // Found a task in our local queue
+            CmiHandleMessage(task_msg);
+
           } else {
           #endif
             // the processor is idle
@@ -206,14 +212,16 @@ void CsdSchedulePoll() {
       auto result = nodeQueue->pop();
       if (result) {
         void *msg = result.value();
-        // process event
-        CmiHandleMessage(msg);
 
         // release idle if necessary
         if (CmiGetIdle()) {
           CmiSetIdle(false);
           CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
         }
+
+        // process event
+        CmiHandleMessage(msg);
+
       }
     }
 
@@ -222,14 +230,15 @@ void CsdSchedulePoll() {
       // get next event (guaranteed to be there because only single consumer)
       void *msg = queue->pop().value();
 
-      // process event
-      CmiHandleMessage(msg);
-
       // release idle if necessary
       if (CmiGetIdle()) {
         CmiSetIdle(false);
         CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
       }
+
+      // process event
+      CmiHandleMessage(msg);
+
     }
 
     // poll node prio queue
@@ -240,14 +249,16 @@ void CsdSchedulePoll() {
           void *msg = QueueTop(CsvAccess(CsdNodeQueue));
           QueuePop(CsvAccess(CsdNodeQueue));
           CmiUnlock(CsvAccess(CsdNodeQueueLock));
-          // process event
-          CmiHandleMessage(msg);
 
           // release idle if necessary
           if (CmiGetIdle()) {
             CmiSetIdle(false);
             CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
           }
+
+          // process event
+          CmiHandleMessage(msg);
+
         } 
         else {
           CmiUnlock(CsvAccess(CsdNodeQueueLock));
@@ -255,26 +266,30 @@ void CsdSchedulePoll() {
           void *msg = QueueTop(CpvAccess(CsdSchedQueue));
           QueuePop(CpvAccess(CsdSchedQueue));
 
-          // process event
-          CmiHandleMessage(msg);
-
           // release idle if necessary
           if (CmiGetIdle()) {
             CmiSetIdle(false);
             CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
           }
+
+          // process event
+          CmiHandleMessage(msg);
+
         } 
         else {
           #if CMK_TASKQUEUE
           //because idle, check task queue
           void *task_msg = TaskQueuePopLocal();
           if (task_msg != NULL) {
-            // Found a task in our local queue
-            CmiHandleMessage(task_msg);
+          
             if (CmiGetIdle()) {
               CmiSetIdle(false);
               CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
             }
+
+            // Found a task in our local queue
+            CmiHandleMessage(task_msg);
+
           }
           else
           {
@@ -293,26 +308,30 @@ void CsdSchedulePoll() {
           void *msg = QueueTop(CpvAccess(CsdSchedQueue));
           QueuePop(CpvAccess(CsdSchedQueue));
 
-          // process event
-          CmiHandleMessage(msg);
-
           // release idle if necessary
           if (CmiGetIdle()) {
             CmiSetIdle(false);
             CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
           }
+
+          // process event
+          CmiHandleMessage(msg);
+
         } 
         else {
           #if CMK_TASKQUEUE
           //because idle, check task queue
           void *task_msg = TaskQueuePopLocal();
           if (task_msg != NULL) {
-            // Found a task in our local queue
-            CmiHandleMessage(task_msg);
+            
             if (CmiGetIdle()) {
               CmiSetIdle(false);
               CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
             }
+
+            // Found a task in our local queue
+            CmiHandleMessage(task_msg);
+            
           }
           else
           {

@@ -12,7 +12,7 @@ extern bool CmiUseCopyBasedRDMA;
 #define CMK_REG_REQUIRED 1
 // 8-byte for mr, 16-byte for rmr
 // TODO: better to use dynamic allocation and PUP
-#define CMK_NOCOPY_DIRECT_BYTES 24
+#define CMK_NOCOPY_DIRECT_BYTES 32
 
 /*********************************** Zerocopy Direct API
  * **********************************/

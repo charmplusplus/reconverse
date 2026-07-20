@@ -3,6 +3,7 @@
 
 #include "lci.hpp"
 #include <atomic>
+#include "comm_backend_internal.h"
 
 namespace comm_backend {
 namespace lci2_impl {
@@ -14,9 +15,26 @@ struct AllocatorLCI2 : lci::allocator_base_t {
   void deallocate(void *ptr) override { CmiFree(ptr); }
 };
 
+struct MempoolOptions {
+  size_t mempool_init_size;
+  size_t mempool_expand_size;
+  long long mempool_max_size;
+  size_t mempool_lb_size;
+  size_t mempool_rb_size;
+};
+
+static MempoolOptions mempool_options = {
+  MEMPOOL_INIT_SIZE_MB_DEFAULT * ONE_MB,
+  MEMPOOL_EXPAND_SIZE_MB_DEFAULT * ONE_MB,
+  MEMPOOL_MAX_SIZE_MB_DEFAULT * ONE_MB,
+  MEMPOOL_LB_DEFAULT,
+  MEMPOOL_RB_DEFAULT
+};
+
 class CommBackendLCI2 : public CommBackendBase {
 public:
   void init(char **argv) override;
+  void init_mempool() override;
   void exit() override;
   void initThread(int thread_id, int num_threads) override;
   void exitThread() override;
@@ -38,6 +56,8 @@ public:
   size_t getRMR(mr_t mr, void *addr, size_t size) override;
   void deregisterMemory(mr_t mr) override;
 
+  void *malloc(int n_bytes, int header) override;
+  void free(void* msg) override;
 private:
   struct threadContext {
     int thread_id;

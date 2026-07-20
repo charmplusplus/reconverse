@@ -18,7 +18,7 @@ void stop_handler(void *vmsg) {
 void nodeQueueTest(void *msg) {
   printf("NODE QUEUE TEST on pe %d\n", CmiMyPe());
   for (int i = 0; i < CmiMyNodeSize(); i++) {
-    Message *msg = new Message;
+    Message *msg = (Message *)CmiAlloc(sizeof(Message));
     msg->header.handlerId = CpvAccess(exitHandlerId);
     msg->header.messageSize = sizeof(Message);
 
@@ -28,7 +28,7 @@ void nodeQueueTest(void *msg) {
 
 void ping_handler(void *vmsg) {
   printf("PING HANDLER CALLED on pe %d\n", CmiMyPe());
-  Message *msg = new Message;
+  Message *msg = (Message *)CmiAlloc(sizeof(Message));
   msg->header.handlerId = CpvAccess(nodeHandlerId);
   msg->header.messageSize = sizeof(Message);
   CmiSyncNodeSendAndFree(CmiMyNode(), msg->header.messageSize, msg);
@@ -56,7 +56,7 @@ CmiStartFn mymain(int argc, char **argv) {
   else if (CmiMyNodeSize() == 1) {
     printf("Only one node, send self test\n");
     // create a message
-    Message *msg = new Message;
+    Message *msg = (Message *)CmiAlloc(sizeof(Message));
     msg->header.handlerId = handlerId;
     msg->header.messageSize = sizeof(Message);
 

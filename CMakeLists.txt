@@ -40,8 +40,8 @@ option(RECONVERSE_TRY_ENABLE_COMM_LCI2 "whether to enable the LCIv2 backend" ON)
 option(RECONVERSE_AUTOFETCH_LCI2
         "whether to autofetch LCIv2 if LCI2 cannot be found" OFF)
 set(RECONVERSE_AUTOFETCH_LCI2_TAG
-    "ce2af2e0775552a9fa458979ce6b5199bc2febbc"
-    CACHE STRING "The tag to fetch for LCIv2") # master branch as of 2025-12-8
+    "bc25ce13ac94ed19301b0f84dbda4c8c0a73a037"
+    CACHE STRING "The tag to fetch for LCIv2") # master branch as of 2026-06-14
 
 option(RECONVERSE_TRY_ENABLE_COMM_LCW "whether to enable the LCW backend" ON)
 option(RECONVERSE_AUTOFETCH_LCW
@@ -146,6 +146,18 @@ endif()
 
 if(RECONVERSE_ENABLE_HIP)
   target_link_libraries(reconverse PUBLIC hip::host)
+if(RECONVERSE_ROOT_PROJECT)
+  # When building standalone, set CMK_OPTIMIZE based on build type.
+  # Can be overridden on the cmake command line with -DCMK_OPTIMIZE=1.
+  if(NOT DEFINED CMK_OPTIMIZE)
+    if(CMAKE_BUILD_TYPE MATCHES "Release" OR CMAKE_BUILD_TYPE MATCHES "RelWithDebInfo")
+      set(CMK_OPTIMIZE 1)
+    else()
+      set(CMK_OPTIMIZE 0)
+    endif()
+  endif()
+  target_compile_definitions(reconverse PUBLIC CMK_OPTIMIZE=${CMK_OPTIMIZE})
+endif()
 endif()
 
 if(RECONVERSE_ENABLE_CPU_AFFINITY)

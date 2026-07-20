@@ -3,6 +3,7 @@
 #ifndef CONVERSE_H
 #define CONVERSE_H
 
+// note: this file is included by both C and C++ files, so it should always have valid C code
 #ifdef __cplusplus
 #include <atomic>
 #include <queue>
@@ -125,18 +126,21 @@ extern CmiNodeLock CmiMemLock_lock;
 #define ALIGN_DEFAULT(x) CMIALIGN(x, ALIGN_BYTES)
 #define CMIPADDING(x, n) (CMIALIGN((x), (n)) - (size_t)(x))
 
-// Portable alignment specifier for structs
+// Portable alignment specifier for structs.
+// NOTE: __attribute__((aligned(n))) must be checked before _Alignas because
+// _Alignas is a variable specifier in C11/C17 and cannot appear between
+// 'struct' and the tag name, whereas __attribute__ can (GCC/Clang extension).
 #ifdef __cplusplus
 #define CMI_ALIGNAS(n) alignas(n)
+#elif defined(__GNUC__) || defined(__clang__)
+// GCC/Clang __attribute__ supports the 'struct __attribute__((aligned(n))) tag' form
+#define CMI_ALIGNAS(n) __attribute__((aligned(n)))
 #elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 202311L
 // C23 has alignas
 #define CMI_ALIGNAS(n) alignas(n)
 #elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
 // C11 has _Alignas
 #define CMI_ALIGNAS(n) _Alignas(n)
-#elif defined(__GNUC__) || defined(__clang__)
-// GCC/Clang attribute
-#define CMI_ALIGNAS(n) __attribute__((aligned(n)))
 #elif defined(_MSC_VER)
 // MSVC
 #define CMI_ALIGNAS(n) __declspec(align(n))
@@ -215,7 +219,7 @@ extern int CharmLibInterOperate;
 #ifdef __cplusplus
 struct alignas(ALIGN_BYTES) CmiChunkHeader {
   int size;
-
+  void* mr;
 private:
   std::atomic<int> ref; // only supports smp, would just be int otherwise
 
@@ -337,6 +341,7 @@ extern char *CthGetData(CthThread t);
 /* Given a user chunk m, extract the enclosing chunk header fields: */
 #define BLKSTART(m) ((CmiChunkHeader *)(((intptr_t)m) - sizeof(CmiChunkHeader)))
 #define SIZEFIELD(m) ((BLKSTART(m))->size)
+  #define MRFIELD(m) ((BLKSTART(m))->mr)
 #define REFFIELD(m) ((BLKSTART(m))->getRef())
 #define REFFIELDSET(m, r) ((BLKSTART(m))->setRef(r))
 #define REFFIELDINC(m) ((BLKSTART(m))->incRef())
@@ -732,15 +737,11 @@ int CmiArgGivingUsage(void);
 void CmiDeprecateArgInt(char **argv, const char *arg, const char *desc,
                         const char *warning);
 
-#define CmiCreateImmediateLock() (0)
-#define CmiImmediateLock(ignored)                                              \
-  { _immediateLock++; }
-#define CmiImmediateUnlock(ignored)                                            \
-  { _immediateLock--; }
-#define CmiCheckImmediateLock(ignored)                                         \
-  ((_immediateLock) ? ((_immediateFlag = 1), 1) : 0)
-#define CmiClearImmediateFlag()                                                \
-  { _immediateFlag = 0; }
+#define CmiCreateImmediateLock() CmiCreateLock()
+#define CmiImmediateLock(immediateLock) CmiLock((immediateLock))
+#define CmiImmediateUnlock(immediateLock) CmiUnlock((immediateLock))
+#define CmiCheckImmediateLock(ignored)  (0)
+#define CmiClearImmediateFlag() 
 #define CmiBecomeImmediate(msg) /* empty */
 #define CmiResetImmediate(msg)  /* empty */
 #define CmiIsImmediate(msg) (0)

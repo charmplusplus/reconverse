@@ -19,8 +19,10 @@ void ping_handler(void *vmsg) {
   // test assert statements are working
   CmiAssert(CmiMyRank() == msg->header.destPE);
 
-  if (CmiMyRank() != CmiMyNodeSize() - 1) {
-    Message *newmsg = new Message;
+  if (CmiMyRank() != CmiMyNodeSize() - 1)
+  {
+    Message *newmsg = (Message*) CmiAlloc(sizeof(Message));
+
     newmsg->header.handlerId = ping_handlerID;
     newmsg->header.messageSize = sizeof(Message);
 
@@ -40,7 +42,7 @@ CmiStartFn mymain(int argc, char **argv) {
 
   if (CmiMyRank() == 0) {
     // create a message
-    Message *msg = new Message;
+    Message *msg = (Message*) CmiAlloc(sizeof(Message));
     msg->header.handlerId = ping_handlerID;
     msg->header.messageSize = sizeof(Message);
     msg->data[0] = 0;

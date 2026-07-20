@@ -33,7 +33,7 @@ void callAfter7s(void *vmsg, double) {
 void longHandler(void *vmsg) {
   printf("10s HANDLER CALLED at time %lf on PE %d\n", CmiWallTimer(),
          CmiMyRank());
-  Message *msg = new Message;
+  Message *msg = (Message *)CmiAlloc(sizeof(Message));
   msg->header.handlerId = CpvAccess(exitHandlerId);
   msg->header.messageSize = sizeof(Message);
   msg->header.destPE = CmiMyRank();
