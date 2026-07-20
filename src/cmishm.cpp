@@ -48,9 +48,24 @@ static std::pair<int, ipc_shared_*> openShared_(int node) {
     auto status = ftruncate(fd, size);
     CmiAssert(status >= 0);
   } else {
-    // otherwise just open it
+    // otherwise just open it -- but the segment becomes visible to
+    // shm_open the instant its creator's O_CREAT succeeds, before that
+    // creator has called ftruncate. Every rank races to open every
+    // segment name (including its own), so we may win this open before
+    // the true creator has resized the file; mmap-ing and touching it
+    // while it's still 0 bytes is a SIGBUS. Poll fstat until the size
+    // lands.
     fd = shm_open(name, O_RDWR, 0666);
     CmiAssert(fd >= 0);
+    struct stat st;
+    const int kMaxAttempts = 10000;  // ~1s at 100us/attempt
+    for (auto attempt = 0;; attempt++) {
+      CmiAssert(fstat(fd, &st) == 0);
+      if ((std::size_t)st.st_size >= size) break;
+      CmiEnforceMsg(attempt < kMaxAttempts,
+                    "timed out waiting for shm segment to be sized!");
+      usleep(100);
+    }
   }
   // then delete the name
   delete[] name;
