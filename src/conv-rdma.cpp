@@ -362,7 +362,12 @@ void zcPupGet(CmiNcpyBuffer &src, CmiNcpyBuffer &dest) {
 // Invoked by the local completion of the Rput operation
 void CommRputLocalHandler(comm_backend::Status status) {
   NcpyOperationInfo *ncpyOpInfo = (NcpyOperationInfo *)status.user_context;
-  ncpyOpInfo->ackMode = CMK_SRC_ACK;
+  // Do not narrow ackMode here. A true RDMA put only raises a completion on the
+  // initiator, so this handler is responsible for both sides of the operation.
+  // The default ackMode set by setNcpyOpInfo is CMK_SRC_DEST_ACK, which lets the
+  // upper layer invoke the local ack directly and route the remote one to the
+  // peer PE. Narrowing it to CMK_SRC_ACK silently drops the destination ack, so
+  // the receiver's callback never runs.
   auto realFreeMe = ncpyOpInfo->freeMe;
   ncpyOpInfo->freeMe = CMK_DONT_FREE_NCPYOPINFO;
   ncpyDirectAckHandlerFn(ncpyOpInfo);
@@ -373,7 +378,8 @@ void CommRputLocalHandler(comm_backend::Status status) {
 // Invoked by the local completion of the Rget operation
 void CommRgetLocalHandler(comm_backend::Status status) {
   NcpyOperationInfo *ncpyOpInfo = (NcpyOperationInfo *)status.user_context;
-  ncpyOpInfo->ackMode = CMK_DEST_ACK;
+  // See CommRputLocalHandler: leave ackMode at its CMK_SRC_DEST_ACK default so
+  // the source ack is not dropped.
   auto realFreeMe = ncpyOpInfo->freeMe;
   ncpyOpInfo->freeMe = CMK_DONT_FREE_NCPYOPINFO;
   ncpyDirectAckHandlerFn(ncpyOpInfo);
