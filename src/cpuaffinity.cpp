@@ -18,6 +18,12 @@
 #define _GNU_SOURCE
 #endif
 
+#include <algorithm>
+#include <map>
+#include <queue>
+#include <utility>
+#include <vector>
+
 static int affMsgsRecvd = 1;  // number of affinity messages received at PE0
 #if defined(CPU_OR)
 static cpu_set_t core_usage;  // used to record union of CPUs used by every PE in physical node
@@ -391,6 +397,188 @@ static int set_default_affinity(void){
   return n != -1;
 }
 
+/*
+ * Distributes PUs among PEs in a multi-level round robin fashion.
+ *
+ * For example, a machine with two sockets x two cores x two PUs,
+ *           M0
+ *     S0          S1
+ *  C0    C1    C2    C3
+ * 0  1  2  3  4  5  6  7
+ * will result in: 0 4 2 6 1 5 3 7
+ *
+ * With a single socket containing four cores instead,
+ *           M0
+ *           S0
+ *  C0    C1    C2    C3
+ * 0  1  2  3  4  5  6  7
+ * the output is: 0 2 4 6 1 3 5 7
+ *
+ * The function takes a parameter to limit the count of PUs returned.
+ * With the single socket example and +p5 in argv, the function returns: 0 2 4 6 1
+ * The caller then sorts this list so that PE number locality implies PU locality,
+ * while still spreading the work units as much as possible: 0 1 2 4 6
+ * With +p8, the result would be: 0 1 2 3 4 5 6 7
+ */
+static std::vector<hwloc_obj_t> getPUListForAutoAffinity(hwloc_obj_t container, unsigned int numranks)
+{
+  std::vector<hwloc_obj_t> pu_list;
+  std::map<int, std::queue<std::pair<hwloc_obj_t, unsigned int>>> depthqueues;
+
+  depthqueues[container->depth].emplace(container, 0);
+
+  do
+  {
+    auto & thisqueue = depthqueues.begin()->second;
+
+    // Loop through the current depth level, pushing children into queues for their depth level.
+    do
+    {
+      auto entry = thisqueue.front();
+      thisqueue.pop();
+
+      hwloc_obj_t obj = entry.first;
+      unsigned int childindex = entry.second;
+
+      if (obj->type == HWLOC_OBJ_PU)
+      {
+        // Add this PU to the list.
+        pu_list.push_back(obj);
+
+        // Not just an optimization, the algorithm is pointless without this check and return.
+        if (pu_list.size() == numranks)
+          return pu_list;
+      }
+
+      if (childindex < obj->arity)
+      {
+        // Push one child at a time into its queue.
+        depthqueues[obj->depth].emplace(obj->children[childindex++], 0);
+
+        // If this node has more children, re-add it to the end of the current queue.
+        if (childindex < obj->arity)
+          thisqueue.emplace(obj, childindex);
+      }
+    }
+    while (!thisqueue.empty());
+
+    // Proceed to the next depth level.
+    depthqueues.erase(depthqueues.begin());
+  }
+  while (!depthqueues.empty());
+
+  return pu_list;
+}
+
+// Counts logical nodes (processes) sharing this process's physical node, and this
+// process's rank among them (ordered by node index). Every physical node is treated
+// as running only worker PEs, since reconverse has no separate communication thread.
+//
+// This relies on CmiPhysicalNodeID(), which falls back to treating each process as
+// its own physical node unless the program has already called CmiInitCPUTopology()
+// to detect physical nodes shared by multiple processes.
+static void getMyRankAndCountOnPhysicalNode(int *node_rank, int *nodes_on_host)
+{
+  const int mynode = CmiMyNode();
+  const int myphysnode = CmiPhysicalNodeID(CmiMyPe());
+
+  *node_rank = 0;
+  *nodes_on_host = 0;
+  for (int n = 0; n < CmiNumNodes(); n++)
+  {
+    if (CmiPhysicalNodeID(CmiNodeFirst(n)) == myphysnode)
+    {
+      if (n < mynode) ++*node_rank;
+      ++*nodes_on_host;
+    }
+  }
+}
+
+// Automatically binds this worker PE to a PU, spreading PEs across the machine's
+// sockets/cores/PUs so that no two PEs share a PU unless oversubscribed. Ported from
+// Converse's cpuAffinityRecvHandler, but simplified: reconverse has no dedicated
+// communication thread, so only worker PEs are considered here, and the physical-node
+// grouping already computed by CmiPhysicalNodeID()/CmiPhysicalRank() is reused instead
+// of re-deriving it from IP addresses.
+static int set_auto_affinity(void)
+{
+  // Filter out packages with null cpusets, caused by system resource management.
+  const int total_package_count = hwloc_get_nbobjs_by_type(topology, HWLOC_OBJ_PACKAGE);
+  std::vector<hwloc_obj_t> packages;
+  packages.reserve(total_package_count);
+  for (int i = 0; i < total_package_count; i++)
+  {
+    hwloc_obj_t obj = hwloc_get_obj_by_type(topology, HWLOC_OBJ_PACKAGE, i);
+    if (hwloc_get_nbobjs_inside_cpuset_by_type(topology, obj->cpuset, HWLOC_OBJ_PU) > 0)
+      packages.emplace_back(obj);
+  }
+  const int package_count = packages.size();
+
+  int node_rank, nodes_on_host;
+  getMyRankAndCountOnPhysicalNode(&node_rank, &nodes_on_host);
+
+  hwloc_obj_t obj;
+  int numranks, myrank;
+
+  if (nodes_on_host > 1 && package_count > 1)
+  {
+    // If multiple processes are running on a machine with multiple packages, divide the
+    // packages among the processes, and bind each process to its package.
+    const int mypackage = node_rank % package_count;
+    const int myphysnode = CmiPhysicalNodeID(CmiMyPe());
+    const int mynode = CmiMyNode();
+
+    // Count the number of PEs across all logical nodes on this host that share a
+    // package (can exceed package_count when nodes_on_host > package_count).
+    int my_first_pe_rank_on_package = 0;
+    int pes_on_package = 0;
+    int rank_on_host = 0;
+    for (int n = 0; n < CmiNumNodes(); n++)
+    {
+      if (CmiPhysicalNodeID(CmiNodeFirst(n)) != myphysnode) continue;
+      if (rank_on_host % package_count == mypackage)
+      {
+        if (n == mynode)
+          my_first_pe_rank_on_package = pes_on_package;
+        pes_on_package += CmiNodeSize(n);
+      }
+      ++rank_on_host;
+    }
+
+    obj = packages[mypackage];
+    numranks = pes_on_package;
+    myrank = my_first_pe_rank_on_package + CmiMyRank();
+
+    // Set the process binding to be safe.
+    if (CmiMyRank() == 0)
+      set_process_affinity(obj->cpuset);
+
+    // Ensure no thread sets affinity before the process call, or else the thread call will be overwritten.
+    CmiNodeBarrier();
+  }
+  else
+  {
+    // Otherwise spread out among the entire machine.
+    obj = hwloc_get_root_obj(topology);
+    numranks = CmiNumPesOnPhysicalNode(CmiPhysicalNodeID(CmiMyPe()));
+    myrank = CmiPhysicalRank(CmiMyPe());
+  }
+
+  std::vector<hwloc_obj_t> pu_list = getPUListForAutoAffinity(obj, numranks);
+
+  if (pu_list.size() == 0)
+    CmiAbort("CmiInitCPUAffinity: no PUs available for auto affinity!");
+
+  std::sort(pu_list.begin(), pu_list.end(),
+            [](hwloc_obj_t a, hwloc_obj_t b) -> bool { return a->logical_index < b->logical_index; });
+
+  const int pu = pu_list[myrank % pu_list.size()]->logical_index;
+
+  if (CmiSetCPUAffinityLogical(pu) == -1) CmiAbort("CmiSetCPUAffinityLogical failed!");
+
+  return pu;
+}
+
 void CmiInitCPUAffinity(char **argv) {
     #if defined(CPU_OR)
     // check for flags
@@ -452,9 +640,13 @@ void CmiInitCPUAffinity(char **argv) {
             pemap_logical_flag ? 'L' : 'P', mycore);
       }
     }
-    // if we are just using +setcpuaffinity
+    // if we are just using +setcpuaffinity, automatically spread worker PEs across
+    // the machine's sockets/cores/PUs
     else {
-      CmiPrintf("Charm++> +setcpuaffinity implementation in progress\n");
+      int pu = set_auto_affinity();
+      if (show_affinity_flag) {
+        CmiPrintf("Charm++> set PE %d on node %d to PU L#%d\n", CmiMyPe(), CmiMyNode(), pu);
+      }
     }
     #endif
     CmiNodeAllBarrier();
