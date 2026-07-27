@@ -56,7 +56,6 @@ void *alloc_mempool_block(size_t *size, void **mem_hndl, int expand_flag)
     {
         CmiAbort("alloc_mempool_block: posix_memalign failed");
     }
-    printf("LCI2: Allocated mempool block of size %zu, %zu at %p\n", *size, ALIGNBUF, pool);
     // Keep the registration handle so the block can be deregistered at teardown.
     *mem_hndl = registerMemory(pool, *size);
     return pool;

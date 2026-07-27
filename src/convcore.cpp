@@ -571,7 +571,7 @@ void CmiFree(void *msg) {
   #endif
 
     //free(BLKSTART(parentBlk));
-    comm_backend::free(msg);
+    comm_backend::free(parentBlk);
   }
   
 }
