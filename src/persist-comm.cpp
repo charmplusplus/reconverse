@@ -8,6 +8,11 @@
  * the payload rides along inside the notification and the receiver copies it
  * into the same buffer, so both paths deliver messages identically.
  *
+ * A channel whose destination is on this node is a special case: the PEs share
+ * an address space, so the ordinary send path already delivers the message by
+ * pointer with no copy and no network involved. Such a channel skips setup
+ * entirely, allocates no buffers, and forwards to that path.
+ *
  * Buffer reuse is credit based. A channel owns PERSIST_BUFFERS_NUM buffers;
  * the sender may only write into a buffer it holds the credit for, and the
  * credit comes back when the receiver releases the delivered message (see
@@ -18,10 +23,7 @@
  *
  * All channel bookkeeping lives in per-PE tables that are only touched by the
  * PE that owns them: setup, teardown, notification, and credit all arrive as
- * Converse messages handled on the owning PE. The one exception is the local
- * (same node) data path, where the sender memcpy's directly into the
- * destination buffer -- which is safe precisely because holding the credit
- * means no one else is using that buffer.
+ * Converse messages handled on the owning PE.
  */
 
 #include "conv-rdma.h"
@@ -334,14 +336,7 @@ void writeToBuffer(PersistentSendsTable *slot, int bufIndex, int size,
   slot->busy[bufIndex] = true;
   PersistentBufDesc &buf = slot->bufs[bufIndex];
 
-  if (slot->isLocal) {
-    /* Same address space: the buffer is ours to write while we hold its
-       credit. */
-    memcpy((void *)(uintptr_t)buf.addr, msg, size);
-    CmiFree(msg);
-    sendNotification(slot->destHandle, slot, slot->destPE, CmiMyPe(), bufIndex,
-                     size, nullptr);
-  } else if (slot->useRdma) {
+  if (slot->useRdma) {
     auto *ctx = new PutContext{slot->destHandle, slot, slot->destPE, CmiMyPe(),
                                bufIndex,         size, msg};
     /* The notification is only sent once this put completes locally, which is
@@ -527,6 +522,14 @@ void CmiPersistentInit(void) {
 PersistentHandle CmiCreatePersistent(int destPE, int maxBytes) {
   PersistentSendsTable *slot = newSendSlot(destPE, maxBytes);
 
+  /* A channel that stays on this node sends by pointer and never touches a
+     receive buffer, so there is nothing to set up: no round trip, and no
+     buffers allocated on the destination. The handle is usable right away. */
+  if (slot->isLocal) {
+    slot->setupDone = true;
+    return slot;
+  }
+
   auto *msg = (PersistentRequestMsg *)CmiAlloc(sizeof(PersistentRequestMsg));
   msg->requestorPE = CmiMyPe();
   msg->maxBytes = slot->sizeMax;
@@ -573,6 +576,17 @@ void CmiSendPersistentMsg(PersistentHandle h, int messageSize, void *msg) {
     CmiAbort("CmiSendPersistentMsg: message of %d bytes does not fit in a "
              "persistent channel of %d bytes\n",
              messageSize, slot->sizeMax);
+
+  /* A destination on this node shares our address space, so the ordinary send
+     path already hands the message over by pointer. Nothing a persistent
+     channel can do beats that: staging the payload through a receive buffer
+     would only add a copy. The receiving handler cannot tell the difference,
+     since releasing a persistent message and freeing an ordinary one are the
+     same call. */
+  if (slot->isLocal) {
+    CmiSyncSendAndFreeNoPersistent(slot->destPE, messageSize, msg);
+    return;
+  }
 
   /* Wait for the channel to be set up, or for a buffer to come free, rather
      than blocking the sender. Ordering within the channel is preserved

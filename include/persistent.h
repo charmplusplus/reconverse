@@ -16,6 +16,12 @@
         Sender initiates the setup. Returns immediately; messages sent on the
         handle before the destination has answered are buffered locally and
         flushed once the channel is ready.
+        A destination on the calling PE's own node needs none of this: those
+        PEs share an address space, so the ordinary send path already hands
+        the message over by pointer, which no buffered scheme can beat. Such a
+        channel is set up for free, allocates nothing on the destination, and
+        forwards to that path. The handle is still valid and still usable with
+        every call below, so callers need no special case for it.
   * PersistentReq CmiCreateReceiverPersistent(int maxBytes);
     PersistentHandle CmiRegisterReceivePersistent(PersistentReq req);
         Receiver initiates the setup. The receiver calls
@@ -41,7 +47,9 @@
   send-and-free call when it is done. That release is what returns the buffer
   to the sender for reuse, so a handler that keeps the message forever stalls
   the channel. The buffer itself is never freed by CmiFree; it is released
-  when the channel is destroyed.
+  when the channel is destroyed. A message that arrived over a same-node
+  channel is an ordinary allocation and CmiFree simply frees it, which is why
+  a handler needs no idea which kind it was given.
  *****************************************************************************/
 
 #ifndef RECONVERSE_PERSISTENT_H
@@ -74,8 +82,9 @@ typedef void *PersistentHandle;
 /* Everything the sender needs to reach one receive buffer. Plain data, so it
    can be memcpy'd into a message. */
 typedef struct PersistentBufDesc {
-  CmiUInt8 addr; /* address of the message area on the receiver; only usable
-                    when the sender shares its address space (same node) */
+  CmiUInt8 addr; /* address of the message area in the receiver's address
+                    space; informational, a remote sender addresses the buffer
+                    through rmr and disp */
   CmiUInt8 disp; /* offset of the message area from the start of the
                     registered memory region, for one-sided puts */
   char rmr[CMK_PERSISTENT_RMR_BYTES]; /* serialized remote memory region */
