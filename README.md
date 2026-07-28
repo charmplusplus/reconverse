@@ -57,6 +57,7 @@ Currently, Reconverse has two communication backends:
 If LCI is autofetched, you can further customize the LCI build by passing additional CMake variables. Important ones include
 - **`-DLCI_NETWORK_BACKENDS=[ofi|ibv]`** (`ibv;ofi` by default): explicitly select the LCI backend to be libfabric (ofi) or libibverbs (ibv). `ibv` should be used for Infiniband and RoCE clusters. `ofi` should be used for shared memory system (e.g. laptop) and slingshot-11 clusters.
 - **`-DLCT_PMI_BACKEND_ENABLE_MPI=ON`** (Default: `OFF`): let LCI bootstrap with MPI.
+- **`-DLCI_WITH_SHM=ON`** (Default: `OFF`): use POSIX shared memory communication through LCI. This is only enabled for small messages (data size 32 bytes or less)
 
 ##### LCW (MPI) Backend Options
 
