@@ -45,23 +45,38 @@ static void remoteDeregHandler(ConverseRdmaMsg *deregMsg) {
 
   resetNcpyOpInfoPointers(ncpyOpInfo);
 
+  // The NcpyOperationInfo is embedded in deregMsg, so it is not an independent
+  // allocation and must not be freed by the upper layer; deregMsg is released
+  // at the end of this handler instead.
   ncpyOpInfo->freeMe = CMK_DONT_FREE_NCPYOPINFO;
 
-  if (CmiMyPe() == ncpyOpInfo->srcPe) {
-    ncpyOpInfo->ackMode = CMK_SRC_ACK;
+  // Compare by node, not PE: in SMP the buffer's owning PE need not be the PE
+  // that happens to run this handler.
+  if (CmiMyNode() == CmiNodeOf(ncpyOpInfo->srcPe)) {
     CmiDeregisterMem(ncpyOpInfo->srcPtr,
                      ncpyOpInfo->srcLayerInfo + CmiGetRdmaCommonInfoSize(),
-                     ncpyOpInfo->srcPe, ncpyOpInfo->srcDeregMode);
-  } else if (CmiMyPe() == ncpyOpInfo->destPe) {
-    ncpyOpInfo->ackMode = CMK_DEST_ACK;
+                     ncpyOpInfo->srcPe, ncpyOpInfo->srcRegMode);
+    ncpyOpInfo->isSrcRegistered = 0;
+    ncpyOpInfo->ackMode = CMK_SRC_ACK;
+    // Downgrade opMode so the upper layer only invokes the source callback.
+    // Leaving the original opMode (e.g. CMK_EM_API) would re-run the whole
+    // completion path here, which would send another dereg message back and
+    // loop forever, and would leak an unmatched QdCreate on every pass.
+    ncpyOpInfo->opMode = CMK_EM_API_SRC_ACK_INVOKE;
+  } else if (CmiMyNode() == CmiNodeOf(ncpyOpInfo->destPe)) {
     CmiDeregisterMem(ncpyOpInfo->destPtr,
                      ncpyOpInfo->destLayerInfo + CmiGetRdmaCommonInfoSize(),
-                     ncpyOpInfo->destPe, ncpyOpInfo->destDeregMode);
+                     ncpyOpInfo->destPe, ncpyOpInfo->destRegMode);
+    ncpyOpInfo->isDestRegistered = 0;
+    ncpyOpInfo->ackMode = CMK_DEST_ACK;
+    ncpyOpInfo->opMode = CMK_EM_API_DEST_ACK_INVOKE;
   } else {
-    CmiAbort("remoteDeregHandler: Invalid PE\n");
+    CmiAbort("remoteDeregHandler: neither source nor destination node\n");
   }
 
   ncpyDirectAckHandlerFn(ncpyOpInfo);
+
+  CmiFree(deregMsg);
 }
 
 // Invoked when this PE has to send a large array for an Rget

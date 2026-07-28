@@ -4,6 +4,9 @@
 #include "lci.hpp"
 #include "comm_backend_internal.h"
 
+#include <mutex>
+#include <unordered_set>
+
 namespace comm_backend {
 namespace lci2_impl {
 // A breach of the comm_backend interface with direct access to CmiAlloc/CmiFree
@@ -68,6 +71,14 @@ private:
   lci::comp_t m_remote_comp;
   lci::rcomp_t m_rcomp;
   AllocatorLCI2 m_allocator;
+
+  // Memory regions handed out by registerMemory() that have not been given back
+  // to deregisterMemory(). A buffer registered with CK_BUFFER_NODEREG is never
+  // deregistered by the application, so without this the region is still open
+  // when exit() closes the device and fi_close(domain) fails with FI_EBUSY.
+  std::mutex m_liveMrsMutex;
+  std::unordered_set<void *> m_liveMrs;
+  void deregisterAllMemory();
 
   lci::device_t getThreadLocalDevice();
   lci::mr_t getThreadLocalMR(mr_t mr);
