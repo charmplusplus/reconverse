@@ -4,6 +4,21 @@
 #include "cmirdmautils.h"
 #include <functional>
 
+/* Reconverse itself has no PUP dependency, but Charm++ builds on top of this
+ * header and CkNcpyBuffer::pup() chains to CmiNcpyBuffer::pup(). pup.h is only
+ * present on the include path when this header is consumed as part of a
+ * Charm++ build (it is copied next to this file), so use its availability to
+ * decide whether to expose the PUP'd form. */
+#if defined(__has_include)
+#if __has_include("pup.h")
+#include "pup.h"
+#define CMK_NCPY_HAS_PUP 1
+#endif
+#endif
+#ifndef CMK_NCPY_HAS_PUP
+#define CMK_NCPY_HAS_PUP 0
+#endif
+
 // User specified configuration
 // TODO: move to a better location
 extern bool CmiUseCopyBasedRDMA;
@@ -258,18 +273,20 @@ public:
 #endif
   }
 
-  // void pup(PUP::er &p) {
-  //   p((char *)&ptr, sizeof(ptr));
-  //   p((char *)&ref, sizeof(ref));
-  //   p((char *)&refAckInfo, sizeof(refAckInfo));
-  //   p | cnt;
-  //   p | pe;
-  //   p | regMode;
-  //   p | deregMode;
-  //   p | isRegistered;
-  //   PUParray(p, layerInfo,
-  //            CMK_COMMON_NOCOPY_DIRECT_BYTES + CMK_NOCOPY_DIRECT_BYTES);
-  // }
+#if CMK_NCPY_HAS_PUP
+  void pup(PUP::er &p) {
+    p((char *)&ptr, sizeof(ptr));
+    p((char *)&ref, sizeof(ref));
+    p((char *)&refAckInfo, sizeof(refAckInfo));
+    p | cnt;
+    p | pe;
+    p | regMode;
+    p | deregMode;
+    p | isRegistered;
+    PUParray(p, layerInfo,
+             CMK_COMMON_NOCOPY_DIRECT_BYTES + CMK_NOCOPY_DIRECT_BYTES);
+  }
+#endif
 
   void memcpyGet(CmiNcpyBuffer &source);
   void memcpyPut(CmiNcpyBuffer &destination);

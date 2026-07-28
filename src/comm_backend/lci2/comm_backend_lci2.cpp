@@ -203,6 +203,9 @@ void CommBackendLCI2::init(char **argv) {
 }
 
 void CommBackendLCI2::exit() {
+  // Drop any still-registered memory regions before tearing the devices down;
+  // an open region makes fi_close(domain) fail with FI_EBUSY.
+  deregisterAllMemory();
   for (auto device : m_devices) {
     lci::free_device(&device);
   }
@@ -341,6 +344,10 @@ mr_t CommBackendLCI2::registerMemory(void *addr, size_t size) {
     mrs[i] =
         lci::register_memory_x(addr, size).device(m_devices[i])().get_impl();
   }
+  {
+    std::lock_guard<std::mutex> lock(m_liveMrsMutex);
+    m_liveMrs.insert(mrs);
+  }
   return mrs;
 }
 
@@ -357,12 +364,36 @@ size_t CommBackendLCI2::getRMR(mr_t mr, void *addr, size_t size) {
 }
 
 void CommBackendLCI2::deregisterMemory(mr_t mr_) {
+  {
+    std::lock_guard<std::mutex> lock(m_liveMrsMutex);
+    m_liveMrs.erase(mr_);
+  }
   lci::mr_t *mrs = (lci::mr_t *)mr_;
   for (int i = 0; i < m_devices.size(); i++) {
     lci::mr_t mr(mrs[i]);
     lci::deregister_memory(&mr);
   }
   delete[] mrs;
+}
+
+// Release any memory regions the application never handed back, e.g. buffers
+// registered with CK_BUFFER_NODEREG. Must run while the devices are still alive
+// (deregisterMemory walks m_devices), so exit() calls this before free_device.
+void CommBackendLCI2::deregisterAllMemory() {
+  std::unordered_set<void *> leftovers;
+  {
+    std::lock_guard<std::mutex> lock(m_liveMrsMutex);
+    leftovers.swap(m_liveMrs);
+  }
+  // Deregister outside the lock: deregisterMemory() takes it too.
+  for (void *mr : leftovers) {
+    lci::mr_t *mrs = (lci::mr_t *)mr;
+    for (int i = 0; i < m_devices.size(); i++) {
+      lci::mr_t m(mrs[i]);
+      lci::deregister_memory(&m);
+    }
+    delete[] mrs;
+  }
 }
 
 lci::device_t CommBackendLCI2::getThreadLocalDevice() {
