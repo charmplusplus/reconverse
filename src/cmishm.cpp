@@ -48,9 +48,24 @@ static std::pair<int, ipc_shared_*> openShared_(int node) {
     auto status = ftruncate(fd, size);
     CmiAssert(status >= 0);
   } else {
-    // otherwise just open it
+    // otherwise just open it -- but the segment becomes visible to
+    // shm_open the instant its creator's O_CREAT succeeds, before that
+    // creator has called ftruncate. Every rank races to open every
+    // segment name (including its own), so we may win this open before
+    // the true creator has resized the file; mmap-ing and touching it
+    // while it's still 0 bytes is a SIGBUS. Poll fstat until the size
+    // lands.
     fd = shm_open(name, O_RDWR, 0666);
     CmiAssert(fd >= 0);
+    struct stat st;
+    const int kMaxAttempts = 10000;  // ~1s at 100us/attempt
+    for (auto attempt = 0;; attempt++) {
+      CmiAssert(fstat(fd, &st) == 0);
+      if ((std::size_t)st.st_size >= size) break;
+      CmiEnforceMsg(attempt < kMaxAttempts,
+                    "timed out waiting for shm segment to be sized!");
+      usleep(100);
+    }
   }
   // then delete the name
   delete[] name;
@@ -71,10 +86,11 @@ struct CmiIpcManager : public ipc_metadata_ {
   CmiIpcManager(std::size_t key) : ipc_metadata_(key) {
     auto firstPe = CmiNodeFirst(CmiMyNode());
     auto thisRank = CmiPhysicalRank(firstPe);
-    // cache map size and node pid while CPV/CSV systems are valid
+    // cache map size while CPV/CSV systems are valid; node_pid_val is
+    // captured in openAllShared_ once the node pid is actually known
     this->mapped_size = CpvAccess(kSegmentSize) + sizeof(ipc_shared_);
     CsvInitialize(pid_t, node_pid);
-    this->node_pid_val = (std::size_t)CsvAccess(node_pid);
+    this->node_pid_val = 0;
     if (thisRank == 0) {
       if (sendPid_(this) == 1) {
         openAllShared_(this);
@@ -93,9 +109,11 @@ struct CmiIpcManager : public ipc_metadata_ {
       auto proc = pair.first;
       auto fd = pair.second;
       // only unmap if we have a valid pointer and a non-zero mapping size
-      auto it = this->shared.find(proc);
-      if (it != this->shared.end() && it->second != nullptr && map_size > 0) {
-        munmap(it->second, map_size);
+      auto* seg = (proc >= 0 && proc < (int)this->shared.size())
+                      ? this->shared[proc].load(std::memory_order_relaxed)
+                      : nullptr;
+      if (seg != nullptr && map_size > 0) {
+        munmap(seg, map_size);
       }
       // close the file if valid
       if (fd >= 0) close(fd);
@@ -118,6 +136,9 @@ static void openAllShared_(CmiIpcManager* meta) {
   CmiGetPesOnPhysicalNode(thisNode, &pes, &nPes);
   int nSize = CmiMyNodeSize();
   int nProcs = nPes / nSize;
+  // the node pid is known by now (set by sendPid_/nodePidHandler_);
+  // cache it for the destructor's shm_unlink
+  meta->node_pid_val = (std::size_t)CsvAccess(node_pid);
   // for each rank in this physical node:
   for (auto rank = 0; rank < nProcs; rank++) {
     // open its shared segment
@@ -128,7 +149,9 @@ static void openAllShared_(CmiIpcManager* meta) {
     if (proc == meta->mine) initIpcShared_(res.second);
     // store the retrieved data
     meta->fds[proc] = res.first;
-    meta->shared[proc] = res.second;
+    // release-store: publishes the mapped (and, for ours, initialized)
+    // segment to PE threads polling metadataReady_/CmiAllocIpcBlock
+    meta->shared[proc].store(res.second, std::memory_order_release);
   }
   DEBUGF(("%d> finished opening all shared\n", meta->mine));
 }

@@ -1347,6 +1347,9 @@ inline const std::size_t& CmiRecommendedIpcBlockCutoff(void) {
 
 CsvExtern(CmiIpcManager*, coreIpcManager_);
 
+/* Persistent communication */
+#include "persistent.h"
+
 /* Task Queue Macros */
 #include "taskqueue.h"
 CpvExtern(TaskQueue, CsdTaskQueue);

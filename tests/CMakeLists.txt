@@ -11,6 +11,7 @@ add_subdirectory(ping_ack)
 add_subdirectory(random)
 add_subdirectory(ring)
 add_subdirectory(startup)
+add_subdirectory(persistent)
 add_subdirectory(physical_nodes)
 add_subdirectory(reduction)
 add_subdirectory(rdma_pingpong)
@@ -20,6 +21,7 @@ add_subdirectory(task_queue)
 add_subdirectory(cth)
 add_subdirectory(self_send)
 add_subdirectory(ctv)
+add_subdirectory(ult_bench)
 
 # Add a test that configures, builds, and runs standalone_project
 add_test(NAME standalone_project_build_and_test

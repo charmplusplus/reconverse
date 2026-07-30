@@ -60,6 +60,18 @@ void ring_handler(void *msg) {
 }
 
 CmiStartFn mymain(int argc, char **argv){
+    /* The task queue is a build-time option (CMK_TASKQUEUE). When it is off,
+     * converseRunPe never creates the per-PE queue, so CsdTaskEnqueue would
+     * dereference a null queue. Skip the test instead. */
+    if (!CpvInitialized(CsdTaskQueue)) {
+      if (CmiMyRank() == 0) {
+        CmiPrintf("Task queue is disabled, skipping test "
+                  "(reconfigure with -DCMK_TASKQUEUE=ON to run it)\n");
+        CmiExit(0);
+      }
+      return 0;
+    }
+
     CpvInitialize(int, divideHandlerId);
     CpvAccess(divideHandlerId) = CmiRegisterHandler(divide_handler);
     CpvInitialize(int, ringHandlerId);

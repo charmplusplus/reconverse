@@ -11,6 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       LCI_ATTR_BACKEND: ofi
+      FI_PROVIDER: tcp
     name: Build and Test
 
     steps:

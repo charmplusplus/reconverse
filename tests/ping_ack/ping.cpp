@@ -17,16 +17,21 @@ CpvDeclare(double, process_time);
 CpvDeclare(double, send_time);
 
 int msg_count;
-#define nMSG_SIZE 3                   // if the msg_sizes are hard_coded, this should be the same as the length of the hard coded array
-#define nTRIALS_PER_SIZE 10
+#define MAX_MSG_SIZES 32              // upper bound on the number of sizes in the sweep
+#define DEFAULT_MIN_SIZE 16           // smallest payload (bytes), overridden by -min_size
+#define DEFAULT_MAX_SIZE 2048         // largest payload (bytes), overridden by -max_size
+#define DEFAULT_TRIALS 100            // iterations per msg size, overridden by -iterations
 #define CALCULATION_PRECISION 0.0001  // the decimal place that the output data is rounded to
 
-double total_time[nTRIALS_PER_SIZE];  // times are stored in us
-double process_time[nTRIALS_PER_SIZE];
-double send_time[nTRIALS_PER_SIZE];
+int nTRIALS_PER_SIZE;                 // iterations run per msg size
+int nMSG_SIZE;                        // number of msg sizes in the sweep
+
+double *total_time;                   // times are stored in us, nTRIALS_PER_SIZE entries each
+double *process_time;
+double *send_time;
 
 
-int msg_sizes[nMSG_SIZE] = {56, 4096, 65536}; // hard coded msg_size values
+int msg_sizes[MAX_MSG_SIZES];         // msg sizes on the wire (payload + header), filled by build_msg_sizes
 
 
 
@@ -61,8 +66,21 @@ double get_stdev(double arr[]) {
 double get_max(double arr[]) {
   double max = arr[0];
   for (int i = 1; i < nTRIALS_PER_SIZE; ++i)
-                if (arr[i] > arr[0]) max = arr[i];
+                if (arr[i] > max) max = arr[i];
         return max;
+}
+
+// Fills msg_sizes with payload sizes doubling from min_size up to max_size, adding the
+// converse header to each. Returns the number of sizes generated.
+int build_msg_sizes(int min_size, int max_size) {
+  int n = 0;
+  int size = min_size;
+  while (n < MAX_MSG_SIZES) {
+    msg_sizes[n++] = size + CmiMsgHeaderSizeBytes;
+    if (size > max_size / 2) break;  // doubling again would overshoot max_size (and could overflow)
+    size *= 2;
+  }
+  return n;
 }
 
 
@@ -253,12 +271,43 @@ void bigmsg_moduleinit(int argc, char **argv)
   CpvAccess(bigmsg_index) = CmiRegisterHandler(bigmsg_handler);
   CpvAccess(shortmsg_index) = CmiRegisterHandler(shortmsg_handler);
   CpvAccess(ackmsg_index) = CmiRegisterHandler(pe0_ack_handler);
-  CpvAccess(msg_size) = 16+CmiMsgHeaderSizeBytes;
   CpvAccess(trial) = 0;
   CpvAccess(round) = 0;
   CpvAccess(warmup_flag) = 1;
   msg_count = 100; // default msg count
   CmiGetArgInt(argv, "-msg_count", &msg_count);
+
+  int min_size = DEFAULT_MIN_SIZE;
+  int max_size = DEFAULT_MAX_SIZE;
+  nTRIALS_PER_SIZE = DEFAULT_TRIALS;
+  CmiGetArgInt(argv, "-min_size", &min_size);
+  CmiGetArgInt(argv, "-max_size", &max_size);
+  CmiGetArgInt(argv, "-iterations", &nTRIALS_PER_SIZE);
+
+  if (min_size < (int)sizeof(int) || max_size < min_size || nTRIALS_PER_SIZE < 1) {
+    if (CmiMyPe() == 0)
+      CmiPrintf("Error: need -min_size >= %d, -max_size >= min_size, and -iterations >= 1 "
+                "(got min_size=%d, max_size=%d, iterations=%d), exiting\n",
+                (int)sizeof(int), min_size, max_size, nTRIALS_PER_SIZE);
+    CmiExit(1);
+  }
+
+  nMSG_SIZE = build_msg_sizes(min_size, max_size);
+  int largest = msg_sizes[nMSG_SIZE - 1] - CmiMsgHeaderSizeBytes;
+  if (CmiMyPe() == 0 && largest <= max_size / 2)
+    CmiPrintf("note: sweep truncated to the %d size limit, largest payload is %d bytes\n",
+              MAX_MSG_SIZES, largest);
+
+  CpvAccess(msg_size) = msg_sizes[0];
+
+  // only PE-0 records and reports the timings
+  if (CmiMyPe() == 0) {
+    total_time = new double[nTRIALS_PER_SIZE];
+    process_time = new double[nTRIALS_PER_SIZE];
+    send_time = new double[nTRIALS_PER_SIZE];
+    CmiPrintf("Running %d iterations of %d msgs for payloads %d..%d bytes (%d sizes)\n",
+              nTRIALS_PER_SIZE, msg_count, min_size, largest, nMSG_SIZE);
+  }
 
 
   // Set runtime cpuaffinity

@@ -416,6 +416,7 @@ void CmiInitState(int rank) {
   CsvAccess(coreIpcManager_) = nullptr;
   #endif
   CmiOnesidedDirectInit();
+  CmiPersistentInit();
   CcdModuleInit();
   CpvInitialize(Queue, CsdSchedQueue);
   CpvAccess(CsdSchedQueue) = (Queue)malloc(sizeof(QueueImpl));
@@ -553,16 +554,30 @@ void CmiFree(void *msg) {
   void *parentBlk = CmiAllocFindEnclosing(msg);
   int refCount = REFFIELDDEC(parentBlk);
 
+  // Persistent receive buffers carry a reference count biased above
+  // CMK_PERSISTENT_REFBASE. They belong to their channel, not to the
+  // allocator, so releasing the last reference hands the buffer back to its
+  // sender instead of freeing memory.
+  if (refCount > CMK_PERSISTENT_REFBASE) {
+    if (refCount == CMK_PERSISTENT_REFBASE + 1)
+      CmiPersistentReleaseBuffer(parentBlk);
+    return;
+  }
+
   // TODO: does this make sense??
   // if(refCount==0) /* Logic error: reference count shouldn't already have been
   // zero */
   //   CmiAbort("CmiFree reference count was zero-- is this a duplicate free?");
 
+  if (refCount == 1) {
   #ifdef CMK_USE_SHMEM
     // we should only free _our_ IPC blocks -- so calling CmiFree on
     // an IPC block issued by another process will cause a bad free!
     // (note -- this would only occur if you alloc an ipc block then
     //          decide not to send it; that should be avoided! )
+    // NOTE: this must only happen once the last reference drops --
+    // recycling the block into the shared free list while other
+    // references remain lets two senders allocate the same block.
     CmiIpcBlock* ipc;
     auto* manager = CsvAccess(coreIpcManager_);
     if (msg && (ipc = CmiIsIpcBlock(manager, BLKSTART(msg), CmiMyNode()))) {
@@ -571,7 +586,6 @@ void CmiFree(void *msg) {
     }
   #endif
 
-  if (refCount == 1) {
     //free(BLKSTART(parentBlk));
     comm_backend::free(parentBlk);
   }
@@ -594,6 +608,15 @@ void CmiSyncSend(int destPE, int messageSize, void *msg) {
 }
 
 void CmiSyncSendAndFree(int destPE, int messageSize, void *msg) {
+  // A handle array installed by CmiUsePersistentHandle() routes this send
+  // through a persistent channel, unless the channel cannot carry it.
+  if (CpvAccess(phs) != nullptr &&
+      CmiPersistentHandleSend(destPE, messageSize, msg))
+    return;
+  CmiSyncSendAndFreeNoPersistent(destPE, messageSize, msg);
+}
+
+void CmiSyncSendAndFreeNoPersistent(int destPE, int messageSize, void *msg) {
   CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
 
   header->destPE = destPE;
