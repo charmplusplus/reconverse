@@ -185,7 +185,7 @@ void CsdScheduler() {
       comm_backend::progress();
     }
 
-    CcdCallBacks();
+    CsdPeriodic();
 
   }
 }
@@ -203,7 +203,7 @@ void CsdSchedulePoll() {
 
   while(1){
 
-    CcdCallBacks();
+    CsdPeriodic();
 
     CcdRaiseCondition(CcdSCHEDLOOP);
 
