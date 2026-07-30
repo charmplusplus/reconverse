@@ -8,6 +8,30 @@ extern std::vector<QueuePollHandler> g_handlers; //list of handlers
 extern Groups g_groups; //groups of handlers by index
 CpvExtern(QueuePollHandlerFn *, poll_handlers);
 
+// One trip around the polling table is ARRAY_SIZE scheduler iterations, so
+// re-balance every ADAPT_PERIOD_CYCLES * ARRAY_SIZE iterations.
+#define ADAPT_INTERVAL ((uint64_t)ARRAY_SIZE * ADAPT_PERIOD_CYCLES)
+
+// Sweep the table starting at `start`, stopping as soon as a handler reports it
+// did work, so a message never waits for the loop counter to rotate back around
+// to its slot.  Whichever queue produced the message gets the credit, which is
+// what the adaptation later apportions slots from.
+static inline bool pollOnce(PollTable *pt, uint64_t start) {
+  for (unsigned t = 0; t < ARRAY_SIZE; ++t) {
+    unsigned idx = static_cast<unsigned>((start + t) & (ARRAY_SIZE - 1));
+    int owner = pt->owner[idx];
+    if (owner >= 0) pt->polls[owner]++;
+    if (pt->slots[idx]()) {
+      if (owner >= 0) {
+        pt->counts[owner]++;
+        pt->lifetime[owner]++;
+      }
+      return true;
+    }
+  }
+  return false;
+}
+
 static inline void releaseIdle() {
   if (CmiGetIdle()) {
     CmiSetIdle(false);
@@ -110,17 +134,32 @@ bool pollTaskQueue() {
 }
 #endif
 
-void CmiQueueRegisterInitThread() {
+void CmiQueueRegisterInitThread(char **argv) {
   std::vector<std::pair<QueuePollHandlerFn, unsigned int>> handlers;
+  std::vector<std::string> names;
+
   handlers.push_back(std::make_pair(pollConverseNodeQueue, 1));
+  names.push_back("nodeq");
   handlers.push_back(std::make_pair(pollConverseThreadQueue, 16));
+  names.push_back("threadq");
   handlers.push_back(std::make_pair(pollNodePrioQueue, 1));
+  names.push_back("nodeprio");
   handlers.push_back(std::make_pair(pollThreadPrioQueue, 16));
-  handlers.push_back(std::make_pair(pollProgress, 4));
+  names.push_back("threadprio");
+
+  // Within a single process there is nothing for the network backend to
+  // progress, and pollProgress never reports work, so it would sit in the
+  // table holding its guaranteed slot and cost a call per trip.
+  // +no_progress_polling leaves it unregistered.
+  if (!CmiGetArgFlag(argv, "+no_progress_polling")) {
+    handlers.push_back(std::make_pair(pollProgress, 4));
+    names.push_back("progress");
+  }
 #if CMK_TASKQUEUE
   handlers.push_back(std::make_pair(pollTaskQueue, 1));
+  names.push_back("taskq");
 #endif
-  add_list_of_handlers(handlers);
+  add_list_of_handlers(handlers, names, argv);
 }
 
 //will add queue polling functions
@@ -153,19 +192,18 @@ void CsdScheduler() {
           CmiDeliverIpcBlockMsg(block);
         }
     #endif
-    //poll queues: sweep forward from idx until work is found or a full
-    //cycle of the table has been checked, so a message doesn't have to
-    //wait for loop_counter to rotate back around to its slot
-    bool workDone = false;
-    for (unsigned t = 0; t < ARRAY_SIZE && !workDone; ++t) {
-      unsigned idx = static_cast<unsigned>((loop_counter + t) & 63ULL);
-      workDone = CpvAccess(poll_handlers)[idx]();
-    }
+    PollTable *pt = CpvAccess(poll_table);
+    bool workDone = pollOnce(pt, loop_counter);
     if(!workDone) {
       setIdle();
     }
     CcdCallBacks();
     loop_counter++;
+
+    // Re-apportion slots from what each queue actually delivered.
+    if (pt->adaptive && (loop_counter % ADAPT_INTERVAL) == 0) {
+      pollTableAdapt(pt);
+    }
 
   }
 }
@@ -180,14 +218,8 @@ void CsdSchedulePoll() {
   while(1){
 
     CcdRaiseCondition(CcdSCHEDLOOP);
-    //poll queues: sweep the full table before concluding it's empty, so
-    //a message doesn't have to wait for loop_counter to rotate back
-    //around to its slot
-    bool workDone = false;
-    for (unsigned t = 0; t < ARRAY_SIZE && !workDone; ++t) {
-      unsigned idx = static_cast<unsigned>((loop_counter + t) & 63ULL);
-      workDone = CpvAccess(poll_handlers)[idx]();
-    }
+    PollTable *pt = CpvAccess(poll_table);
+    bool workDone = pollOnce(pt, loop_counter);
     if(!workDone) {
       //swept the whole table and every slot was empty: done
       setIdle();
@@ -195,6 +227,10 @@ void CsdSchedulePoll() {
     }
     CcdCallBacks();
     loop_counter++;
+
+    if (pt->adaptive && (loop_counter % ADAPT_INTERVAL) == 0) {
+      pollTableAdapt(pt);
+    }
 
   }
 }

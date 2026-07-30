@@ -1382,4 +1382,30 @@ int ProcessLocalTasks(void);
 #define CsdTaskEnqueue(x) TaskQueuePushLocal((void*)(x))
 #define CsdTaskPop() TaskQueuePopLocal()
 
+/* ------------------------------------------------------------------------
+   Adaptive queue polling (register-queues).
+
+   The scheduler walks a fixed table of slots, each holding a queue-polling
+   function; how many slots a queue holds is how often it gets polled.  Each PE
+   counts the messages it pulls per queue and periodically re-apportions the
+   table from those counts, so the polling mix follows the traffic mix.  Every
+   registered queue keeps at least one slot.
+
+   These accessors report this PE's table; they are for benchmarks and
+   debugging, not the hot path.
+   ------------------------------------------------------------------------ */
+#ifdef __cplusplus
+extern "C" {
+#endif
+int CmiPollingNumQueues(void);       /* number of registered queues */
+int CmiPollingSlots(int i);          /* slots queue i currently holds */
+const char *CmiPollingName(int i);   /* name of queue i */
+long long CmiPollingCount(int i);    /* messages pulled from queue i so far */
+long long CmiPollingAdjustments(void); /* re-balances performed on this PE */
+int CmiPollingAdaptive(void);        /* nonzero if adaptation is enabled */
+void CmiPollingDump(const char *tag);
+#ifdef __cplusplus
+}
+#endif
+
 #endif // CONVERSE_H

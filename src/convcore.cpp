@@ -137,7 +137,7 @@ void converseRunPe(int rank, int everReturn) {
   CmiTaskQueueInit();
   #endif
 
-  CmiQueueRegisterInitThread();
+  CmiQueueRegisterInitThread(CmiMyArgv);
 
   // init things like cld module, ccs, etc
   CldModuleInit(CmiMyArgv);

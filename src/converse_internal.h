@@ -72,7 +72,7 @@ void CmiSyncSendAndFreeNoPersistent(int destPE, int messageSize, void *msg);
 
 //queue reg init
 void CmiQueueRegisterInit(void);
-void CmiQueueRegisterInitThread(void); 
+void CmiQueueRegisterInitThread(char **argv);
 
 // node queue
 ConverseNodeQueue<void *> *CmiGetNodeQueue();
