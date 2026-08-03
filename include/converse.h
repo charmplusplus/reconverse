@@ -160,6 +160,29 @@ extern CmiNodeLock CmiMemLock_lock;
 
 // End of NOTE
 
+// Portable thread-local storage specifier.
+// NOTE: 'thread_local' is a keyword in C++11 and in C23, but in C11/C17 the
+// keyword is spelled '_Thread_local' ('thread_local' is only a macro provided
+// by <threads.h>).  This header is included by C sources that are compiled as
+// C17 (GKlib, for instance), so the bare keyword cannot be used here.
+#ifdef __cplusplus
+#define CMI_THREAD_LOCAL thread_local
+#elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 202311L
+// C23 has thread_local
+#define CMI_THREAD_LOCAL thread_local
+#elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+// C11 has _Thread_local
+#define CMI_THREAD_LOCAL _Thread_local
+#elif defined(__GNUC__) || defined(__clang__)
+#define CMI_THREAD_LOCAL __thread
+#elif defined(_MSC_VER)
+// MSVC
+#define CMI_THREAD_LOCAL __declspec(thread)
+#else
+// Fallback - no thread-local storage (may cause issues on some platforms)
+#define CMI_THREAD_LOCAL
+#endif
+
 typedef void (*CmiHandler)(void *msg);
 typedef void (*CmiHandlerEx)(void *msg, void *userPtr); // ignore for now
 
@@ -665,7 +688,7 @@ int CcdNumTimerCBs(void);
 
 /* Countdown to the next CcdCallBacks(), maintained adaptively by
    CcdCallBacks() itself so that it fires at roughly CCD_DEFAULT_RESOLUTION. */
-extern thread_local int _ccd_numchecks;
+extern CMI_THREAD_LOCAL int _ccd_numchecks;
 
 /* The scheduler's periodic hook.
  *
