@@ -33,6 +33,7 @@
 
 #include <converse.h>
 #include <stdlib.h>
+#include <string.h>
 
 CpvDeclare(int, nCycles);
 CpvDeclare(int, minMsgSize);
@@ -51,6 +52,29 @@ CpvStaticDeclare(double, endTime);
 
 /* The channel from this PE to the other one. */
 CpvStaticDeclare(PersistentHandle, toOther);
+
+/* -freshbuf: allocate a new message for each reply instead of forwarding the
+   one that was received.
+   The default (forwarding) is what the non-persistent pingpong does and what
+   the persistent API documents as the way to release a received buffer, but
+   in a pingpong the buffer being forwarded belongs to the PEER's channel and
+   goes back out on this PE's own channel.  That cross-channel reuse is the
+   one thing this benchmark does that the repo's persistent test does not, and
+   it faults when LCI's shared-memory transport is enabled.  This flag isolates
+   it. */
+CpvStaticDeclare(int, freshBuf);
+
+/* Hand back the received buffer and return a fresh one carrying the same
+   payload size, so the reply never leaves a peer-owned buffer. */
+static char *replyBuffer(char *msg, int size) {
+  if (!CpvAccess(freshBuf))
+    return msg;
+  char *fresh = (char *)CmiAlloc(size);
+  memcpy(fresh + CmiMsgHeaderSizeBytes, msg + CmiMsgHeaderSizeBytes,
+         sizeof(int));
+  CmiFree(msg);
+  return fresh;
+}
 
 /* Extra room beyond the largest payload, so one channel covers the whole
    sweep and the buffers are never resized mid-run. */
@@ -144,6 +168,7 @@ CmiHandler node0HandlerFunc(char *msg) {
     CpvAccess(endTime) = CmiWallTimer();
     ringFinished(msg);
   } else {
+    msg = (char *)replyBuffer(msg, CpvAccess(msgSize));
     CmiSetHandler(msg, CpvAccess(node1Handler));
     *((int *)(msg + CmiMsgHeaderSizeBytes)) = CpvAccess(msgSize);
     sendPersistent(1, CpvAccess(msgSize), msg);
@@ -154,6 +179,7 @@ CmiHandler node0HandlerFunc(char *msg) {
 CmiHandler node1HandlerFunc(char *msg) {
   CpvAccess(msgSize) = *((int *)(msg + CmiMsgHeaderSizeBytes));
 
+  msg = (char *)replyBuffer(msg, CpvAccess(msgSize));
   if (CpvAccess(warmUp)) {
     CmiSetHandler(msg, CpvAccess(warmUpDoneHandler));
     CpvAccess(warmUp) = false;
@@ -190,6 +216,8 @@ CmiStartFn mymain(int argc, char *argv[]) {
   CpvInitialize(bool, warmUp);
   CpvInitialize(PersistentHandle, toOther);
   CpvAccess(toOther) = NULL;
+  CpvInitialize(int, freshBuf);
+  CpvAccess(freshBuf) = CmiGetArgFlag(argv, "-freshbuf");
 
   // Register Handlers
   CpvInitialize(int, warmUpDoneHandler);
