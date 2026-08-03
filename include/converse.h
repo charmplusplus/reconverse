@@ -659,6 +659,39 @@ void CcdCancelCallOnConditionKeep(int condnum, int idx);
 void CcdRaiseCondition(int condnum);
 void CcdCallBacks(void);
 
+/* How many callbacks are timer-based.  If none are, CcdCallBacks() has no
+   work to do and the scheduler can skip it outright. */
+int CcdNumTimerCBs(void);
+
+/* Countdown to the next CcdCallBacks(), maintained adaptively by
+   CcdCallBacks() itself so that it fires at roughly CCD_DEFAULT_RESOLUTION. */
+extern thread_local int _ccd_numchecks;
+
+/* The scheduler's periodic hook.
+ *
+ * Calling CcdCallBacks() unconditionally on every trip round the scheduler
+ * loop -- which is what this used to do -- costs a CmiWallTimer() (a clock
+ * read, ~60 ns on Delta) plus a heap probe every iteration, whether or not any
+ * timer callback exists.  For a program that registers none, which includes
+ * every Task Bench run, that is pure overhead on the hottest loop in the
+ * runtime.
+ *
+ * Both guards matter and they do different jobs.  The first collapses the
+ * whole thing to one predictable branch when nothing is timer-based.  The
+ * second bounds the cost when something is: CcdCallBacks() retunes
+ * _ccd_numchecks so the clock is read about every CCD_DEFAULT_RESOLUTION
+ * rather than every iteration.
+ *
+ * Ported from the original Converse (charm/src/conv-core/converse.h). */
+#define CsdPeriodic()                                                          \
+  do {                                                                         \
+    if ((CcdNumTimerCBs() > 0) && (_ccd_numchecks-- <= 0)) {                   \
+      CcdCallBacks();                                                          \
+    }                                                                          \
+  } while (0)
+
+#define CsdResetPeriodic() (_ccd_numchecks = 0)
+
 #define CQS_QUEUEING_FIFO 2
 #define CQS_QUEUEING_LIFO 3
 #define CQS_QUEUEING_IFIFO 4
