@@ -668,12 +668,18 @@ void CmiInterFreeSendFn(int destPE, int partition, int messageSize, char *msg) {
 
 // EXIT TOOLS
 
+// The status travels in the payload, not in the header's collectiveMetaInfo:
+// that field belongs to whichever collective is carrying the message, and the
+// broadcast below overwrites it with the spanning tree root.
+struct CmiExitMsg {
+  CmiMessageHeader header;
+  int status;
+};
+
 void CmiExitHelper(int status) {
-  CmiMessageHeader *exitMsg = (CmiMessageHeader *)CmiAlloc(
-      CmiMsgHeaderSizeBytes); // might need to allocate
-  exitMsg->handlerId = Cmi_exitHandler;
-  exitMsg->collectiveMetaInfo =
-      status; // use collectiveMetaInfo to pass exit status
+  CmiExitMsg *exitMsg = (CmiExitMsg *)CmiAlloc(sizeof(CmiExitMsg));
+  exitMsg->header.handlerId = Cmi_exitHandler;
+  exitMsg->status = status;
   CmiSyncBroadcastAllAndFree(sizeof(*exitMsg), exitMsg);
 }
 
@@ -798,8 +804,7 @@ void CmiAssignOnce(int *variable, int value) {
 void CsdExitScheduler() { CmiGetState()->stopFlag = 1; }
 
 void CmiExitHandler(void *msg) {
-  CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
-  int status = header->collectiveMetaInfo;
+  int status = static_cast<CmiExitMsg *>(msg)->status;
 
   if (status == 1)
     abort();

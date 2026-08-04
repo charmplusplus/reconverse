@@ -203,8 +203,8 @@ typedef struct Header {
   CmiInt2 handlerId;
   CmiUInt4 destPE; // global ID of destination PE
   int messageSize;
-  // used for bcast (bcast source pe/node), multicast (group id), reductions
-  // (reduction id)
+  // used for bcast (the node the broadcast is rooted at), multicast (group id),
+  // reductions (reduction id)
   CmiUInt4 collectiveMetaInfo;
   // used for special ops (bcast, reduction, multicast) when the handler field
   // is repurposed
