@@ -25,160 +25,233 @@ void collectiveInit(void) {
   CmiReductionsInit();
 }
 
+/************* Broadcasts ***************/
+
+#if SPANTREE
+
+/* The broadcast spanning tree is rooted at the *sender*, not at node 0.
+ *
+ * Nodes are numbered relative to the root, rel = (node - root) mod CmiNumNodes(),
+ * so the sender is always rel 0, and the tree is the ordinary arity-CST_W tree
+ * over rel. Every node still appears exactly once, and the sender is able to
+ * push the message out itself instead of mailing it to node 0 and waiting for
+ * node 0 to relay it.
+ *
+ * That property is what makes broadcast usable during startup. A relay hop only
+ * runs when the relaying PE reaches the scheduler, and a broadcaster frequently
+ * does not go back to the scheduler after broadcasting: Charm++'s
+ * _sendReadonlies() broadcasts and then calls _initDone(), which blocks in
+ * CmiNodeBarrier() until every other PE has received that same broadcast.
+ * Routing through a fixed root made the sender its own relay whenever it was
+ * the root, so the message sat in its queue and the run deadlocked.
+ *
+ * Within a node the message is handed to peers directly rather than through a
+ * second tree. Peers receive it with the user's handler already restored, so
+ * they are leaves and do no forwarding; only the PE that a node's copy first
+ * lands on (rank 0, or the sender itself on the root node) relays onward.
+ */
+
+// Send to the child nodes of my node in the tree rooted at rootNode. sendFn
+// performs the delivery, so this serves both the PE-level broadcast (which
+// targets rank 0 of each child node) and the node-level broadcast.
+template <typename SendFn>
+static void CmiSpanTreeForwardToNodes(int rootNode, SendFn &&sendFn) {
+  const int numNodes = CmiNumNodes();
+  int rel = CmiMyNode() - rootNode;
+  if (rel < 0)
+    rel += numNodes;
+
+  for (int i = 0; i < CST_W; i++) {
+    const int64_t childRel = (int64_t)rel * CST_W + i + 1;
+    if (childRel >= numNodes)
+      break;
+    int childNode = (int)childRel + rootNode;
+    if (childNode >= numNodes)
+      childNode -= numNodes;
+    sendFn(childNode);
+  }
+}
+
+// Hand the message to every other PE on my node. They receive it with the
+// user's handler, not the broadcast handler, so they do not forward it again.
+static void CmiBcastSendToPeers(void *msg, int size) {
+  const int nodeSize = CmiMyNodeSize();
+  if (nodeSize <= 1)
+    return;
+
+  CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
+  const int first = CmiNodeFirst(CmiMyNode());
+  const int myRank = CmiMyRank();
+
+  const CmiInt2 forwardHandler = header->handlerId;
+  header->handlerId = header->swapHandlerId;
+  for (int r = 0; r < nodeSize; r++) {
+    if (r != myRank)
+      CmiSyncSend(first + r, size, msg);
+  }
+  header->handlerId = forwardHandler;
+}
+
+// One relay step of a PE-level broadcast, performed by whichever PE currently
+// holds msg. Expects handlerId == Cmi_bcastHandler and swapHandlerId == the
+// user's handler.
+static void CmiBcastForward(void *msg, int size) {
+  CmiSpanTreeForwardToNodes((int)CmiGetBcastRoot(msg), [&](int childNode) {
+    CmiSyncSend(CmiNodeFirst(childNode), size, msg);
+  });
+  CmiBcastSendToPeers(msg, size);
+}
+
+// One relay step of a node-level broadcast.
+static void CmiNodeBcastForward(void *msg, int size) {
+  CmiSpanTreeForwardToNodes((int)CmiGetBcastRoot(msg), [&](int childNode) {
+    CmiSyncNodeSend(childNode, size, msg);
+  });
+}
+
+#endif
+
 /* Broadcast to everyone but the source pe. Source does not free. */
 void CmiSyncBroadcast(int size, void *msg) {
-    DEBUGF("[%d] CmiSyncBroadcast\n", CmiMyPe());
-    int pe = CmiMyPe();
-  
-    CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
-    header->messageSize = size;
-  
-  #if SPANTREE
-    DEBUGF("[%d] Spanning tree option\n", CmiMyPe());
-    CmiSetBcastSource(msg, pe); // used to skip the source
-    header->swapHandlerId = header->handlerId;
-    header->handlerId = Cmi_bcastHandler;
-    CmiSyncSend(0, size, msg);
-  #else
-    for (int i = pe + 1; i < CmiNumPes(); i++)
-        CmiSyncSend(i, size, msg);
-  
-    for (int i = 0; i < pe; i++)
-      CmiSyncSend(i, size, msg);
-  #endif
-  }
-  
-  void CmiSyncBroadcastAndFree(int size, void *msg) {
-    CmiSyncBroadcast(size, msg);
-    CmiFree(msg);
-  }
-  
-  void CmiSyncBroadcastAll(int size, void *msg) {
-    DEBUGF("[%d] CmiSyncBroadcastAll\n", CmiMyPe());
-    CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
-    header->messageSize = size;
-  
-  #if SPANTREE
-    CmiSetBcastSource(msg, -1); // don't skip the source
-    header->swapHandlerId = header->handlerId;
-  
-    header->handlerId = Cmi_bcastHandler;
-    CmiSyncSend(0, size, msg);
-  #else
-    for (int i = 0; i < CmiNumPes(); i++)
-      CmiSyncSend(i, size, msg);
-  #endif
-  }
-  
-  void CmiSyncBroadcastAllAndFree(int size, void *msg) {
-    CmiSyncBroadcastAll(size, msg);
-    CmiFree(msg);
-  }
-  
-  void CmiWithinNodeBroadcast(int size, void *msg) {
-    for (int i = 0; i < CmiMyNodeSize(); i++) {
-      int destPe = CmiMyNode() * CmiMyNodeSize() + i;
-      CmiSyncSend(destPe, size, msg);
-    }
-  }
-  
-  void CmiSyncNodeBroadcast(unsigned int size, void *msg) {
+  DEBUGF("[%d] CmiSyncBroadcast\n", CmiMyPe());
+  int pe = CmiMyPe();
 
-    int node = CmiMyNode();
-  
-    CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
-    header->messageSize = size;
-  
-  #if SPANTREE
-    CmiSetBcastSource(msg, node); // used to skip the source
-    header->swapHandlerId = header->handlerId;
-    header->handlerId = Cmi_nodeBcastHandler;
-    CmiSyncNodeSend(0, size, msg);
-  #else
-  
-    for (int i = node + 1; i < CmiNumNodes(); i++)
-      CmiSyncNodeSend(i, size, msg);
-  
-    for (int i = 0; i < node; i++)
-      CmiSyncNodeSend(i, size, msg);
-  #endif
+  CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
+  header->messageSize = size;
+
+#if SPANTREE
+  DEBUGF("[%d] Spanning tree option\n", CmiMyPe());
+  CmiSetBcastRoot(msg, CmiMyNode());
+  header->swapHandlerId = header->handlerId;
+  header->handlerId = Cmi_bcastHandler;
+  CmiBcastForward(msg, size);
+  // The caller still owns msg and may keep using it, so hand it back unchanged.
+  header->handlerId = header->swapHandlerId;
+#else
+  for (int i = pe + 1; i < CmiNumPes(); i++)
+    CmiSyncSend(i, size, msg);
+
+  for (int i = 0; i < pe; i++)
+    CmiSyncSend(i, size, msg);
+#endif
+}
+
+void CmiSyncBroadcastAndFree(int size, void *msg) {
+  CmiSyncBroadcast(size, msg);
+  CmiFree(msg);
+}
+
+void CmiSyncBroadcastAll(int size, void *msg) {
+  DEBUGF("[%d] CmiSyncBroadcastAll\n", CmiMyPe());
+  CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
+  header->messageSize = size;
+
+#if SPANTREE
+  // Queue our own copy first, with the user's handler still in place, exactly
+  // as the non-spanning-tree path does. Delivering it inline instead would run
+  // the handler reentrantly inside the broadcast.
+  CmiSyncSend(CmiMyPe(), size, msg);
+  CmiSyncBroadcast(size, msg);
+#else
+  for (int i = 0; i < CmiNumPes(); i++)
+    CmiSyncSend(i, size, msg);
+#endif
+}
+
+void CmiSyncBroadcastAllAndFree(int size, void *msg) {
+  CmiSyncBroadcastAll(size, msg);
+  CmiFree(msg);
+}
+
+void CmiWithinNodeBroadcast(int size, void *msg) {
+  for (int i = 0; i < CmiMyNodeSize(); i++) {
+    int destPe = CmiMyNode() * CmiMyNodeSize() + i;
+    CmiSyncSend(destPe, size, msg);
   }
-  
-  void CmiSyncNodeBroadcastAndFree(unsigned int size, void *msg) {
-    CmiSyncNodeBroadcast(size, msg);
-    CmiFree(msg);
-  }
-  
-  void CmiSyncNodeBroadcastAll(unsigned int size, void *msg) {
-    CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
-    header->messageSize = size;
-  
-  #if SPANTREE
-    CmiSetBcastSource(msg, -1); // don't skip the source
-    header->swapHandlerId = header->handlerId;
-    header->handlerId = Cmi_nodeBcastHandler;
-    CmiSyncNodeSend(0, size, msg);
-  #else
-  
-    for (int i = 0; i < CmiNumNodes(); i++)
-      CmiSyncNodeSend(i, size, msg);
-  #endif
-  }
-  
-  void CmiSyncNodeBroadcastAllAndFree(unsigned int size, void *msg) {
-    CmiSyncNodeBroadcastAll(size, msg);
-    CmiFree(msg);
-  }
-  
-  /* Handler for broadcast via the spanning tree. */
-  void CmiBcastHandler(void *msg) {
-    int mype = CmiMyPe();
-    int numChildren = CmiNumSpanTreeChildren(mype);
-    int children[numChildren];
-    CmiSpanTreeChildren(mype, children);
-  
-    CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
-  
-    // send broadcast to all children
-    for (int i = 0; i < numChildren; i++) {
-      CmiSyncSend(children[i], header->messageSize, msg);
-    }
-  
-    // call handler locally (unless I am source of broadcast, and bcast is
-    // exclusive)
-    if (CmiGetBcastSource(msg) != mype) {
-      CmiCallHandler(header->swapHandlerId, msg);
-    }
-  }
-  
-  /* Handler for node broadcast via the spanning tree. */
-  void CmiNodeBcastHandler(void *msg) {
-    int mynode = CmiMyNode();
-    int numChildren = CmiNumNodeSpanTreeChildren(mynode);
-    int children[numChildren];
-    CmiNodeSpanTreeChildren(mynode, children);
-  
-    CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
-  
-    // send broadcast to node children
-    for (int i = 0; i < numChildren; i++) {
-      CmiSyncNodeSend(children[i], header->messageSize, msg);
-    }
-  
-    if (CmiGetBcastSource(msg) != mynode) {
-      CmiCallHandler(header->swapHandlerId, msg);
-    }
-  }
-  
-  void CmiSetBcastSource(void *msg, CmiBroadcastSource source) {
-    CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
-    header->collectiveMetaInfo = source;
-  }
-  
-  CmiBroadcastSource CmiGetBcastSource(void *msg) {
-    CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
-    return header->collectiveMetaInfo;
-  }
+}
+
+void CmiSyncNodeBroadcast(unsigned int size, void *msg) {
+
+  int node = CmiMyNode();
+
+  CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
+  header->messageSize = size;
+
+#if SPANTREE
+  CmiSetBcastRoot(msg, node);
+  header->swapHandlerId = header->handlerId;
+  header->handlerId = Cmi_nodeBcastHandler;
+  CmiNodeBcastForward(msg, size);
+  header->handlerId = header->swapHandlerId;
+#else
+
+  for (int i = node + 1; i < CmiNumNodes(); i++)
+    CmiSyncNodeSend(i, size, msg);
+
+  for (int i = 0; i < node; i++)
+    CmiSyncNodeSend(i, size, msg);
+#endif
+}
+
+void CmiSyncNodeBroadcastAndFree(unsigned int size, void *msg) {
+  CmiSyncNodeBroadcast(size, msg);
+  CmiFree(msg);
+}
+
+void CmiSyncNodeBroadcastAll(unsigned int size, void *msg) {
+  CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
+  header->messageSize = size;
+
+#if SPANTREE
+  CmiSyncNodeSend(CmiMyNode(), size, msg);
+  CmiSyncNodeBroadcast(size, msg);
+#else
+
+  for (int i = 0; i < CmiNumNodes(); i++)
+    CmiSyncNodeSend(i, size, msg);
+#endif
+}
+
+void CmiSyncNodeBroadcastAllAndFree(unsigned int size, void *msg) {
+  CmiSyncNodeBroadcastAll(size, msg);
+  CmiFree(msg);
+}
+
+/* Handler for broadcast via the spanning tree. Runs on the first PE of each
+ * non-root node; the root node's copy is forwarded inline by the sender. */
+void CmiBcastHandler(void *msg) {
+#if SPANTREE
+  CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
+
+  // Forward before delivering: the user's handler takes ownership of msg.
+  CmiBcastForward(msg, header->messageSize);
+
+  header->handlerId = header->swapHandlerId;
+  CmiCallHandler(header->swapHandlerId, msg);
+#endif
+}
+
+/* Handler for node broadcast via the spanning tree. */
+void CmiNodeBcastHandler(void *msg) {
+#if SPANTREE
+  CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
+
+  CmiNodeBcastForward(msg, header->messageSize);
+
+  header->handlerId = header->swapHandlerId;
+  CmiCallHandler(header->swapHandlerId, msg);
+#endif
+}
+
+void CmiSetBcastRoot(void *msg, CmiBroadcastRoot root) {
+  CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
+  header->collectiveMetaInfo = root;
+}
+
+CmiBroadcastRoot CmiGetBcastRoot(void *msg) {
+  CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
+  return header->collectiveMetaInfo;
+}
 
 /************* Reductions ***************/
 
