@@ -1,7 +1,12 @@
 #include "converse_internal.h"
 // #include "queueing.h"
 #include "cldb.h"
+#include "scheduler.h"
 #include <stdlib.h>
+
+// rand has no queues of its own to poll.
+void CldAddPollHandlers(
+    std::vector<std::pair<QueuePollHandlerFn, unsigned int>> &) {}
 
 void LoadNotifyFn(int l) {}
 
