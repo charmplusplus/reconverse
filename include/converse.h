@@ -542,6 +542,10 @@ void* QueueTop(Queue q);
 CpvExtern(Queue, CsdSchedQueue);
 CsvExtern(Queue, CsdNodeQueue);
 CsvExtern(CmiNodeLock, CsdNodeQueueLock);
+/* Number of messages sitting in CsdNodeQueue. Maintained under CsdNodeQueueLock
+   but read without it, so that an idle PE can skip the lock entirely when the
+   queue is empty -- see CsdScheduler(). */
+CsvExtern(std::atomic<int>, CsdNodeQueueLen);
 void CqsEnqueueGeneral(Queue q, void *Message, int strategy, int priobits,
                          unsigned int *prioptr);
 #define CsdEnqueueGeneral(msg, strategy, priobits, prioptr) \
@@ -549,6 +553,7 @@ void CqsEnqueueGeneral(Queue q, void *Message, int strategy, int priobits,
 #define CsdNodeEnqueueGeneral(msg, strategy, priobits, prioptr) do { \
           CmiLock(CsvAccess(CsdNodeQueueLock)); \
           CqsEnqueueGeneral((Queue)CsvAccess(CsdNodeQueue),(msg),(strategy),(priobits),(prioptr)); \
+          CsvAccess(CsdNodeQueueLen).fetch_add(1, std::memory_order_relaxed); \
           CmiUnlock(CsvAccess(CsdNodeQueueLock)); \
         } while(0)
 
