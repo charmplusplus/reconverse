@@ -330,8 +330,10 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
   if (Cmi_mynode == 0)
   {
     std::string processType = (Cmi_numnodes == 1) ? "process" : "processes";
-      printf("Reconverse> Starting Reconverse with %d %s, %d PEs (1 PE = 1 thread), and %d PEs per process\n",
-           Cmi_numnodes, processType.c_str(), Cmi_npes, Cmi_mynodesize);
+    std::string peType = (Cmi_npes == 1) ? "PE" : "PEs";
+    std::string ppnType = (Cmi_mynodesize == 1) ? "PE per process" : "PEs per process";
+      printf("Reconverse> Starting Reconverse with %d %s, %d %s (1 PE = 1 thread), and %d %s\n",
+           Cmi_numnodes, processType.c_str(), Cmi_npes, peType.c_str(), Cmi_mynodesize, ppnType.c_str());
   }
   Cmi_nodestart = Cmi_mynode * Cmi_mynodesize;
   // register am handlers
