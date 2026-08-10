@@ -309,8 +309,8 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
   if (plusPorPPNSet)
     Cmi_npes = Cmi_mynodesize * Cmi_numnodes;
   if (Cmi_mynode == 0)
-    printf("Charm++> Running in SMP mode on %d nodes and %d PEs\n",
-           Cmi_numnodes, Cmi_npes);
+    printf("Reconverse> Starting Reconverse with %d processes, %d PEs (1 PE = 1 thread), and %d PEs per process\n",
+           Cmi_numnodes, Cmi_npes, Cmi_mynodesize);
   // Need to discuss this with the team
   if (Cmi_npes < Cmi_numnodes) {
     fprintf(stderr, "Error: Number of PEs must be greater than or equal to "
