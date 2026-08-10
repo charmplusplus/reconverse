@@ -274,25 +274,16 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
                   int initret) {
 
 
-  Cmi_npes = 1; // default to 1
-  int plusPeSet = CmiGetArgInt(argv, "+pe", &Cmi_npes); //total number of pes
-  int plusPorPPNSet = 0; // pes per process
-  int Cmi_mynodesize_p;
-  int Cmi_mynodesize_ppn;
-  int plusPSet = CmiGetArgInt(argv, "+p", &Cmi_mynodesize_p);
-  int plusPPNSet = CmiGetArgInt(argv, "+ppn", &Cmi_mynodesize_ppn);
-  if (plusPSet || plusPPNSet)
-  {
-    plusPorPPNSet = 1;
-    if (plusPPNSet && plusPSet) {
-      printf("warning: both +ppn and +p specified, using +ppn\n");
-      Cmi_mynodesize = Cmi_mynodesize_ppn;
-    }
-    else if (plusPPNSet)
-      Cmi_mynodesize = Cmi_mynodesize_ppn;
-    else
-      Cmi_mynodesize = Cmi_mynodesize_p;
-  } 
+  // Run size options. Exactly one of these may be given:
+  //   +pe <N>  : total number of PEs across all processes
+  //   +ppn <N> : number of PEs per process
+  //   +p <N>   : same as +ppn, kept for backward compatibility with Converse
+  // If none is given, we default to one PE per process.
+  int totalPes = 0;      // value of +pe
+  int pesPerProcess = 0; // value of +ppn or +p
+  int plusPeSet = CmiGetArgInt(argv, "+pe", &totalPes);
+  int plusPSet = CmiGetArgInt(argv, "+p", &pesPerProcess);
+  int plusPPNSet = CmiGetArgInt(argv, "+ppn", &pesPerProcess);
   Cmi_argvcopy = CmiCopyArgs(argv); // init for tracing
 
   comm_backend::init(argv);
@@ -301,32 +292,49 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
   comm_backend::barrier();
   Cmi_startTime = getCurrentTime();
   RDMAInit(argv);
-  if (plusPeSet && plusPorPPNSet && Cmi_npes != Cmi_mynodesize * Cmi_numnodes) {
-    fprintf(stderr,
-            "Error: +pe <N> and (+p/+ppn) <M> both set, but N != M * numnodes\n");
-    exit(1);
-  }
-  if (plusPorPPNSet)
-    Cmi_npes = Cmi_mynodesize * Cmi_numnodes;
-  if (Cmi_mynode == 0)
-    printf("Charm++> Running in SMP mode on %d nodes and %d PEs\n",
-           Cmi_numnodes, Cmi_npes);
-  // Need to discuss this with the team
-  if (Cmi_npes < Cmi_numnodes) {
-    fprintf(stderr, "Error: Number of PEs must be greater than or equal to "
-                    "number of nodes\n");
-    exit(1);
-  }
-  if (Cmi_npes % Cmi_numnodes != 0) {
-    fprintf(stderr,
-            "Error: Number of PEs must be a multiple of number of nodes\n");
+  // Validate the run size options. Every process runs the same checks, but only
+  // global PE 0 (rank 0 of node 0, which is this thread) reports the failure.
+  // All of these are fatal, so every process exits.
+  const char *sizeArgError = nullptr;
+  if (plusPeSet + plusPSet + plusPPNSet > 1)
+    sizeArgError = "only one of +pe, +ppn and +p may be specified";
+  else if (plusPeSet && totalPes < 1)
+    sizeArgError = "+pe must be at least 1";
+  else if ((plusPPNSet || plusPSet) && pesPerProcess < 1)
+    sizeArgError = "+ppn/+p must be at least 1";
+  else if (plusPeSet && totalPes < Cmi_numnodes)
+    // Need to discuss this with the team
+    sizeArgError =
+        "Number of PEs must be greater than or equal to number of nodes";
+  else if (plusPeSet && totalPes % Cmi_numnodes != 0)
+    sizeArgError = "Number of PEs must be a multiple of number of nodes";
+  if (sizeArgError != nullptr) {
+    if (Cmi_mynode == 0)
+      fprintf(stderr, "Error: %s\n", sizeArgError);
     exit(1);
   }
 
-  if (plusPeSet)
-    Cmi_mynodesize = Cmi_npes / Cmi_numnodes;
-  if (!plusPeSet && !plusPorPPNSet)
+  // Now that the number of processes is known, derive the total PE count and
+  // the per-process PE count from whichever option was given.
+  if (plusPeSet) {
+    Cmi_npes = totalPes;
+    Cmi_mynodesize = totalPes / Cmi_numnodes;
+  } else if (plusPPNSet || plusPSet) {
+    Cmi_mynodesize = pesPerProcess;
+    Cmi_npes = pesPerProcess * Cmi_numnodes;
+  } else {
     Cmi_mynodesize = 1;
+    Cmi_npes = Cmi_numnodes;
+  }
+
+  if (Cmi_mynode == 0)
+  {
+    std::string processType = (Cmi_numnodes == 1) ? "process" : "processes";
+    std::string peType = (Cmi_npes == 1) ? "PE" : "PEs";
+    std::string ppnType = (Cmi_mynodesize == 1) ? "PE per process" : "PEs per process";
+      printf("Reconverse> Starting Reconverse with %d %s, %d %s (1 PE = 1 thread), and %d %s\n",
+           Cmi_numnodes, processType.c_str(), Cmi_npes, peType.c_str(), Cmi_mynodesize, ppnType.c_str());
+  }
   Cmi_nodestart = Cmi_mynode * Cmi_mynodesize;
   // register am handlers
   g_amHandler = comm_backend::registerAmHandler(CommRemoteHandler);
