@@ -63,7 +63,7 @@
 
 // } NcpyOperationInfo;
 
-#if CMK_CUDA
+#if CMK_CUDA || CMK_HIP
 enum DeviceRecvType {
   DEVICE_RECV_TYPE_CHARM,
   DEVICE_RECV_TYPE_AMPI,
@@ -108,7 +108,7 @@ void setNcpyOpInfo(
     int destLayerSize, char *destAck, int destAckSize, size_t destSize,
     unsigned short int destRegMode, unsigned short int destDeregMode,
     unsigned short int isdestRegistered, int destPe, const void *destRef,
-    int rootNode, NcpyOperationInfo *ncpyOpInfo);
+    int rootNode, NcpyOperationInfo *ncpyOpInfo, void* deviceRdmaOpInfo);
 
 void resetNcpyOpInfoPointers(NcpyOperationInfo *ncpyOpInfo);
 

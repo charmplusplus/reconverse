@@ -39,6 +39,12 @@ if(RECONVERSE_TRY_ENABLE_COMM_LCI2)
       )
     endif()
     include(FetchContent)
+    if(RECONVERSE_ENABLE_CUDA)
+      set(LCI_USE_CUDA ON CACHE BOOL "Enable CUDA support in LCI" FORCE)
+    endif()
+    if(RECONVERSE_ENABLE_HIP)
+      set(LCI_USE_HIP ON CACHE BOOL "Enable HIP support in LCI" FORCE)
+    endif()
     FetchContent_Declare(
       lci
       GIT_REPOSITORY https://github.com/uiuc-hpc/lci.git
