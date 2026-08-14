@@ -544,8 +544,30 @@ CsvExtern(Queue, CsdNodeQueue);
 CsvExtern(CmiNodeLock, CsdNodeQueueLock);
 /* Number of messages sitting in CsdNodeQueue. Maintained under CsdNodeQueueLock
    but read without it, so that an idle PE can skip the lock entirely when the
-   queue is empty -- see CsdScheduler(). */
+   queue is empty -- see CsdScheduler().
+
+   Spelled std::atomic<int> to C++ and _Atomic int to C, because this header is
+   included by C translation units (GKlib's b64.c, for one) and std::atomic is
+   not C -- the same split CmiChunkHeader uses above for its refcount, and the
+   reason <stdatomic.h> is included at the top of this file. The two spellings
+   describe the same object: both are int-sized, int-aligned and lock-free, and
+   C11 and C++11 atomics share one ABI on every compiler this builds with.
+   CsdNodeQueueLenAdd/Get hide the syntax that genuinely differs, so callers
+   need no #ifdef of their own. */
+#ifdef __cplusplus
 CsvExtern(std::atomic<int>, CsdNodeQueueLen);
+#define CsdNodeQueueLenAdd(n)                                                  \
+  CsvAccess(CsdNodeQueueLen).fetch_add((n), std::memory_order_relaxed)
+#define CsdNodeQueueLenGet()                                                   \
+  CsvAccess(CsdNodeQueueLen).load(std::memory_order_relaxed)
+#else
+CsvExtern(_Atomic int, CsdNodeQueueLen);
+#define CsdNodeQueueLenAdd(n)                                                  \
+  atomic_fetch_add_explicit(&CsvAccess(CsdNodeQueueLen), (n),                  \
+                            memory_order_relaxed)
+#define CsdNodeQueueLenGet()                                                   \
+  atomic_load_explicit(&CsvAccess(CsdNodeQueueLen), memory_order_relaxed)
+#endif
 void CqsEnqueueGeneral(Queue q, void *Message, int strategy, int priobits,
                          unsigned int *prioptr);
 #define CsdEnqueueGeneral(msg, strategy, priobits, prioptr) \
@@ -553,7 +575,7 @@ void CqsEnqueueGeneral(Queue q, void *Message, int strategy, int priobits,
 #define CsdNodeEnqueueGeneral(msg, strategy, priobits, prioptr) do { \
           CmiLock(CsvAccess(CsdNodeQueueLock)); \
           CqsEnqueueGeneral((Queue)CsvAccess(CsdNodeQueue),(msg),(strategy),(priobits),(prioptr)); \
-          CsvAccess(CsdNodeQueueLen).fetch_add(1, std::memory_order_relaxed); \
+          CsdNodeQueueLenAdd(1); \
           CmiUnlock(CsvAccess(CsdNodeQueueLock)); \
         } while(0)
 
