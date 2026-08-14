@@ -34,6 +34,7 @@ ConverseNodeQueue<void *> *CmiNodeQueue;
 CpvDeclare(Queue, CsdSchedQueue);
 CpvDeclare(TaskQueue, CsdTaskQueue);
 CsvDeclare(Queue, CsdNodeQueue);
+CsvDeclare(std::atomic<int>, CsdNodeQueueLen);
 CsvDeclare(CmiNodeLock, CsdNodeQueueLock);
 double Cmi_startTime;
 CmiSpanningTreeInfo *_topoTree = NULL;
@@ -425,10 +426,12 @@ void CmiInitState(int rank) {
   CpvAccess(CsdSchedQueue) = (Queue)malloc(sizeof(QueueImpl));
   QueueInit(CpvAccess(CsdSchedQueue));
   CsvInitialize(Queue, CsdNodeQueue);
+  CsvInitialize(std::atomic<int>, CsdNodeQueueLen);
   if (CmiMyRank() == 0) {
     CsvAccess(CsdNodeQueueLock) = CmiCreateLock();
     CsvAccess(CsdNodeQueue) = (Queue)malloc(sizeof(QueueImpl));
     QueueInit(CsvAccess(CsdNodeQueue));
+    CsvAccess(CsdNodeQueueLen).store(0, std::memory_order_relaxed);
   }
   CmiNodeBarrier();
 }
