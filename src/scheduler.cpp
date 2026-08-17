@@ -49,17 +49,26 @@ void CsdScheduler() {
 
     // poll thread queue
     else if (!queue->empty()) {
-      // get next event (guaranteed to be there because only single consumer)
-      void *msg = queue->pop().value();
+      // The queue is multi-producer: PEs, the comm thread, and CUDA callback
+      // threads all push here. With the atomic (moodycamel) queue, empty() is
+      // size_approx()==0 and pop() can spuriously fail while a concurrent
+      // enqueue is mid-flight, so the result MUST be checked -- calling
+      // .value() on the failed optional is undefined behavior and delivers a
+      // garbage message pointer. The element is not lost; it is popped on a
+      // later iteration once the enqueue completes.
+      auto result = queue->pop();
+      if (result) {
+        void *msg = result.value();
 
-      // release idle if necessary
-      if (CmiGetIdle()) {
-        CmiSetIdle(false);
-        CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
+        // release idle if necessary
+        if (CmiGetIdle()) {
+          CmiSetIdle(false);
+          CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
+        }
+
+        // process event
+        CmiHandleMessage(msg);
       }
-        
-      // process event
-      CmiHandleMessage(msg);
     }
 
         // poll node prio queue
@@ -227,18 +236,21 @@ void CsdSchedulePoll() {
 
     // poll thread queue
     else if (!queue->empty()) {
-      // get next event (guaranteed to be there because only single consumer)
-      void *msg = queue->pop().value();
+      // See CsdScheduler: pop() can spuriously fail during a concurrent
+      // enqueue; the result must be checked, never .value()'d blindly.
+      auto result = queue->pop();
+      if (result) {
+        void *msg = result.value();
 
-      // release idle if necessary
-      if (CmiGetIdle()) {
-        CmiSetIdle(false);
-        CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
+        // release idle if necessary
+        if (CmiGetIdle()) {
+          CmiSetIdle(false);
+          CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
+        }
+
+        // process event
+        CmiHandleMessage(msg);
       }
-
-      // process event
-      CmiHandleMessage(msg);
-
     }
 
     // poll node prio queue
