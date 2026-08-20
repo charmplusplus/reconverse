@@ -139,7 +139,7 @@ void CldNodeEnqueue(int node, void *msg, int infofn) {
 }
 
 void CldModuleInit(char **argv) {
-  CldHandlerIndex = CmiRegisterHandler((CmiHandler)CldHandler);
+  CmiRegisterHandlerOnce(CldHandlerIndex, CldHandler);
   CldRelocatedMessages = 0;
   CldLoadBalanceMessages = 0;
   CldMessageChunks = 0;

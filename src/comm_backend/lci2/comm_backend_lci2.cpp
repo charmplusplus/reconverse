@@ -232,6 +232,17 @@ void CommBackendLCI2::refreshMembersFromBootstrap() {
   }
 }
 
+void CommBackendLCI2::drain(void) {
+  // Every operation this process posted has to have completed before the peer
+  // table can be rebuilt under it: a send still outstanding names an address
+  // that reconfigure is about to remove from the address vector.
+  for (auto &device : m_devices) {
+    while (lci::test_drained_x().device(device)().is_retry()) {
+      progress();
+    }
+  }
+}
+
 bool CommBackendLCI2::supportsRescale(void) {
   // A membership change replaces one device's peer table. With several devices
   // each has its own endpoint address, so the coordinator would have to carry

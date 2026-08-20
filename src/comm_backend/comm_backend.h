@@ -137,6 +137,14 @@ struct ClusterView {
 };
 
 /**
+ * @brief Block until every operation this process posted has completed.
+ *
+ * Required before reconfigure: an outstanding send names an address that the
+ * rebuild is about to remove.
+ */
+void drain(void);
+
+/**
  * @brief Whether this backend implements the rescale hooks below. Thread-safe.
  */
 bool supportsRescale(void);

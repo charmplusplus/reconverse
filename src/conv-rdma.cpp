@@ -248,10 +248,10 @@ static void memcpyAnyPtr(void *dst, const void *src, size_t size) {
 // This method is invoked during converse initialization to initialize these
 // message handlers
 void CmiOnesidedDirectInit(void) {
-  remote_dereg_handler_idx = CmiRegisterHandler((CmiHandler)remoteDeregHandler);
-  get_request_handler_idx = CmiRegisterHandler((CmiHandler)getRequestHandler);
-  put_data_handler_idx = CmiRegisterHandler((CmiHandler)putDataHandler);
-  zc_pup_handler_idx = CmiRegisterHandler((CmiHandler)zcPupHandler);
+  CmiRegisterHandlerOnce(remote_dereg_handler_idx, remoteDeregHandler);
+  CmiRegisterHandlerOnce(get_request_handler_idx, getRequestHandler);
+  CmiRegisterHandlerOnce(put_data_handler_idx, putDataHandler);
+  CmiRegisterHandlerOnce(zc_pup_handler_idx, zcPupHandler);
 }
 
 /****************************** Zerocopy Direct API

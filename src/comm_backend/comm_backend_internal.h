@@ -48,6 +48,7 @@ public:
   // No-restart shrink/expand. A backend opts in by overriding these; the
   // defaults report "not supported" so ConverseCleanup can refuse a rescale
   // with a clear message rather than half-perform one.
+  virtual void drain(void) {}
   virtual bool supportsRescale(void) { return false; }
   virtual std::vector<unsigned char> getMyAddress(void) { return {}; }
   virtual const std::vector<Member> &getMembers(void) {

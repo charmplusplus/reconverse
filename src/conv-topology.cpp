@@ -255,6 +255,15 @@ static int _noip = 0;
 
 using namespace CpuTopoDetails;
 
+#if CMK_SHRINK_EXPAND
+// Set so a wedged process can say which part of the topology exchange it is
+// waiting in. Defined in convcore.cpp.
+extern const char *se_phase;
+#  define SE_PHASE(p) (se_phase = (p))
+#else
+#  define SE_PHASE(p) ((void)0)
+#endif
+
 // static void printTopology(int numNodes)
 // {
 //   // assume all nodes have same number of cores
@@ -273,6 +282,7 @@ static std::atomic<bool> cpuTopoSyncHandlerDone{};
 
 static void cpuTopoSyncWait(std::atomic<bool>& done)
 {
+  SE_PHASE("topo:sync-wait");
   do CsdSchedulePoll();
   while (!done.load());
 
@@ -469,6 +479,7 @@ void LrtsInitCpuTopo(char** argv)
   // particular was handed to CmiSyncNodeBroadcastAllAndFree and freed, and
   // reusing it is a use-after-free. Everything below is recomputed from the
   // exchange that follows.
+  SE_PHASE("topo:enter");
   topomsg = NULL;
   cpuTopoSyncHandlerDone = false;
   hostTable.clear();

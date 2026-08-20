@@ -499,10 +499,10 @@ void CthSchedInit() {
   CpvAccess(CthMainThread) = CthSelf();
   CpvAccess(CthSchedulingThread) = CthSelf();
   CpvAccess(CthSleepingStandins) = 0;
-  CpvAccess(CthResumeNormalThreadIdx) =
-      CmiRegisterHandler((CmiHandler)CthResumeNormalThread);
-  CpvAccess(CthResumeSchedulingThreadIdx) =
-      CmiRegisterHandler((CmiHandler)CthResumeSchedulingThread);
+  CmiRegisterHandlerOnce(CpvAccess(CthResumeNormalThreadIdx),
+                         CthResumeNormalThread);
+  CmiRegisterHandlerOnce(CpvAccess(CthResumeSchedulingThreadIdx),
+                         CthResumeSchedulingThread);
   CthSetStrategy(CthSelf(), CthEnqueueSchedulingThread,
                  CthSuspendSchedulingThread);
 }

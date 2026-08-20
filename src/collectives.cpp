@@ -15,11 +15,11 @@ static constexpr int CmiMaxReductions = 1u << CmiLogMaxReductions;
 
 void collectiveInit(void) {
   // register special operation handlers
-  Cmi_bcastHandler = CmiRegisterHandler(CmiBcastHandler);
-  Cmi_nodeBcastHandler = CmiRegisterHandler(CmiNodeBcastHandler);
-  CmiGroupHandlerIndex = CmiRegisterHandler(CmiGroupHandler);
-  Cmi_reduceHandler = CmiRegisterHandler(CmiReduceHandler);
-  Cmi_nodeReduceHandler = CmiRegisterHandler(CmiNodeReduceHandler);
+  CmiRegisterHandlerOnce(Cmi_bcastHandler, CmiBcastHandler);
+  CmiRegisterHandlerOnce(Cmi_nodeBcastHandler, CmiNodeBcastHandler);
+  CmiRegisterHandlerOnce(CmiGroupHandlerIndex, CmiGroupHandler);
+  CmiRegisterHandlerOnce(Cmi_reduceHandler, CmiReduceHandler);
+  CmiRegisterHandlerOnce(Cmi_nodeReduceHandler, CmiNodeReduceHandler);
   CmiGroupTable = (GroupDef *)calloc(GROUPTAB_SIZE, sizeof(GroupDef));
   CmiGroupCounter = 0;
   CmiReductionsInit();

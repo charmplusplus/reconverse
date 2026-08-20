@@ -169,6 +169,17 @@ void ConverseCleanup(void) {
   const int myNode = CmiMyNode();
   const std::vector<coord::Member> oldMembers = currentMembers();
 
+  // Quiesce the old membership before anyone's peer table is touched.
+  //
+  // Reconfiguring means rebuilding that table, and an operation still
+  // outstanding names an address that is about to be removed from under it.
+  // Draining locally is not enough on its own: a peer that has not drained yet
+  // can still deliver into this process afterwards. So everyone drains and
+  // then meets here, on the transport that is still whole and still includes
+  // the process that is about to leave.
+  comm_backend::drain();
+  comm_backend::barrier();
+
   coord::ClusterView view;
   bool departing = false;
 

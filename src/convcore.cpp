@@ -6,6 +6,7 @@
 #include "scheduler.h"
 
 #include <algorithm>
+#include <csignal>
 #include <cinttypes>
 #include <conv-rdma.h>
 #include <cstdarg>
@@ -97,10 +98,6 @@ void CmiSetRescaleRestartState(int myNode, int numNodes) {
   _shrinkexpand_new_numnodes = numNodes;
 }
 
-// Bracket the handler-registration replay of a survivor restart; defined
-// alongside CmiRegisterHandler further down.
-void CmiHandlerReplayBegin(void);
-void CmiHandlerReplayEnd(void);
 #endif
 
 // PE LOCALS that need global access sometimes
@@ -141,7 +138,51 @@ void CommLocalHandler(comm_backend::Status status) {
   CmiFree(const_cast<void *>(status.local_buf));
 }
 
+#if CMK_SHRINK_EXPAND
+// SIGUSR1 dumps what this process is doing: how far initialization has got,
+// how much traffic it has seen, and whether anything is queued. It answers the
+// question a stalled rescale always raises first, which is whether the network
+// stopped delivering or the runtime above it is waiting for something that was
+// never sent. Cheap enough to leave in: two relaxed increments per message and
+// a pointer store per phase.
+const char *se_phase = "boot";
+
+std::atomic<long> se_amSent{0};
+std::atomic<long> se_amRecv{0};
+#  define SE_COUNT_SEND() se_amSent.fetch_add(1, std::memory_order_relaxed)
+#  define SE_PHASE(p) (se_phase = (p))
+
+static void se_dumpState(int) {
+  fprintf(stderr,
+          "[%d] rescale dump: node %d of %d, phase=%s, am sent=%ld recv=%ld, "
+          "localq=%zu nodeq=%zu schedq_nonempty=%d\n",
+          CmiMyPe(), CmiMyNode(), CmiNumNodes(), se_phase,
+          se_amSent.load(std::memory_order_relaxed),
+          se_amRecv.load(std::memory_order_relaxed),
+          Cmi_queues && Cmi_queues[CmiMyRank()] ? Cmi_queues[CmiMyRank()]->size()
+                                                : (size_t)0,
+          CmiNodeQueue ? CmiNodeQueue->size() : (size_t)0,
+          CpvInitialized(CsdSchedQueue) && CpvAccess(CsdSchedQueue)
+              ? (QueueEmpty(CpvAccess(CsdSchedQueue)) ? 0 : 1)
+              : -1);
+  fflush(stderr);
+}
+#else
+#  define SE_COUNT_SEND() ((void)0)
+#  define SE_PHASE(p) ((void)0)
+#endif
+
+// Occupies slot 0 of every handler table; see CmiInitState.
+void CmiHandlerReservedSlot(void *msg) {
+  (void)msg;
+  CmiAbort("A message was sent to handler index 0, which is reserved. This "
+           "usually means a handler index was never assigned.\n");
+}
+
 void CommRemoteHandler(comm_backend::Status status) {
+#if CMK_SHRINK_EXPAND
+  se_amRecv.fetch_add(1, std::memory_order_relaxed);
+#endif
   CmiMessageHeader *header = (CmiMessageHeader *)status.local_buf;
   int destPE = header->destPE;
   if (destPE == CmiMessageDestPENode) {
@@ -170,6 +211,7 @@ void converseRunPe(int rank, int everReturn) {
 #else
   const bool se_restarting = false;
 #endif
+  SE_PHASE("runpe:state");
   CmiInitState(rank);
 #if CMK_SHRINK_EXPAND
   // Past every consumer of the flag; leave it clear so the next rescale sets
@@ -190,9 +232,11 @@ void converseRunPe(int rank, int everReturn) {
   #endif
 
   // init things like cld module, ccs, etc
+  SE_PHASE("runpe:cld");
   CldModuleInit(CmiMyArgv);
 
-  Cmi_exitHandler = CmiRegisterHandler(CmiExitHandler);
+  CmiRegisterHandlerOnce(Cmi_exitHandler, CmiExitHandler);
+  SE_PHASE("runpe:collectives");
   collectiveInit();
   // Cmi_multicastHandler = CmiRegisterHandler(CmiMulticastHandler);
 
@@ -210,11 +254,16 @@ void converseRunPe(int rank, int everReturn) {
   CmiNodeBarrier();
   //printf("[DBG] pe %d rank %d: converseRunPe nodebarrier2 done\n", CmiMyPe(), rank); fflush(stdout);
 
+  SE_PHASE("runpe:threads");
   CthInit(NULL);
   CthSchedInit();
 
   CpvInitialize(int, isHelperOn);
   CpvAccess(isHelperOn) = 0;
+
+#if CMK_SHRINK_EXPAND
+  if (rank == 0) signal(SIGUSR1, se_dumpState);
+#endif
 
   // Must precede Cmi_startfn: Charm++ registers its CCS handlers (the
   // shrink/expand set_bitmap and realloc entry points among them) from group
@@ -236,13 +285,10 @@ void converseRunPe(int rank, int everReturn) {
 
   if(!everReturn)
   {
+    SE_PHASE("runpe:startfn");
     Cmi_startfn(CmiGetArgc(CmiMyArgv), CmiMyArgv);
-#if CMK_SHRINK_EXPAND
-    // Registration is done; anything registered from here on is genuinely new
-    // and should append.
-    CmiHandlerReplayEnd();
-#endif
     if (Cmi_usched == 0) {
+      SE_PHASE("runpe:scheduler");
       CsdScheduler();
     }
     CmiFreeArgs(CmiMyArgv);
@@ -600,17 +646,13 @@ void CmiInitState(int rank) {
   // empty table and newcomers dispatching into the wrong slot.
   if (Cmi_queues[Cmi_myrank] == nullptr)
     Cmi_queues[Cmi_myrank] = new ConverseQueue<void *>();
-  if (CmiHandlerTable[Cmi_myrank] == nullptr)
+  if (CmiHandlerTable[Cmi_myrank] == nullptr) {
     CmiHandlerTable[Cmi_myrank] = new std::vector<CmiHandlerInfo>();
-
-#if CMK_SHRINK_EXPAND
-  // From here to the end of the start function, this pass re-runs the same
-  // handler-registration sequence the first pass ran. Replay it against the
-  // preserved table so each handler keeps the index its peers know it by. It
-  // has to start here, before the first CmiRegisterHandler below, and it needs
-  // CmiMyRank(), which the state assignment above has just made valid.
-  if (_shrinkexpand_restarting) CmiHandlerReplayBegin();
-#endif
+    // Slot 0 is reserved and never handed out, so a handler-index variable
+    // still holding zero is known not to have been registered yet. Converse
+    // does the same, and the register-once guards below rely on it.
+    CmiHandlerTable[Cmi_myrank]->push_back({CmiHandlerReservedSlot, nullptr});
+  }
 
   // random
   CrnInit();
@@ -847,7 +889,8 @@ void CmiSyncSendAndFreeNoPersistent(int destPE, int messageSize, void *msg) {
   if (CmiMyNode() == destNode) {
     CmiPushPE(CmiRankOf(destPE), messageSize, msg);
   } else {
-    comm_backend::issueAm(destNode, msg, messageSize, MRFIELD(msg),
+    SE_COUNT_SEND();
+  comm_backend::issueAm(destNode, msg, messageSize, MRFIELD(msg),
                           CommLocalHandler, g_amHandler,
                           nullptr); // Commlocalhandler will free msg
   }
@@ -877,6 +920,7 @@ void CmiInterSyncSendAndFree(int destPE, int partition, int messageSize,
   int globalDestPE = CmiGetPeGlobal(destPE, partition);
   header->destPE = globalDestPE;
   int destNode = CmiGetNodeGlobal(CmiNodeOf(globalDestPE), partition);
+  SE_COUNT_SEND();
   comm_backend::issueAm(destNode, msg, messageSize, MRFIELD(msg),
                         CommLocalHandler, g_amHandler, nullptr);
 }
@@ -912,82 +956,12 @@ void CmiExit(int status) // note: status isn't being used meaningfully
 }
 
 // HANDLER TOOLS
-#if CMK_SHRINK_EXPAND
-// Replay of the handler registrations on a survivor restart.
-//
-// A survivor re-runs initialization after the rescale longjmp, and every
-// handler index recorded before it, by the survivor and by its peers alike,
-// is an index into the table that pass built. Appending would give the same
-// handler a different index on this process than the rest of the cluster
-// computes for it, and messages would dispatch into the wrong slot.
-//
-// So a registration during a restart resolves to the slot that handler
-// already occupies rather than to a new one. The search runs forward from the
-// last match, which keeps two registrations of the same function in their
-// original order, and tolerates the parts of initialization that legitimately
-// run only once per process: a module with its own already-initialized guard
-// simply contributes no registrations this time, and the search steps over its
-// slots to find the next one that does match.
-CpvStaticDeclare(std::vector<bool> *, se_replayClaimed);
-CpvStaticDeclare(bool, se_replayActive);
-
-void CmiHandlerReplayBegin(void) {
-  CpvInitialize(std::vector<bool> *, se_replayClaimed);
-  CpvInitialize(bool, se_replayActive);
-  if (CpvAccess(se_replayClaimed) == NULL)
-    CpvAccess(se_replayClaimed) = new std::vector<bool>();
-  CpvAccess(se_replayClaimed)->assign(CmiGetHandlerTable()->size(), false);
-  CpvAccess(se_replayActive) = true;
-}
-
-void CmiHandlerReplayEnd(void) {
-  if (CpvInitialized(se_replayActive))
-    CpvAccess(se_replayActive) = false;
-}
-
-// Returns -1 when not replaying, or when this handler is genuinely new and
-// should be appended. Otherwise the slot it already occupies.
-static int se_replaySlot(std::vector<CmiHandlerInfo> *table,
-                         const CmiHandlerInfo &entry) {
-  if (!CpvInitialized(se_replayActive) || !CpvAccess(se_replayActive))
-    return -1;
-  std::vector<bool> &claimed = *CpvAccess(se_replayClaimed);
-  const size_t n = std::min(claimed.size(), table->size());
-  // First slot holding this handler that no earlier registration in this pass
-  // has already taken. Claiming rather than advancing a cursor keeps two
-  // registrations of the same function in order without assuming this pass
-  // visits them in the same order as the first one did; parts of
-  // initialization are gated differently on a restart, so it does not.
-  for (size_t i = 0; i < n; ++i) {
-    if (claimed[i]) continue;
-    const CmiHandlerInfo &have = (*table)[i];
-    // hdlr and exhdlr share storage, so comparing one covers both forms.
-    if (have.hdlr == entry.hdlr && have.userPtr == entry.userPtr) {
-      claimed[i] = true;
-      return (int)i;
-    }
-  }
-  // Nothing in the preserved table matches, so this handler is new in this
-  // pass and will land on an index the rest of the cluster does not know.
-  CmiPrintf("[%d] Warning: shrink/expand found no preserved slot for handler "
-            "%p; its index will not match the rest of the cluster\n",
-            CmiMyPe(), (void *)entry.hdlr);
-  return -1;
-}
-#endif
 
 int CmiRegisterHandler(CmiHandler h) {
   // add handler to vector
   std::vector<CmiHandlerInfo> *handlerVector = CmiGetHandlerTable();
 
-  CmiHandlerInfo newEntry = {h, nullptr};
-
-#if CMK_SHRINK_EXPAND
-  int slot = se_replaySlot(handlerVector, newEntry);
-  if (slot >= 0) return slot;
-#endif
-
-  handlerVector->push_back(newEntry);
+  handlerVector->push_back({h, nullptr});
   return handlerVector->size() - 1;
 }
 
@@ -998,11 +972,6 @@ int CmiRegisterHandlerEx(CmiHandlerEx h, void *userPtr) {
   CmiHandlerInfo newEntry;
   newEntry.exhdlr = h;
   newEntry.userPtr = userPtr;
-
-#if CMK_SHRINK_EXPAND
-  int slot = se_replaySlot(handlerVector, newEntry);
-  if (slot >= 0) return slot;
-#endif
 
   handlerVector->push_back(newEntry);
   return handlerVector->size() - 1;
@@ -1150,7 +1119,8 @@ void CmiSyncNodeSendAndFree(unsigned int destNode, unsigned int size,
   if (CmiMyNode() == destNode) {
     CmiNodeQueue->push(msg);
   } else {
-    comm_backend::issueAm(destNode, msg, size, MRFIELD(msg),
+    SE_COUNT_SEND();
+  comm_backend::issueAm(destNode, msg, size, MRFIELD(msg),
                           CommLocalHandler, g_amHandler, nullptr);
   }
 }
@@ -1176,6 +1146,7 @@ void CmiInterSyncNodeSendAndFree(int destNode, int partition, int messageSize,
   // not my partition, use comm backend
   int globalDestNode = CmiGetNodeGlobal(destNode, partition);
   header->destPE = CmiMessageDestPENode;
+  SE_COUNT_SEND();
   comm_backend::issueAm(globalDestNode, msg, messageSize, MRFIELD(msg),
                         CommLocalHandler, g_amHandler, nullptr);
 }

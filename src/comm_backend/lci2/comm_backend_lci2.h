@@ -63,6 +63,7 @@ public:
   void free(void* msg) override;
 
   // No-restart shrink/expand.
+  void drain(void) override;
   bool supportsRescale(void) override;
   std::vector<unsigned char> getMyAddress(void) override;
   const std::vector<Member> &getMembers(void) override;

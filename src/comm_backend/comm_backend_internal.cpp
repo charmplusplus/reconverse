@@ -184,6 +184,13 @@ void deregisterMemory(mr_t mr) {
   gCommBackend->deregisterMemory(mr);
 }
 
+void drain(void) {
+  if (gCommBackend == nullptr) {
+    return;
+  }
+  gCommBackend->drain();
+}
+
 bool supportsRescale(void) {
   if (gCommBackend == nullptr) {
     return false;

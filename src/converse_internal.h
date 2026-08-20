@@ -47,6 +47,19 @@ typedef struct HandlerInfo {
 
 std::vector<CmiHandlerInfo> *CmiGetHandlerTable();
 
+// Assign a handler index exactly once per PE, even if initialization runs
+// again. A shrink/expand survivor re-enters ConverseInit after the rescale
+// longjmp, and the index must not move: peers derive the same one from their
+// own single pass, and every message carries it. Slot 0 is reserved, so a
+// variable still holding zero has not been registered yet.
+#define CmiRegisterHandlerOnce(idx, fn)                     \
+  do {                                                      \
+    if ((idx) == 0) (idx) = CmiRegisterHandler((CmiHandler)(fn)); \
+  } while (0)
+
+void CmiHandlerReservedSlot(void *msg);
+
+
 typedef struct State {
   int pe = 0;
   int rank = 0;
