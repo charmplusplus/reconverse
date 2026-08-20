@@ -572,10 +572,16 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
   // register am handlers
 #if CMK_SHRINK_EXPAND
   // CmiRegisterHandler-backed; must not re-register on a survivor restart or
-  // the handler index drifts away from the one newcomers compute.
-  if (!_shrinkexpand_restarting)
-#endif
+  // the handler index drifts away from the one newcomers compute. The rescale
+  // broadcast handler is registered here too, immediately after and under the
+  // same guard, so every process agrees on its index as well.
+  if (!_shrinkexpand_restarting) {
     g_amHandler = comm_backend::registerAmHandler(CommRemoteHandler);
+    CmiRegisterRescaleFanoutHandler();
+  }
+#else
+  g_amHandler = comm_backend::registerAmHandler(CommRemoteHandler);
+#endif
 
 #ifdef RECONVERSE_ENABLE_CPU_AFFINITY
   CmiInitHwlocTopology();

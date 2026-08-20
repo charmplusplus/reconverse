@@ -1216,6 +1216,12 @@ void CmiRescaleRequest(const char *availVector, int numOldNodes,
 void CmiSetRescalePending(int pending);
 int CmiRescalePending(void);
 
+/* Registers the active message handler that carries the committed membership
+   delta down the survivor broadcast tree. Called once per process from
+   ConverseInit, alongside the Converse handler, so that every process assigns
+   it the same index. */
+void CmiRegisterRescaleFanoutHandler(void);
+
 /* Bootstrap from a coordinator rather than from the launcher's process
    manager, which is what lets a job survive losing a host. Returns nonzero if
    the coordinator supplied this process's identity; zero leaves the caller to

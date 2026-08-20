@@ -95,7 +95,97 @@ std::vector<coord::Member> currentMembers() {
   return out;
 }
 
+
+// ---------------------------------------------------------------------------
+// Tree broadcast of the committed delta.
+//
+// Node 0 negotiates the membership change and then hands the result to the
+// other survivors itself, over the endpoints that are still up, instead of
+// having the coordinator send it to each of them in turn. The coordinator's
+// version costs one send per survivor from a single process, and it sits on
+// node 0's critical path because the reply to node 0 is written last; this
+// costs a logarithmic number of hops on the job's own transport. It is the
+// same shape the UCX machine layer uses.
+//
+// The payload is the delta alone. Every survivor already holds the old
+// membership, so it can rebuild the new list, and its own new node id is just
+// its rank among the survivors in old-id order. Nothing per-receiver travels,
+// which is what lets one buffer be forwarded down the tree unchanged.
+
+struct FanoutInbox {
+  std::vector<uint8_t> payload;
+  bool received = false;
+};
+FanoutInbox g_fanoutInbox;
+comm_backend::AmHandler g_fanoutAm = -1;
+
+// The buffer handed to issueAm has to outlive the call: the send is
+// asynchronous and the payload is forwarded on to this node's children.
+std::vector<uint8_t> g_fanoutOutbox;
+
+void fanoutRecv(comm_backend::Status status) {
+  // The backend owns the delivered buffer, so take a copy before returning.
+  const uint8_t *b = static_cast<const uint8_t *>(status.local_buf);
+  g_fanoutInbox.payload.assign(b, b + status.size);
+  g_fanoutInbox.received = true;
+}
+
+void fanoutSendDone(comm_backend::Status) {}
+
+// Survivors keep their relative order, so the survivor at index i in old-id
+// order is exactly the process that apply_member_delta numbers i.
+std::vector<uint32_t> survivorOldIds(const std::vector<coord::Member> &oldMembers,
+                                     const std::vector<uint32_t> &killedOldIds) {
+  std::vector<uint8_t> killed;
+  for (uint32_t k : killedOldIds) {
+    if (k >= killed.size()) killed.resize(k + 1, 0);
+    killed[k] = 1;
+  }
+  std::vector<uint32_t> out;
+  for (const auto &m : oldMembers)
+    if (m.nodeId >= killed.size() || !killed[m.nodeId]) out.push_back(m.nodeId);
+  return out;
+}
+
+// Binary tree over the survivors' NEW ids, addressed by their OLD ids because
+// the transport has not been reconfigured yet.
+void fanoutForward(const std::vector<uint32_t> &survivors, uint32_t myNewId,
+                   const std::vector<uint8_t> &payload) {
+  if (payload.empty()) return;
+  g_fanoutOutbox = payload;
+  for (int k = 1; k <= 2; ++k) {
+    size_t child = (size_t)myNewId * 2 + k;
+    if (child >= survivors.size()) break;
+    comm_backend::issueAm((int)survivors[child], g_fanoutOutbox.data(),
+                          g_fanoutOutbox.size(), comm_backend::MR_NULL,
+                          fanoutSendDone, g_fanoutAm, nullptr);
+  }
+}
+
+// Spin on the backend until this node's parent forwards the delta. The
+// scheduler is stopped here, so progress() is the only thing moving messages,
+// and the backend invokes the handler from inside it. The deadline turns a
+// lost message into a diagnosable abort rather than a silent hang.
+void fanoutWait(std::vector<uint8_t> *out) {
+  const double deadline = rescale_wall_now() + 120.0;
+  while (!g_fanoutInbox.received) {
+    comm_backend::progress();
+    if (rescale_wall_now() > deadline)
+      CmiAbort("Shrink/expand: timed out waiting for the committed view from "
+               "this node's parent in the broadcast tree");
+  }
+  *out = std::move(g_fanoutInbox.payload);
+  g_fanoutInbox.payload.clear();
+  g_fanoutInbox.received = false;
+}
+
 } // namespace
+
+// Registered from ConverseInit next to the Converse handler and under the same
+// once-guard, so survivors and newcomers agree on the index.
+void CmiRegisterRescaleFanoutHandler(void) {
+  g_fanoutAm = comm_backend::registerAmHandler(fanoutRecv);
+}
 
 int CmiRescaleCoordFd(void) { return g_coordFd; }
 
@@ -204,7 +294,29 @@ void ConverseCleanup(void) {
   comm_backend::barrier();
 
   coord::ClusterView view;
-  bool departing = false;
+  // Every node holds the availability vector (Charm++ broadcasts it before it
+  // triggers this path), so each one knows locally whether it is leaving. That
+  // is what lets the departing nodes stay on the coordinator socket for DIE
+  // while the survivors take the delta from the tree: nobody forwards to a
+  // node that is about to exit.
+  bool departing = (myNode < (int)g_availVector.size() && !g_availVector[myNode]);
+
+  if (departing) {
+    coord::ClusterView ignored;
+    bool gotDie = false;
+    coord::await_reconfig_or_die(g_coordFd, oldMembers, &ignored, &gotDie);
+    // Nothing to tear down: the survivors have already dropped their
+    // connections to this process, and the OS reclaims the rest. Calling the
+    // collective teardown here would hang, since no one else is in it.
+    ::close(g_coordFd);
+    ::_exit(0);
+  }
+
+  // The committed delta, in the shape the coordinator would have pushed:
+  // epoch, the old ids that left, and the members that joined.
+  std::vector<uint8_t> delta;
+  std::vector<uint32_t> killedOldIds;
+  std::vector<coord::Member> added;
 
   if (myNode == 0) {
     // Node 0 drives the commit. The avail vector is in the current (old) node
@@ -244,31 +356,52 @@ void ConverseCleanup(void) {
               "joining, %zu members\n",
               g_coordEpoch, view.epoch, kills.size(), take,
               view.members.size());
+
+    // apply_member_delta lays the new list out as survivors first, in old-id
+    // order, then the arrivals, so the tail past the survivor count is exactly
+    // what was added.
+    killedOldIds = kills;
+    // Slice against the list the coordinator actually built the view from,
+    // rather than a separately maintained count of nodes.
+    const size_t nSurvivors = oldMembers.size() - kills.size();
+    if (view.members.size() < nSurvivors)
+      CmiAbort("Shrink/expand: committed view holds %zu members, fewer than "
+               "the %zu survivors it was built from",
+               view.members.size(), nSurvivors);
+    added.assign(view.members.begin() + nSurvivors, view.members.end());
+    coord::put_u32(delta, view.epoch);
+    coord::put_u32_vec(delta, killedOldIds);
+    coord::put_members(delta, added);
   } else {
-    // Everyone else waits for the coordinator to tell them the outcome:
-    // either the committed view, or DIE if this node is the one leaving.
-    //
-    // The UCX machine layer instead has node 0 fan the delta out over the
-    // existing endpoints, which keeps the commit a single round trip whose
-    // cost does not grow with the number of survivors. Doing the same here
-    // needs a backend-level broadcast primitive that works while the
-    // scheduler is stopped; until then every survivor takes the delta
-    // straight from the coordinator, which costs one extra round trip each.
-    if (!coord::await_reconfig_or_die(g_coordFd, oldMembers, &view,
-                                      &departing) &&
-        !departing)
-      CmiAbort("Shrink/expand: waiting for the committed view failed");
+    // Surviving nodes take the delta from their parent in the tree rather
+    // than from the coordinator, so the commit stays a single round trip on
+    // node 0 whose cost does not grow with the number of survivors.
+    fanoutWait(&delta);
+    const uint8_t *q = delta.data();
+    const uint8_t *end = q + delta.size();
+    view.epoch = coord::get_u32(q, end);
+    killedOldIds = coord::get_u32_vec(q, end);
+    added = coord::get_members(q, end);
+    view.members = coord::apply_member_delta(oldMembers, killedOldIds, added);
+  }
+
+  // Forward before touching this node's own endpoints: the tree is addressed
+  // in the old numbering, which reconfigure is about to invalidate. Node 0
+  // already knows its id is 0; everyone else is its rank among the survivors.
+  {
+    const std::vector<uint32_t> survivors =
+        survivorOldIds(oldMembers, killedOldIds);
+    uint32_t myNewId = 0;
+    for (size_t i = 0; i < survivors.size(); ++i)
+      if ((int)survivors[i] == myNode) { myNewId = (uint32_t)i; break; }
+    if (myNode != 0) view.nodeId = myNewId;
+    fanoutForward(survivors, myNewId, delta);
+    // An outstanding send names an address reconfigure is about to remove, so
+    // let the forwards complete before the peer table is rebuilt.
+    comm_backend::drain();
   }
 
   if (myNode == 0) rescale_t_commit_done = rescale_wall_now();
-
-  if (departing) {
-    // Nothing to tear down: the survivors have already dropped their
-    // connections to this process, and the OS reclaims the rest. Calling the
-    // collective teardown here would hang, since no one else is in it.
-    ::close(g_coordFd);
-    ::_exit(0);
-  }
 
   g_coordEpoch = view.epoch;
   // Every rank agrees on the epoch by protocol, which is what makes it usable
