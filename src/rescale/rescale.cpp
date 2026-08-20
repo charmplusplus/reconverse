@@ -145,12 +145,15 @@ int CmiRescaleCoordBootstrap(const char *coordHost, int coordPort,
   comm_backend::reconfigure(toBackendView(view));
 
   if (isNewcomer) {
-    // Meet the processes already in the job at the barrier they are waiting
-    // in, which is the coordinator's: they reached it from ConverseCleanup,
-    // having already been through the backend's own barrier on their first
-    // init. Waiting on the backend barrier instead would be waiting for
-    // processes that are never going to arrive.
-    if (!coord::barrier(g_coordFd, view.epoch, view.nodeId)) return 0;
+    // Meet the processes already in the job. The backend's own barrier is
+    // usable here, and is the whole point of resetting the collective
+    // sequence during reconfigure: this process and the ones already running
+    // are back in step, so they can rendezvous over the network rather than
+    // through the coordinator. It needs a thread context, which is otherwise
+    // set up later in converseRunPe; shrink/expand runs one PE per process,
+    // so this is that PE.
+    comm_backend::initThread(0, 1);
+    comm_backend::barrier();
   }
 
   *myNodeId = (int)view.nodeId;
@@ -265,8 +268,13 @@ void ConverseCleanup(void) {
   // Meet everyone, old and new, on the reconfigured transport before any of
   // us starts sending. Survivors are about to re-run initialization and
   // newcomers are about to run theirs.
-  if (!coord::barrier(g_coordFd, view.epoch, view.nodeId))
-    CmiAbort("Shrink/expand: post-reconfiguration barrier failed");
+  //
+  // This is the backend's own barrier, over the new membership, rather than a
+  // round trip per process through the coordinator: the coordinator does no
+  // work for it, and its cost grows with the logarithm of the job rather than
+  // linearly. The reset of the collective sequence during reconfigure is what
+  // lets a process that just joined take part in it.
+  comm_backend::barrier();
 
   CmiSetRescalePending(false);
   CmiSetRescaleRestartState((int)view.nodeId, (int)view.members.size());
