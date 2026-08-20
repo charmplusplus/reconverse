@@ -122,6 +122,8 @@ struct FanoutInbox {
 };
 FanoutInbox g_fanoutInbox;
 comm_backend::AmHandler g_fanoutAm = -1;
+comm_backend::AmHandler g_wireupAm = -1;
+char g_wireupByte = 0;
 
 // The buffer handed to issueAm has to outlive the call: the send is
 // asynchronous and the payload is forwarded on to this node's children.
@@ -135,6 +137,11 @@ void fanoutRecv(comm_backend::Status status) {
 }
 
 void fanoutSendDone(comm_backend::Status) {}
+
+// Receives the one-byte probes a joining process sends to force its
+// connections open. There is nothing to do with them: the value is the
+// handshake they provoke, not the payload.
+void wireupRecv(comm_backend::Status) {}
 
 // Survivors keep their relative order, so the survivor at index i in old-id
 // order is exactly the process that apply_member_delta numbers i.
@@ -189,6 +196,7 @@ void fanoutWait(std::vector<uint8_t> *out) {
 // once-guard, so survivors and newcomers agree on the index.
 void CmiRegisterRescaleFanoutHandler(void) {
   g_fanoutAm = comm_backend::registerAmHandler(fanoutRecv);
+  g_wireupAm = comm_backend::registerAmHandler(wireupRecv);
 }
 
 void registerNewcomerWarmup(void (*fn)(void)) { g_newcomerWarmup = fn; }
@@ -239,6 +247,49 @@ int CmiRescaleCoordBootstrap(const char *coordHost, int coordPort,
     // Registration is in, admission is seconds away, and nothing else is
     // competing for this process. Do the expensive local setup now rather than
     // after the commit, where every process already in the job waits on it.
+    // Wire up to the processes already running, before blocking rather than
+    // after being admitted.
+    //
+    // The registration reply carries the current membership, so the peers are
+    // known now, and the wait for admission is seconds. Connecting here means
+    // the handshakes overlap that idle time. Left until after the commit they
+    // land instead inside the first collective of the new membership, where
+    // every process already in the job is waiting at the barrier, and they are
+    // the dominant cost of an expansion. This is what the UCX machine layer
+    // does with speculative endpoints.
+    //
+    // The membership may still change before admission, so this is a
+    // prediction, not a commitment: the view applied after INTEGRATE is the
+    // real one. Connections made here to peers that survive are kept, because
+    // reconfigure carries unchanged peers across untouched.
+    // Needed before any send; otherwise set up later in converseRunPe.
+    // Shrink/expand runs one PE per process, so this is that PE.
+    comm_backend::initThread(0, 1);
+    if (!view.members.empty()) {
+      double t0 = rescale_wall_now();
+      // A rank is needed to reconfigure, and this process does not have its
+      // real one yet; anything outside the current membership will do, since
+      // nothing is addressed to it before admission.
+      coord::ClusterView speculative = view;
+      coord::Member self;
+      self.nodeId = (uint32_t)view.members.size();
+      self.ucxAddr.assign(myAddr.begin(), myAddr.end());
+      speculative.members.push_back(self);
+      speculative.nodeId = self.nodeId;
+      comm_backend::reconfigure(toBackendView(speculative));
+      // Sending is what opens a connection; the address vector entry alone
+      // does not. One byte to each peer is enough to provoke the handshake.
+      for (size_t i = 0; i + 1 < speculative.members.size(); ++i) {
+        comm_backend::issueAm((int)i, &g_wireupByte, sizeof(g_wireupByte),
+                              comm_backend::MR_NULL, fanoutSendDone,
+                              g_wireupAm, nullptr);
+      }
+      comm_backend::drain();
+      CmiPrintf("Charm> newcomer wired up to %zu peers in %.6fs while waiting "
+                "to be admitted\n",
+                speculative.members.size() - 1, rescale_wall_now() - t0);
+    }
+
     if (g_newcomerWarmup) {
       double t0 = rescale_wall_now();
       g_newcomerWarmup();
@@ -264,10 +315,9 @@ int CmiRescaleCoordBootstrap(const char *coordHost, int coordPort,
     // usable here, and is the whole point of resetting the collective
     // sequence during reconfigure: this process and the ones already running
     // are back in step, so they can rendezvous over the network rather than
-    // through the coordinator. It needs a thread context, which is otherwise
-    // set up later in converseRunPe; shrink/expand runs one PE per process,
-    // so this is that PE.
-    comm_backend::initThread(0, 1);
+    // through the coordinator. With the wireup above already done, this is a
+    // round trip over connections that exist rather than the place they get
+    // built.
     comm_backend::barrier();
   }
 
