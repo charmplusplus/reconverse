@@ -40,7 +40,7 @@ option(RECONVERSE_TRY_ENABLE_COMM_LCI2 "whether to enable the LCIv2 backend" ON)
 option(RECONVERSE_AUTOFETCH_LCI2
         "whether to autofetch LCIv2 if LCI2 cannot be found" OFF)
 set(RECONVERSE_AUTOFETCH_LCI2_TAG
-    "a892d47371925aaefc6b67900a198d11bbac7ccc"
+    "ca88ce2c4b429ce72dfc3233fa21f8833299440c"
     CACHE STRING "The tag to fetch for LCIv2") # uiuc-hpc/lci master branch tip as of 2026-08-06
 
 option(RECONVERSE_TRY_ENABLE_COMM_LCW "whether to enable the LCW backend" ON)
