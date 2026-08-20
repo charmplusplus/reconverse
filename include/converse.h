@@ -1185,6 +1185,15 @@ void registerTraceInit(void (*fn)(char **argv));
 // startup sequence: after per-PE state exists, before the start function.
 void registerCcsInit(void (*fn)(char **argv));
 
+/* Registered before ConverseInit by a layer that has expensive per-process
+   setup to do, such as creating a GPU context. A joining process is invoked
+   here just before it blocks waiting to be admitted to a running job, a wait
+   measured in seconds, so the setup costs nothing: without it the processes
+   already in the job stall at their next barrier waiting for the newcomer to
+   finish work it could have done while idle. Never called on a process that
+   is not joining. */
+void registerNewcomerWarmup(void (*fn)(void));
+
 int CmiDeliverMsgs(int maxmsgs);
 
 /* ---------------------------------------------------------------------------

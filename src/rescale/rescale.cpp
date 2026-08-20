@@ -62,6 +62,10 @@ uint32_t g_coordEpoch = 0;
 // the node stays. Only node 0 uses it; the others learn the outcome from the
 // coordinator.
 bool g_rescalePending = false;
+
+// Set by registerNewcomerWarmup; run on a joining process while it waits to be
+// admitted. Null when the application layer has nothing to warm up.
+void (*g_newcomerWarmup)(void) = nullptr;
 std::vector<char> g_availVector;
 int g_targetNumNodes = 0;
 
@@ -187,6 +191,8 @@ void CmiRegisterRescaleFanoutHandler(void) {
   g_fanoutAm = comm_backend::registerAmHandler(fanoutRecv);
 }
 
+void registerNewcomerWarmup(void (*fn)(void)) { g_newcomerWarmup = fn; }
+
 int CmiRescaleCoordFd(void) { return g_coordFd; }
 
 void CmiSetRescaleCoordFd(int fd, unsigned int epoch) {
@@ -230,6 +236,15 @@ int CmiRescaleCoordBootstrap(const char *coordHost, int coordPort,
     if (!coord::register_newcomer(g_coordFd, myAddr.data(),
                                   (uint32_t)myAddr.size(), &view))
       return 0;
+    // Registration is in, admission is seconds away, and nothing else is
+    // competing for this process. Do the expensive local setup now rather than
+    // after the commit, where every process already in the job waits on it.
+    if (g_newcomerWarmup) {
+      double t0 = rescale_wall_now();
+      g_newcomerWarmup();
+      CmiPrintf("Charm> newcomer warmup took %.6fs while waiting to be "
+                "admitted\n", rescale_wall_now() - t0);
+    }
     if (!coord::await_integrate(g_coordFd, &view)) return 0;
   } else {
     // The coordinator was told how many initial ranks to expect when it was
