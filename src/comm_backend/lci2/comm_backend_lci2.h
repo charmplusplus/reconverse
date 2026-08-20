@@ -61,6 +61,12 @@ public:
 
   void *malloc(int n_bytes, int header) override;
   void free(void* msg) override;
+
+  // No-restart shrink/expand.
+  bool supportsRescale(void) override;
+  std::vector<unsigned char> getMyAddress(void) override;
+  const std::vector<Member> &getMembers(void) override;
+  void reconfigure(const ClusterView &view) override;
 private:
   struct threadContext {
     int thread_id;
@@ -83,6 +89,12 @@ private:
   std::mutex m_liveMrsMutex;
   std::unordered_set<void *> m_liveMrs;
   void deregisterAllMemory();
+
+  // The membership this process is wired up to, in node id order. Seeded at
+  // init from the bootstrap and replaced on every committed reconfiguration;
+  // the coordinator needs it to express the next change as a delta.
+  std::vector<Member> m_members;
+  void refreshMembersFromBootstrap();
 
   lci::device_t getThreadLocalDevice();
   lci::mr_t getThreadLocalMR(mr_t mr);

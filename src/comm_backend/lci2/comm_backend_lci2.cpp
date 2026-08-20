@@ -215,6 +215,58 @@ void CommBackendLCI2::init(char **argv) {
   m_rcomp = lci::register_rcomp(m_remote_comp);
   lci::set_allocator(&m_allocator);
   barrier();
+
+  refreshMembersFromBootstrap();
+}
+
+// Seed the membership from the bootstrap wireup. Only this process's own
+// address is known here; the others are filled in by the coordinator when it
+// replies to registration, which is the point at which the coordinator becomes
+// the authority on who is in the job.
+void CommBackendLCI2::refreshMembersFromBootstrap() {
+  const int nranks = lci::get_rank_n();
+  m_members.assign(nranks, Member{});
+  for (int i = 0; i < nranks; i++) m_members[i].nodeId = i;
+  if (supportsRescale()) {
+    m_members[lci::get_rank_me()].addr = getMyAddress();
+  }
+}
+
+bool CommBackendLCI2::supportsRescale(void) {
+  // A membership change replaces one device's peer table. With several devices
+  // each has its own endpoint address, so the coordinator would have to carry
+  // one address per device per member; nothing needs that yet, and guessing
+  // would wire peers up to the wrong device.
+  if (m_devices.size() != 1) return false;
+  // The OFI backend implements the LCI-side hooks; IBV does not.
+  return true;
+}
+
+std::vector<unsigned char> CommBackendLCI2::getMyAddress(void) {
+  if (m_devices.size() != 1) return {};
+  std::vector<char> addr = lci::get_endpoint_address(m_devices[0]);
+  return std::vector<unsigned char>(addr.begin(), addr.end());
+}
+
+const std::vector<Member> &CommBackendLCI2::getMembers(void) {
+  return m_members;
+}
+
+void CommBackendLCI2::reconfigure(const ClusterView &view) {
+  CmiAssert(m_devices.size() == 1);
+
+  std::vector<std::vector<char>> addrs;
+  addrs.reserve(view.members.size());
+  for (const auto &m : view.members) {
+    addrs.emplace_back(m.addr.begin(), m.addr.end());
+  }
+
+  // Everything in flight was drained before the commit, so the peer table can
+  // be rewritten from under the device. LCI adopts the new rank and rank count
+  // as part of this, which is what getMyNodeId and getNumNodes report.
+  lci::reconfigure_peers(addrs, view.nodeId, m_devices[0]);
+
+  m_members = view.members;
 }
 
 void CommBackendLCI2::exit() {
