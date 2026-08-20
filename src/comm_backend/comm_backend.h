@@ -2,6 +2,7 @@
 #define RECONVERSE_COMM_BACKEND_H
 
 #include <cstddef>
+#include <vector>
 
 #define MEMPOOL_INIT_SIZE_MB_DEFAULT   32
 #define MEMPOOL_EXPAND_SIZE_MB_DEFAULT 64
@@ -101,6 +102,76 @@ void deregisterMemory(mr_t mr);
 void *malloc(int nbytes, int header);
 
 void free(void* msg);
+
+/* ---------------------------------------------------------------------------
+ * No-restart shrink/expand hooks.
+ *
+ * A rescale changes the set of processes in the job while every surviving
+ * process keeps running. The backend is responsible for the transport half of
+ * that: agreeing on the new membership, tearing down connections to departing
+ * peers, building connections to arriving ones, and renumbering itself so that
+ * node id n after the change addresses the n-th member of the new view.
+ *
+ * A backend that cannot do this reports supportsRescale() == false, and
+ * ConverseCleanup aborts with a diagnostic rather than corrupting the job.
+ * ------------------------------------------------------------------------- */
+
+/**
+ * @brief One member of the cluster, as the coordinator sees it.
+ *
+ * `addr` is the backend's own address blob for this member (a UCX worker
+ * address, for instance). It is opaque to everything above the backend.
+ */
+struct Member {
+  int nodeId;                       // position in the current view
+  std::vector<unsigned char> addr;  // backend-specific wireup address
+};
+
+/**
+ * @brief The membership of the job at a given epoch.
+ */
+struct ClusterView {
+  unsigned int epoch;            // monotonically increasing membership epoch
+  int nodeId;                    // this process's id in this view
+  std::vector<Member> members;   // in nodeId order
+};
+
+/**
+ * @brief Whether this backend implements the rescale hooks below. Thread-safe.
+ */
+bool supportsRescale(void);
+
+/**
+ * @brief This process's wireup address, for registering with the coordinator.
+ *
+ * Only meaningful when supportsRescale() is true.
+ */
+std::vector<unsigned char> getMyAddress(void);
+
+/**
+ * @brief The membership this process is currently wired up to, in nodeId order.
+ */
+const std::vector<Member> &getMembers(void);
+
+/**
+ * @brief Bootstrap from a coordinator rather than from the launcher's PMI.
+ *
+ * Called before init() when the launcher supplied +coordinator. Returns false
+ * if the backend cannot bootstrap this way, in which case init() proceeds
+ * normally.
+ */
+bool coordBootstrap(const char *coordHost, int coordPort, int myNodeId,
+                    int numNodes, bool isNewcomer);
+
+/**
+ * @brief Reconfigure onto a new membership, in place.
+ *
+ * Closes connections to members that are gone, keeps the ones that survived,
+ * opens connections to the ones that arrived, and adopts view.nodeId as this
+ * process's new id. Called on every surviving process once the coordinator has
+ * committed the view; departing processes exit instead of calling this.
+ */
+void reconfigure(const ClusterView &view);
 
 } // namespace comm_backend
 

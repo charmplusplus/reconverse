@@ -58,6 +58,13 @@ option(CMK_CPV_IS_SMP "whether to enable SMP support for cpvs" ON)
 option(CMK_USE_SHMEM "whether to use POSIX shared memory for IPC" OFF)
 option(CMK_TASKQUEUE "use the task queue for work stealing" OFF)
 
+# No-restart shrink/expand. Enables the reinitialization lifecycle: boot-once
+# guards on per-PE state, an idempotent CmiAssignOnce, a preserved wall-clock
+# epoch, and the ConverseCleanup entry point that Charm++ calls to drive a
+# membership change and longjmp back into charm_main. Requires a comm backend
+# that implements the rescale hooks declared in comm_backend.h.
+option(CMK_SHRINK_EXPAND "enable no-restart shrink/expand support" OFF)
+
 option(RECONVERSE_ATOMIC_QUEUE "whether to use atomic queue" ON)
 
 set(RECONVERSE_TEST_LAUNCHER

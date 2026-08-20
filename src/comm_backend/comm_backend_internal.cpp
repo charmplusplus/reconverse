@@ -184,4 +184,45 @@ void deregisterMemory(mr_t mr) {
   gCommBackend->deregisterMemory(mr);
 }
 
+bool supportsRescale(void) {
+  if (gCommBackend == nullptr) {
+    return false;
+  }
+  return gCommBackend->supportsRescale();
+}
+
+std::vector<unsigned char> getMyAddress(void) {
+  if (gCommBackend == nullptr) {
+    return {};
+  }
+  return gCommBackend->getMyAddress();
+}
+
+const std::vector<Member> &getMembers(void) {
+  static const std::vector<Member> empty;
+  if (gCommBackend == nullptr) {
+    return empty;
+  }
+  return gCommBackend->getMembers();
+}
+
+bool coordBootstrap(const char *coordHost, int coordPort, int myNodeId,
+                    int numNodes, bool isNewcomer) {
+  if (gCommBackend == nullptr) {
+    return false;
+  }
+  return gCommBackend->coordBootstrap(coordHost, coordPort, myNodeId, numNodes,
+                                      isNewcomer);
+}
+
+void reconfigure(const ClusterView &view) {
+  if (gCommBackend == nullptr) {
+    CmiAbort("comm_backend::reconfigure with no backend");
+  }
+  gCommBackend->reconfigure(view);
+  // The view is authoritative for the process's identity from here on.
+  gMyNodeID = view.nodeId;
+  gNumNodes = (int)view.members.size();
+}
+
 } // namespace comm_backend

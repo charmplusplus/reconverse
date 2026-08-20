@@ -44,6 +44,25 @@ public:
   virtual void deregisterMemory(mr_t mr) {}
   virtual void *malloc(int nbytes, int header) { return nullptr; };
   virtual void free(void* msg) {};
+
+  // No-restart shrink/expand. A backend opts in by overriding these; the
+  // defaults report "not supported" so ConverseCleanup can refuse a rescale
+  // with a clear message rather than half-perform one.
+  virtual bool supportsRescale(void) { return false; }
+  virtual std::vector<unsigned char> getMyAddress(void) { return {}; }
+  virtual const std::vector<Member> &getMembers(void) {
+    static const std::vector<Member> empty;
+    return empty;
+  }
+  virtual bool coordBootstrap(const char *coordHost, int coordPort,
+                              int myNodeId, int numNodes, bool isNewcomer) {
+    return false;
+  }
+  virtual void reconfigure(const ClusterView &view) {
+    CmiAbort("This communication backend does not support shrink/expand "
+             "reconfiguration");
+  }
+
   virtual ~CommBackendBase() {};
 };
 

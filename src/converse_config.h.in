@@ -11,5 +11,6 @@
 #cmakedefine01 CMK_TASKQUEUE
 #cmakedefine01 CMK_CUDA
 #cmakedefine01 CMK_HIP
+#cmakedefine01 CMK_SHRINK_EXPAND
 
 #endif

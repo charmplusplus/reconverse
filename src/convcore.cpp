@@ -68,8 +68,38 @@ int backend_poll_freq;
 int backend_poll_thread;
 
 void (*CmiTraceFn)(char **argv) = nullptr;
+void (*CmiCcsInitFn)(char **argv) = nullptr;
 
 void CldModuleInit(char **);
+
+#if CMK_SHRINK_EXPAND
+// Cluster-global rescale generation: the membership epoch agreed by every
+// rank through the coordinator, bumped by the comm backend on each committed
+// reconfiguration. Charm++ uses it as the floor for location-cache epochs.
+// Unlike any per-process reset counter it does not diverge between original
+// survivors and newcomer-lineage ranks.
+int _rescaleGeneration = 0;
+
+// Set by ConverseCleanup just before the longjmp and read on the way back
+// into ConverseInit. While true, ConverseInit takes the survivor path: the
+// comm backend, the per-PE queues, the handler tables, and the wall-clock
+// epoch are all already live and must not be recreated.
+bool _shrinkexpand_restarting = false;
+static int _shrinkexpand_new_numnodes = 0;
+static int _shrinkexpand_my_node = 0;
+
+// Identity this process will carry after the rescale, handed over by
+// ConverseCleanup because it is the one that saw the committed view.
+void CmiSetRescaleRestartState(int myNode, int numNodes) {
+  _shrinkexpand_my_node = myNode;
+  _shrinkexpand_new_numnodes = numNodes;
+}
+
+// Bracket the handler-registration replay of a survivor restart; defined
+// alongside CmiRegisterHandler further down.
+void CmiHandlerReplayBegin(void);
+void CmiHandlerReplayEnd(void);
+#endif
 
 // PE LOCALS that need global access sometimes
 static ConverseQueue<void *> **Cmi_queues; // array of queue pointers
@@ -94,6 +124,15 @@ CpvStaticDeclare(int,inittime_virtual);
 
 void registerTraceInit(void (*fn)(char **argv)) {
   CmiTraceFn = fn;
+}
+
+// Charm++ registers CcsInit here from charm_main. Reconverse has no
+// ConverseCommonInit, which is where classic Converse calls CcsInit, so the
+// hook mirrors registerTraceInit: converseRunPe invokes it on every PE before
+// the start function, keeping the handler-registration order identical on
+// survivors and newcomers.
+void registerCcsInit(void (*fn)(char **argv)) {
+  CmiCcsInitFn = fn;
 }
 
 void CommLocalHandler(comm_backend::Status status) {
@@ -124,9 +163,20 @@ void converseRunPe(int rank, int everReturn) {
   CmiMyArgv = CmiCopyArgs(Cmi_argv);
 
   // init state
+#if CMK_SHRINK_EXPAND
+  const bool se_restarting = _shrinkexpand_restarting;
+#else
+  const bool se_restarting = false;
+#endif
   CmiInitState(rank);
+#if CMK_SHRINK_EXPAND
+  // Past every consumer of the flag; leave it clear so the next rescale sets
+  // it afresh.
+  _shrinkexpand_restarting = false;
+#endif
   // init comm_backend
-  comm_backend::initThread(rank, CmiMyNodeSize());
+  if (!se_restarting)
+    comm_backend::initThread(rank, CmiMyNodeSize());
 
   #if CMK_TASKQUEUE
   // init per-PE task queue
@@ -136,6 +186,14 @@ void converseRunPe(int rank, int everReturn) {
   // init task queue work-stealing callbacks
   CmiTaskQueueInit();
   #endif
+
+#if CMK_SHRINK_EXPAND
+  // Everything from here until the start function returns re-runs the same
+  // handler-registration sequence the first pass ran. Replay it against the
+  // preserved table so each handler keeps the index its peers know it by.
+  if (se_restarting)
+    CmiHandlerReplayBegin();
+#endif
 
   // init things like cld module, ccs, etc
   CldModuleInit(CmiMyArgv);
@@ -164,6 +222,13 @@ void converseRunPe(int rank, int everReturn) {
   CpvInitialize(int, isHelperOn);
   CpvAccess(isHelperOn) = 0;
 
+  // Must precede Cmi_startfn: Charm++ registers its CCS handlers (the
+  // shrink/expand set_bitmap and realloc entry points among them) from group
+  // constructors that run inside the start function, and CcsInit creates the
+  // table they register into.
+  if (CmiCcsInitFn)
+    CmiCcsInitFn(CmiMyArgv);
+
   if (CmiTraceFn)
     CmiTraceFn(CmiMyArgv);
 
@@ -178,6 +243,11 @@ void converseRunPe(int rank, int everReturn) {
   if(!everReturn)
   {
     Cmi_startfn(CmiGetArgc(CmiMyArgv), CmiMyArgv);
+#if CMK_SHRINK_EXPAND
+    // Registration is done; anything registered from here on is genuinely new
+    // and should append.
+    CmiHandlerReplayEnd();
+#endif
     if (Cmi_usched == 0) {
       CsdScheduler();
     }
@@ -200,6 +270,16 @@ void converseRunPe(int rank, int everReturn) {
 //waits for all threads to call, then does cleanup on rank 0
 void ConverseExit(int exitcode)
 {
+#if CMK_SHRINK_EXPAND
+  // Reaching here with a rescale still armed means ConverseCleanup was never
+  // called, or was called by a backend that could not carry the change out.
+  // The teardown below is collective across the node and ends in exit(), so
+  // running it would take the job down; say what happened instead.
+  if (CmiRescalePending()) {
+    CmiAbort("ConverseExit reached with a shrink/expand still pending: the "
+             "membership change was never carried out");
+  }
+#endif
   // increment number of PEs ready for exit
   std::atomic_fetch_add_explicit(&numPEsReadyForExit, 1, std::memory_order_release);
   // we need everyone to spin unlike old converse to be able to exit threads
@@ -292,11 +372,28 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
   int plusPPNSet = CmiGetArgInt(argv, "+ppn", &pesPerProcess);
   Cmi_argvcopy = CmiCopyArgs(argv); // init for tracing
 
-  comm_backend::init(argv);
-  Cmi_mynode = comm_backend::getMyNodeId();
-  Cmi_numnodes = comm_backend::getNumNodes();
-  comm_backend::barrier();
-  Cmi_startTime = getCurrentTime();
+#if CMK_SHRINK_EXPAND
+  if (_shrinkexpand_restarting) {
+    // Survivor path after the rescale longjmp. The comm backend has already
+    // been reconfigured onto the new membership by ConverseCleanup, so it must
+    // not be re-initialized; the node id and node count come from the view the
+    // coordinator committed.
+    Cmi_mynode = _shrinkexpand_my_node;
+    Cmi_numnodes = _shrinkexpand_new_numnodes;
+    // The wall-clock epoch must not advance. Application code and Charm++
+    // internals such as the load balancer hold CmiWallTimer() readings taken
+    // before the rescale and compare them against readings taken after;
+    // resetting Cmi_startTime here makes the clock jump backwards by however
+    // long the job has been running.
+  } else
+#endif
+  {
+    comm_backend::init(argv);
+    Cmi_mynode = comm_backend::getMyNodeId();
+    Cmi_numnodes = comm_backend::getNumNodes();
+    comm_backend::barrier();
+    Cmi_startTime = getCurrentTime();
+  }
   RDMAInit(argv);
   // Validate the run size options. Every process runs the same checks, but only
   // global PE 0 (rank 0 of node 0, which is this thread) reports the failure.
@@ -342,8 +439,29 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
            Cmi_numnodes, processType.c_str(), Cmi_npes, peType.c_str(), Cmi_mynodesize, ppnType.c_str());
   }
   Cmi_nodestart = Cmi_mynode * Cmi_mynodesize;
+
+#if CMK_SHRINK_EXPAND
+  // The rescale longjmp returns into charm_main on the process's main thread,
+  // which is the thread running rank 0. Ranks 1 and up live on threads spawned
+  // by CmiStartThreads and have no way to unwind to that landing point, so a
+  // multi-PE-per-process job cannot take the no-restart path.
+  if (Cmi_mynodesize != 1) {
+    if (Cmi_mynode == 0)
+      fprintf(stderr,
+              "Error: shrink/expand requires one PE per process (+ppn 1); "
+              "this job has %d PEs per process.\n",
+              Cmi_mynodesize);
+    exit(1);
+  }
+#endif
+
   // register am handlers
-  g_amHandler = comm_backend::registerAmHandler(CommRemoteHandler);
+#if CMK_SHRINK_EXPAND
+  // CmiRegisterHandler-backed; must not re-register on a survivor restart or
+  // the handler index drifts away from the one newcomers compute.
+  if (!_shrinkexpand_restarting)
+#endif
+    g_amHandler = comm_backend::registerAmHandler(CommRemoteHandler);
 
 #ifdef RECONVERSE_ENABLE_CPU_AFFINITY
   CmiInitHwlocTopology();
@@ -375,17 +493,34 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
   #endif
 
   // allocate global arrays
-  Cmi_queues = new ConverseQueue<void *> *[Cmi_mynodesize];
-  CmiHandlerTable = new std::vector<CmiHandlerInfo> *[Cmi_mynodesize];
-  CmiNodeQueue = new ConverseNodeQueue<void *>();
+#if CMK_SHRINK_EXPAND
+  // Boot-once, for the reasons spelled out in CmiInitState: the queues and the
+  // handler table hold live state and live handler indices across a rescale.
+  if (!_shrinkexpand_restarting)
+#endif
+  {
+    Cmi_queues = new ConverseQueue<void *> *[Cmi_mynodesize]();
+    CmiHandlerTable = new std::vector<CmiHandlerInfo> *[Cmi_mynodesize]();
+    CmiNodeQueue = new ConverseNodeQueue<void *>();
 
-  _smp_mutex = CmiCreateLock();
-  CmiMemLock_lock = CmiCreateLock();
+    _smp_mutex = CmiCreateLock();
+    CmiMemLock_lock = CmiCreateLock();
+  }
 
   // make sure the queues are allocated before PEs start sending messages around
   //if (Cmi_mynode == 0) { printf("[DBG] node 0: ConverseInit barrier start\n"); fflush(stdout); }
   comm_backend::barrier();
   //if (Cmi_mynode == 0) { printf("[DBG] node 0: ConverseInit barrier done\n"); fflush(stdout); }
+
+#if CMK_SHRINK_EXPAND
+  if (_shrinkexpand_restarting) {
+    // No threads to start: shrink/expand runs one PE per process, and rank 0
+    // is this very thread. converseRunPe clears the flag once it is past the
+    // state initialization that consults it.
+    converseRunPe(0, Cmi_initret);
+    return;
+  }
+#endif
 
   //launch threads on rank 1+
   CmiStartThreads();
@@ -409,34 +544,60 @@ void CmiInitState(int rank) {
   CmiSetIdleTime(0.0);
 
   // allocate global entries
-  ConverseQueue<void *> *queue = new ConverseQueue<void *>();
-  std::vector<CmiHandlerInfo> *handlerTable = new std::vector<CmiHandlerInfo>();
+  //
+  // Boot-once state, not re-created on a shrink/expand survivor restart.
+  //
+  // The message queue must survive because peers that finish their restart
+  // first start sending immediately: readonly and group data, the resume
+  // callback, location updates. Those land in this PE's queue while it is
+  // still reinitializing, and replacing the queue would drop them silently.
+  //
+  // The handler table must survive because every handler index recorded
+  // before the rescale, including every CmiAssignOnce'd one, is an index into
+  // it. Newcomers register in the same deterministic order and land on the
+  // same slots as the survivors' original registration, so preserving the
+  // original table is what keeps handler indices consistent across the
+  // cluster. Wiping it here would leave survivors resolving indices into an
+  // empty table and newcomers dispatching into the wrong slot.
+  if (Cmi_queues[Cmi_myrank] == nullptr)
+    Cmi_queues[Cmi_myrank] = new ConverseQueue<void *>();
+  if (CmiHandlerTable[Cmi_myrank] == nullptr)
+    CmiHandlerTable[Cmi_myrank] = new std::vector<CmiHandlerInfo>();
 
-  Cmi_queues[Cmi_myrank] = queue;
-  CmiHandlerTable[Cmi_myrank] = handlerTable;
-
-  // random
-  CrnInit();
-  CpvInitialize(std::vector<NcpyOperationInfo *>,
-                newZCPupGets); // Check if this is necessary
-  CpvInitialize(int, interopExitFlag);
-  CpvAccess(interopExitFlag) = 0;
-  if(rank == 0) CmiMemoryIs_flag |= CMI_MEMORY_IS_OS;
-  #ifdef CMK_USE_SHMEM
-  CsvInitialize(CmiIpcManager*, coreIpcManager_);
-  CsvAccess(coreIpcManager_) = nullptr;
-  #endif
-  CmiOnesidedDirectInit();
-  CmiPersistentInit();
-  CcdModuleInit();
-  CpvInitialize(Queue, CsdSchedQueue);
-  CpvAccess(CsdSchedQueue) = (Queue)malloc(sizeof(QueueImpl));
-  QueueInit(CpvAccess(CsdSchedQueue));
-  CsvInitialize(Queue, CsdNodeQueue);
-  if (CmiMyRank() == 0) {
-    CsvAccess(CsdNodeQueueLock) = CmiCreateLock();
-    CsvAccess(CsdNodeQueue) = (Queue)malloc(sizeof(QueueImpl));
-    QueueInit(CsvAccess(CsdNodeQueue));
+  // Everything below is per-PE state built once per process lifetime. On a
+  // shrink/expand survivor restart this function runs again on the very same
+  // thread, so its __thread Cpv cells are all still bound and live: re-running
+  // CpvInitialize would rebind them to fresh cells and orphan the state they
+  // point at, including the scheduler queue holding messages that arrived from
+  // faster-restoring peers. Skip the whole block; only the node barrier below
+  // still has to run, to stay in lockstep with newcomer processes.
+#if CMK_SHRINK_EXPAND
+  if (!_shrinkexpand_restarting)
+#endif
+  {
+    // random
+    CrnInit();
+    CpvInitialize(std::vector<NcpyOperationInfo *>,
+                  newZCPupGets); // Check if this is necessary
+    CpvInitialize(int, interopExitFlag);
+    CpvAccess(interopExitFlag) = 0;
+    if(rank == 0) CmiMemoryIs_flag |= CMI_MEMORY_IS_OS;
+    #ifdef CMK_USE_SHMEM
+    CsvInitialize(CmiIpcManager*, coreIpcManager_);
+    CsvAccess(coreIpcManager_) = nullptr;
+    #endif
+    CmiOnesidedDirectInit();
+    CmiPersistentInit();
+    CcdModuleInit();
+    CpvInitialize(Queue, CsdSchedQueue);
+    CpvAccess(CsdSchedQueue) = (Queue)malloc(sizeof(QueueImpl));
+    QueueInit(CpvAccess(CsdSchedQueue));
+    CsvInitialize(Queue, CsdNodeQueue);
+    if (CmiMyRank() == 0) {
+      CsvAccess(CsdNodeQueueLock) = CmiCreateLock();
+      CsvAccess(CsdNodeQueue) = (Queue)malloc(sizeof(QueueImpl));
+      QueueInit(CsvAccess(CsdNodeQueue));
+    }
   }
   CmiNodeBarrier();
 }
@@ -705,9 +866,64 @@ void CmiExit(int status) // note: status isn't being used meaningfully
 }
 
 // HANDLER TOOLS
+#if CMK_SHRINK_EXPAND
+// Position of the next registration in the replay of a survivor restart.
+//
+// A survivor re-runs the entire registration sequence after the rescale
+// longjmp. That sequence is deterministic and identical to the one a newcomer
+// runs, so the n-th registration must resolve to slot n as it did on the first
+// pass. Appending instead would shift every index recorded by the survivor
+// away from the one its peers compute for the same handler, and messages would
+// dispatch into the wrong slot. Replay positionally against the preserved
+// table and assert the entry matches, which also catches any init path that
+// silently diverges between the two passes.
+CpvStaticDeclare(size_t, se_replayPos);
+CpvStaticDeclare(bool, se_replayActive);
+
+void CmiHandlerReplayBegin(void) {
+  CpvInitialize(size_t, se_replayPos);
+  CpvInitialize(bool, se_replayActive);
+  CpvAccess(se_replayPos) = 0;
+  CpvAccess(se_replayActive) = true;
+}
+
+void CmiHandlerReplayEnd(void) {
+  if (CpvInitialized(se_replayActive))
+    CpvAccess(se_replayActive) = false;
+}
+
+// Returns -1 when not replaying, otherwise the slot this registration had on
+// the first pass.
+static int se_replaySlot(std::vector<CmiHandlerInfo> *table) {
+  if (!CpvInitialized(se_replayActive) || !CpvAccess(se_replayActive))
+    return -1;
+  size_t pos = CpvAccess(se_replayPos)++;
+  if (pos >= table->size()) {
+    // More registrations this pass than the last one: the init sequence
+    // diverged, and every index from here on would be inconsistent with the
+    // rest of the cluster. Fall through to appending and let the caller find
+    // out loudly rather than corrupt dispatch silently.
+    CmiPrintf("[%d] Warning: handler registration %zu has no counterpart in "
+              "the preserved table (size %zu); shrink/expand handler indices "
+              "may diverge from peers\n",
+              CmiMyPe(), pos, table->size());
+    return -1;
+  }
+  return (int)pos;
+}
+#endif
+
 int CmiRegisterHandler(CmiHandler h) {
   // add handler to vector
   std::vector<CmiHandlerInfo> *handlerVector = CmiGetHandlerTable();
+
+#if CMK_SHRINK_EXPAND
+  int slot = se_replaySlot(handlerVector);
+  if (slot >= 0) {
+    (*handlerVector)[slot] = {h, nullptr};
+    return slot;
+  }
+#endif
 
   handlerVector->push_back({h, nullptr});
   return handlerVector->size() - 1;
@@ -720,6 +936,15 @@ int CmiRegisterHandlerEx(CmiHandlerEx h, void *userPtr) {
   CmiHandlerInfo newEntry;
   newEntry.exhdlr = h;
   newEntry.userPtr = userPtr;
+
+#if CMK_SHRINK_EXPAND
+  int slot = se_replaySlot(handlerVector);
+  if (slot >= 0) {
+    (*handlerVector)[slot] = newEntry;
+    return slot;
+  }
+#endif
+
   handlerVector->push_back(newEntry);
   return handlerVector->size() - 1;
 }
@@ -810,9 +1035,26 @@ void CmiNodeBarrier(void) {
 void CmiNodeAllBarrier() { CmiNodeBarrier(); }
 
 void CmiAssignOnce(int *variable, int value) {
+#if CMK_SHRINK_EXPAND
+  // Truly assign-once across the whole process lifetime, not just per init
+  // pass. A survivor re-runs the registration sequence after the rescale
+  // longjmp and would otherwise overwrite the slot recorded on its first
+  // init. Chares and in-flight messages still reference that original slot,
+  // and a newcomer joining the cluster registers in the same deterministic
+  // order and lands on the same slot, so preserving the survivor's original
+  // value is exactly what keeps handler indices resolvable cluster-wide.
+  // Without this the survivor's index drifts to the latest re-registration
+  // while the newcomer's matches the original, and the newcomer dispatches
+  // out of bounds. Slot 0 is the reserved zero handler, so a real target is
+  // non-zero only after a successful prior call.
+  if (CmiMyRank() == 0 && *variable == 0) {
+    *variable = value;
+  }
+#else
   if (CmiMyRank() == 0) {
     *variable = value;
   }
+#endif
   CmiNodeAllBarrier();
 }
 

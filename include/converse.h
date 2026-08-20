@@ -1170,7 +1170,58 @@ int CmiFclose(FILE *fp);
 
 void registerTraceInit(void (*fn)(char **argv));
 
+// Charm++ registers CcsInit here from charm_main. Classic Converse calls
+// CcsInit from ConverseCommonInit, which Reconverse has no equivalent of, so
+// the hook lets Reconverse invoke it on every PE at the same point in the
+// startup sequence: after per-PE state exists, before the start function.
+void registerCcsInit(void (*fn)(char **argv));
+
 int CmiDeliverMsgs(int maxmsgs);
+
+/* ---------------------------------------------------------------------------
+ * No-restart shrink/expand.
+ *
+ * Charm++ arms a rescale by describing the membership change and setting the
+ * pending flag on every node, then reaching its exit path as usual.
+ * ConverseCleanup, called from that exit path, carries the change out: it
+ * never returns on a rescale, either longjmping back into charm_main (a
+ * process that stays) or exiting (a process that leaves). On an ordinary exit
+ * it returns and the caller proceeds to ConverseExit.
+ * ------------------------------------------------------------------------- */
+
+void ConverseCleanup(void);
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* One byte per current node, nonzero meaning the node stays. targetNumNodes is
+   the size the job wants afterwards; the shortfall against the number of
+   survivors is how many waiting newcomers to admit. Only node 0 acts on this,
+   since it is the one that drives the commit. */
+void CmiRescaleRequest(const char *availVector, int numOldNodes,
+                       int targetNumNodes);
+
+/* Must be set on every node, not just node 0: it is what tells ConverseCleanup
+   that this exit is a rescale rather than the end of the job. */
+void CmiSetRescalePending(int pending);
+int CmiRescalePending(void);
+
+/* Bootstrap from a coordinator rather than from the launcher's process
+   manager, which is what lets a job survive losing a host. Returns nonzero if
+   the coordinator supplied this process's identity; zero leaves the caller to
+   fall back to its normal bootstrap. */
+int CmiRescaleCoordBootstrap(const char *coordHost, int coordPort,
+                             int launcherNodeId, int launcherNumNodes,
+                             int isNewcomer, int *myNodeId, int *numNodes);
+
+/* The membership epoch every node agrees on, bumped by each committed
+   reconfiguration. Charm++ uses it as a cluster-wide generation number. */
+extern int _rescaleGeneration;
+
+#ifdef __cplusplus
+}
+#endif
 
 #ifdef __cplusplus
 #define CmiMemoryReadFence()                 std::atomic_thread_fence(std::memory_order_seq_cst)
