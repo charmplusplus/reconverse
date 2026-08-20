@@ -1270,7 +1270,6 @@ void CmiHandleMessage(void *msg) {
 
   CmiCallHandler(handler, msg);
 }
-// TODO: implement CmiPrintf
 int CmiPrintf(const char *format, ...) {
   va_list args;
   va_start(args, format);
@@ -1279,6 +1278,12 @@ int CmiPrintf(const char *format, ...) {
   vprintf(format, args);
 
   va_end(args);
+  // Flush before returning. Runtime output is diagnostic, and a job that
+  // hangs or aborts never returns to flush on its own, so anything still
+  // buffered is lost precisely when it is most needed: the last lines before
+  // a hang are the ones that say where it stopped. These prints are rare
+  // enough that the syscall does not matter.
+  fflush(stdout);
   return 0;
 }
 
