@@ -219,6 +219,15 @@ int get_affinity(cpu_set_t *cpuset) {
 void CmiInitHwlocTopology(void) {
   int depth;
 
+  // Probe once per process. The walk of /sys/devices/system/cpu takes
+  // milliseconds, and the hardware does not change underneath a running
+  // process: on a shrink/expand survivor, initialization runs again but the
+  // topology handles and the values derived from them are still the ones this
+  // probe would produce.
+  static bool loaded = false;
+  if (loaded) return;
+  loaded = true;
+
   hwloc_topology_init(&topology);
   hwloc_topology_load(topology);
 

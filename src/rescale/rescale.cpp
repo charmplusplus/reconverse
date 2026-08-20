@@ -39,6 +39,16 @@ extern bool _shrinkexpand_restarting;
 extern int _rescaleGeneration;
 void CmiSetRescaleRestartState(int myNode, int numNodes);
 
+// Timestamps Charm++ prints as the rescale breakdown. It owns the storage; the
+// machine layers stamp them, and so does this. All are PE-0 only, and a wall
+// clock rather than CmiWallTimer, whose epoch the rescale spans.
+extern double rescale_t_cleanup_enter;
+extern double rescale_t_commit_done;
+extern double rescale_t_ep_reinit_done;
+extern double rescale_t_barrier_done;
+extern double rescale_t_longjmp;
+extern double rescale_wall_now();
+
 namespace {
 
 // Coordinator connection, established at bootstrap and held for the life of
@@ -179,6 +189,7 @@ void ConverseCleanup(void) {
 
   const int oldNumNodes = CmiNumNodes();
   const int myNode = CmiMyNode();
+  if (myNode == 0) rescale_t_cleanup_enter = rescale_wall_now();
   const std::vector<coord::Member> oldMembers = currentMembers();
 
   // Quiesce the old membership before anyone's peer table is touched.
@@ -249,6 +260,8 @@ void ConverseCleanup(void) {
       CmiAbort("Shrink/expand: waiting for the committed view failed");
   }
 
+  if (myNode == 0) rescale_t_commit_done = rescale_wall_now();
+
   if (departing) {
     // Nothing to tear down: the survivors have already dropped their
     // connections to this process, and the OS reclaims the rest. Calling the
@@ -264,6 +277,7 @@ void ConverseCleanup(void) {
   _rescaleGeneration = (int)view.epoch;
 
   comm_backend::reconfigure(toBackendView(view));
+  if (myNode == 0) rescale_t_ep_reinit_done = rescale_wall_now();
 
   // Meet everyone, old and new, on the reconfigured transport before any of
   // us starts sending. Survivors are about to re-run initialization and
@@ -275,10 +289,12 @@ void ConverseCleanup(void) {
   // linearly. The reset of the collective sequence during reconfigure is what
   // lets a process that just joined take part in it.
   comm_backend::barrier();
+  if (myNode == 0) rescale_t_barrier_done = rescale_wall_now();
 
   CmiSetRescalePending(false);
   CmiSetRescaleRestartState((int)view.nodeId, (int)view.members.size());
   _shrinkexpand_restarting = true;
+  if (myNode == 0) rescale_t_longjmp = rescale_wall_now();
   longjmp(_shrinkexpand_jmpbuf, 1);
 }
 

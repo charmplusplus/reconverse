@@ -83,6 +83,11 @@ void CommBackendLCI2::init_mempool()
 {
   CpvInitialize(mempool_type*, mempool);
 
+  // Boot-once. Initialization runs again on a shrink/expand survivor, and
+  // building a second pool would both strand the first one, tens of megabytes
+  // of it, and put that allocation on the critical path of every rescale.
+  if (CpvAccess(mempool) != NULL) return;
+
   CpvAccess(mempool) = mempool_init(mempool_options.mempool_init_size,
     alloc_mempool_block,
     free_mempool_block,

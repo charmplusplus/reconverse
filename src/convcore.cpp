@@ -151,6 +151,12 @@ const char *se_phase = "boot";
 // newcomer rather than starting with it.
 static bool se_joinedAsNewcomer = false;
 
+// Stamps for the rescale breakdown Charm++ prints; it owns the storage.
+extern double rescale_t_lrtsinit_done;
+extern double rescale_t_converserunpe_enter;
+extern double rescale_t_commoninit_done;
+extern double rescale_wall_now();
+
 std::atomic<long> se_amSent{0};
 std::atomic<long> se_amRecv{0};
 #  define SE_COUNT_SEND() se_amSent.fetch_add(1, std::memory_order_relaxed)
@@ -214,6 +220,10 @@ void converseRunPe(int rank, int everReturn) {
   const bool se_restarting = _shrinkexpand_restarting;
 #else
   const bool se_restarting = false;
+#endif
+#if CMK_SHRINK_EXPAND
+  if (se_restarting && CmiMyNode() == 0)
+    rescale_t_converserunpe_enter = rescale_wall_now();
 #endif
   SE_PHASE("runpe:state");
   CmiInitState(rank);
@@ -294,6 +304,10 @@ void converseRunPe(int rank, int everReturn) {
 
   if(!everReturn)
   {
+  #if CMK_SHRINK_EXPAND
+    if (se_restarting && CmiMyNode() == 0)
+      rescale_t_commoninit_done = rescale_wall_now();
+#endif
     SE_PHASE("runpe:startfn");
     Cmi_startfn(CmiGetArgc(CmiMyArgv), CmiMyArgv);
     if (Cmi_usched == 0) {
@@ -429,6 +443,7 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
     // coordinator committed.
     Cmi_mynode = _shrinkexpand_my_node;
     Cmi_numnodes = _shrinkexpand_new_numnodes;
+    if (Cmi_mynode == 0) rescale_t_lrtsinit_done = rescale_wall_now();
     // The wall-clock epoch must not advance. Application code and Charm++
     // internals such as the load balancer hold CmiWallTimer() readings taken
     // before the rescale and compare them against readings taken after;
