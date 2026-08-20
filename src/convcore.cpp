@@ -11,6 +11,7 @@
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string>
 #include <thread>
 #include <vector>
 #include <sys/time.h>
@@ -391,6 +392,51 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
     comm_backend::init(argv);
     Cmi_mynode = comm_backend::getMyNodeId();
     Cmi_numnodes = comm_backend::getNumNodes();
+
+#if CMK_SHRINK_EXPAND
+    // Join the coordinator, if the launcher pointed us at one. It becomes the
+    // authority on who is in the job from here on: this process publishes the
+    // address peers need to reach it and receives everyone else's, so a later
+    // membership change can be carried out without a second pass through the
+    // backend's own bootstrap.
+    //
+    // An initial rank has already been wired up by that bootstrap and simply
+    // confirms the membership. A newcomer starts as a job of one and is wired
+    // into the running cluster here, once a commit admits it.
+    {
+      char *coordSpec = nullptr;
+      CmiGetArgStringDesc(argv, "+coordinator", &coordSpec,
+                          "host:port of the rescale coordinator");
+      const int isNewcomer =
+          CmiGetArgFlagDesc(argv, "+newcomer",
+                            "join a running job rather than start one");
+      if (coordSpec != nullptr) {
+        std::string spec(coordSpec);
+        size_t colon = spec.rfind(':');
+        if (colon == std::string::npos) {
+          fprintf(stderr, "Error: +coordinator wants host:port, got '%s'\n",
+                  coordSpec);
+          exit(1);
+        }
+        std::string host = spec.substr(0, colon);
+        int coordPort = atoi(spec.c_str() + colon + 1);
+        int newNode = Cmi_mynode, newNumNodes = Cmi_numnodes;
+        if (!CmiRescaleCoordBootstrap(host.c_str(), coordPort, Cmi_mynode,
+                                      Cmi_numnodes, isNewcomer, &newNode,
+                                      &newNumNodes)) {
+          fprintf(stderr,
+                  "Error: could not join the coordinator at %s; either it is "
+                  "not reachable or this communication backend cannot change "
+                  "membership\n",
+                  coordSpec);
+          exit(1);
+        }
+        Cmi_mynode = newNode;
+        Cmi_numnodes = newNumNodes;
+      }
+    }
+#endif
+
     comm_backend::barrier();
     Cmi_startTime = getCurrentTime();
   }
