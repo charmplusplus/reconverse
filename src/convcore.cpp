@@ -1303,9 +1303,17 @@ int CmiTimerAbsolute() {
 void CmiAbortHelper(const char *source, const char *message,
                     const char *suggestion, int tellDebugger,
                     int framesToSkip) {
-  CmiPrintf("------- Processor %d Exiting: %s ------\n"
-            "Reason: %s\n",
-            CmiMyPe(), source, message);
+  // Written straight to stderr and flushed, not through CmiPrintf. The caller
+  // is about to call abort(), which discards whatever is sitting in stdout's
+  // buffer, so a message printed the usual way never reaches anyone: the job
+  // dies leaving only a core file and an exit status. That has cost enough
+  // debugging time to be worth the direct write.
+  fprintf(stderr,
+          "------- Processor %d Exiting: %s ------\nReason: %s\n",
+          CmiMyPe(), source, message);
+  if (suggestion) fprintf(stderr, "Suggestion: %s\n", suggestion);
+  fflush(stderr);
+  fflush(stdout);
 }
 
 void CmiAbort(const char *format, ...) {
