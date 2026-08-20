@@ -5,6 +5,7 @@
 #include "taskqueue.h"
 #include "scheduler.h"
 
+#include <algorithm>
 #include <cinttypes>
 #include <conv-rdma.h>
 #include <cstdarg>
@@ -187,14 +188,6 @@ void converseRunPe(int rank, int everReturn) {
   // init task queue work-stealing callbacks
   CmiTaskQueueInit();
   #endif
-
-#if CMK_SHRINK_EXPAND
-  // Everything from here until the start function returns re-runs the same
-  // handler-registration sequence the first pass ran. Replay it against the
-  // preserved table so each handler keeps the index its peers know it by.
-  if (se_restarting)
-    CmiHandlerReplayBegin();
-#endif
 
   // init things like cld module, ccs, etc
   CldModuleInit(CmiMyArgv);
@@ -610,40 +603,47 @@ void CmiInitState(int rank) {
   if (CmiHandlerTable[Cmi_myrank] == nullptr)
     CmiHandlerTable[Cmi_myrank] = new std::vector<CmiHandlerInfo>();
 
-  // Everything below is per-PE state built once per process lifetime. On a
-  // shrink/expand survivor restart this function runs again on the very same
-  // thread, so its __thread Cpv cells are all still bound and live: re-running
-  // CpvInitialize would rebind them to fresh cells and orphan the state they
-  // point at, including the scheduler queue holding messages that arrived from
-  // faster-restoring peers. Skip the whole block; only the node barrier below
-  // still has to run, to stay in lockstep with newcomer processes.
 #if CMK_SHRINK_EXPAND
-  if (!_shrinkexpand_restarting)
+  // From here to the end of the start function, this pass re-runs the same
+  // handler-registration sequence the first pass ran. Replay it against the
+  // preserved table so each handler keeps the index its peers know it by. It
+  // has to start here, before the first CmiRegisterHandler below, and it needs
+  // CmiMyRank(), which the state assignment above has just made valid.
+  if (_shrinkexpand_restarting) CmiHandlerReplayBegin();
 #endif
-  {
-    // random
-    CrnInit();
-    CpvInitialize(std::vector<NcpyOperationInfo *>,
-                  newZCPupGets); // Check if this is necessary
-    CpvInitialize(int, interopExitFlag);
-    CpvAccess(interopExitFlag) = 0;
-    if(rank == 0) CmiMemoryIs_flag |= CMI_MEMORY_IS_OS;
-    #ifdef CMK_USE_SHMEM
-    CsvInitialize(CmiIpcManager*, coreIpcManager_);
-    CsvAccess(coreIpcManager_) = nullptr;
-    #endif
-    CmiOnesidedDirectInit();
-    CmiPersistentInit();
-    CcdModuleInit();
-    CpvInitialize(Queue, CsdSchedQueue);
+
+  // random
+  CrnInit();
+  CpvInitialize(std::vector<NcpyOperationInfo *>,
+                newZCPupGets); // Check if this is necessary
+  CpvInitialize(int, interopExitFlag);
+  CpvAccess(interopExitFlag) = 0;
+  if(rank == 0) CmiMemoryIs_flag |= CMI_MEMORY_IS_OS;
+  #ifdef CMK_USE_SHMEM
+  CsvInitialize(CmiIpcManager*, coreIpcManager_);
+  CsvAccess(coreIpcManager_) = nullptr;
+  #endif
+  // These register handlers, so they run on every pass: skipping them on a
+  // restart would shift every later handler index away from the one the rest
+  // of the cluster computes. CpvInitialize is init-once per thread, so the
+  // state they hang off survives the re-run.
+  CmiOnesidedDirectInit();
+  CmiPersistentInit();
+  CcdModuleInit();
+
+  // The scheduler queues are boot-once for the same reason as the message
+  // queue above: peers that finish restarting first enqueue into them while
+  // this PE is still on its way back up.
+  CpvInitialize(Queue, CsdSchedQueue);
+  if (CpvAccess(CsdSchedQueue) == NULL) {
     CpvAccess(CsdSchedQueue) = (Queue)malloc(sizeof(QueueImpl));
     QueueInit(CpvAccess(CsdSchedQueue));
-    CsvInitialize(Queue, CsdNodeQueue);
-    if (CmiMyRank() == 0) {
-      CsvAccess(CsdNodeQueueLock) = CmiCreateLock();
-      CsvAccess(CsdNodeQueue) = (Queue)malloc(sizeof(QueueImpl));
-      QueueInit(CsvAccess(CsdNodeQueue));
-    }
+  }
+  CsvInitialize(Queue, CsdNodeQueue);
+  if (CmiMyRank() == 0 && CsvAccess(CsdNodeQueue) == NULL) {
+    CsvAccess(CsdNodeQueueLock) = CmiCreateLock();
+    CsvAccess(CsdNodeQueue) = (Queue)malloc(sizeof(QueueImpl));
+    QueueInit(CsvAccess(CsdNodeQueue));
   }
   CmiNodeBarrier();
 }
@@ -913,23 +913,30 @@ void CmiExit(int status) // note: status isn't being used meaningfully
 
 // HANDLER TOOLS
 #if CMK_SHRINK_EXPAND
-// Position of the next registration in the replay of a survivor restart.
+// Replay of the handler registrations on a survivor restart.
 //
-// A survivor re-runs the entire registration sequence after the rescale
-// longjmp. That sequence is deterministic and identical to the one a newcomer
-// runs, so the n-th registration must resolve to slot n as it did on the first
-// pass. Appending instead would shift every index recorded by the survivor
-// away from the one its peers compute for the same handler, and messages would
-// dispatch into the wrong slot. Replay positionally against the preserved
-// table and assert the entry matches, which also catches any init path that
-// silently diverges between the two passes.
-CpvStaticDeclare(size_t, se_replayPos);
+// A survivor re-runs initialization after the rescale longjmp, and every
+// handler index recorded before it, by the survivor and by its peers alike,
+// is an index into the table that pass built. Appending would give the same
+// handler a different index on this process than the rest of the cluster
+// computes for it, and messages would dispatch into the wrong slot.
+//
+// So a registration during a restart resolves to the slot that handler
+// already occupies rather than to a new one. The search runs forward from the
+// last match, which keeps two registrations of the same function in their
+// original order, and tolerates the parts of initialization that legitimately
+// run only once per process: a module with its own already-initialized guard
+// simply contributes no registrations this time, and the search steps over its
+// slots to find the next one that does match.
+CpvStaticDeclare(std::vector<bool> *, se_replayClaimed);
 CpvStaticDeclare(bool, se_replayActive);
 
 void CmiHandlerReplayBegin(void) {
-  CpvInitialize(size_t, se_replayPos);
+  CpvInitialize(std::vector<bool> *, se_replayClaimed);
   CpvInitialize(bool, se_replayActive);
-  CpvAccess(se_replayPos) = 0;
+  if (CpvAccess(se_replayClaimed) == NULL)
+    CpvAccess(se_replayClaimed) = new std::vector<bool>();
+  CpvAccess(se_replayClaimed)->assign(CmiGetHandlerTable()->size(), false);
   CpvAccess(se_replayActive) = true;
 }
 
@@ -938,24 +945,34 @@ void CmiHandlerReplayEnd(void) {
     CpvAccess(se_replayActive) = false;
 }
 
-// Returns -1 when not replaying, otherwise the slot this registration had on
-// the first pass.
-static int se_replaySlot(std::vector<CmiHandlerInfo> *table) {
+// Returns -1 when not replaying, or when this handler is genuinely new and
+// should be appended. Otherwise the slot it already occupies.
+static int se_replaySlot(std::vector<CmiHandlerInfo> *table,
+                         const CmiHandlerInfo &entry) {
   if (!CpvInitialized(se_replayActive) || !CpvAccess(se_replayActive))
     return -1;
-  size_t pos = CpvAccess(se_replayPos)++;
-  if (pos >= table->size()) {
-    // More registrations this pass than the last one: the init sequence
-    // diverged, and every index from here on would be inconsistent with the
-    // rest of the cluster. Fall through to appending and let the caller find
-    // out loudly rather than corrupt dispatch silently.
-    CmiPrintf("[%d] Warning: handler registration %zu has no counterpart in "
-              "the preserved table (size %zu); shrink/expand handler indices "
-              "may diverge from peers\n",
-              CmiMyPe(), pos, table->size());
-    return -1;
+  std::vector<bool> &claimed = *CpvAccess(se_replayClaimed);
+  const size_t n = std::min(claimed.size(), table->size());
+  // First slot holding this handler that no earlier registration in this pass
+  // has already taken. Claiming rather than advancing a cursor keeps two
+  // registrations of the same function in order without assuming this pass
+  // visits them in the same order as the first one did; parts of
+  // initialization are gated differently on a restart, so it does not.
+  for (size_t i = 0; i < n; ++i) {
+    if (claimed[i]) continue;
+    const CmiHandlerInfo &have = (*table)[i];
+    // hdlr and exhdlr share storage, so comparing one covers both forms.
+    if (have.hdlr == entry.hdlr && have.userPtr == entry.userPtr) {
+      claimed[i] = true;
+      return (int)i;
+    }
   }
-  return (int)pos;
+  // Nothing in the preserved table matches, so this handler is new in this
+  // pass and will land on an index the rest of the cluster does not know.
+  CmiPrintf("[%d] Warning: shrink/expand found no preserved slot for handler "
+            "%p; its index will not match the rest of the cluster\n",
+            CmiMyPe(), (void *)entry.hdlr);
+  return -1;
 }
 #endif
 
@@ -963,15 +980,14 @@ int CmiRegisterHandler(CmiHandler h) {
   // add handler to vector
   std::vector<CmiHandlerInfo> *handlerVector = CmiGetHandlerTable();
 
+  CmiHandlerInfo newEntry = {h, nullptr};
+
 #if CMK_SHRINK_EXPAND
-  int slot = se_replaySlot(handlerVector);
-  if (slot >= 0) {
-    (*handlerVector)[slot] = {h, nullptr};
-    return slot;
-  }
+  int slot = se_replaySlot(handlerVector, newEntry);
+  if (slot >= 0) return slot;
 #endif
 
-  handlerVector->push_back({h, nullptr});
+  handlerVector->push_back(newEntry);
   return handlerVector->size() - 1;
 }
 
@@ -984,11 +1000,8 @@ int CmiRegisterHandlerEx(CmiHandlerEx h, void *userPtr) {
   newEntry.userPtr = userPtr;
 
 #if CMK_SHRINK_EXPAND
-  int slot = se_replaySlot(handlerVector);
-  if (slot >= 0) {
-    (*handlerVector)[slot] = newEntry;
-    return slot;
-  }
+  int slot = se_replaySlot(handlerVector, newEntry);
+  if (slot >= 0) return slot;
 #endif
 
   handlerVector->push_back(newEntry);

@@ -463,6 +463,21 @@ void LrtsInitCpuTopo(char** argv)
   CmiAssignOnce(&cpuTopoRecvHandlerIdx,
                 CmiRegisterHandler((CmiHandler)cpuTopoRecvHandler));
 
+  // This module keeps its results in file-scope state, on the assumption that
+  // it runs once. A shrink/expand survivor comes back through here with a
+  // different set of PEs, so the previous run's answers have to go: topomsg in
+  // particular was handed to CmiSyncNodeBroadcastAllAndFree and freed, and
+  // reusing it is a use-after-free. Everything below is recomputed from the
+  // exchange that follows.
+  topomsg = NULL;
+  cpuTopoSyncHandlerDone = false;
+  hostTable.clear();
+  cpuTopo.nodeIDs = NULL;
+  cpuTopo.numPes = 0;
+  cpuTopo.numNodes = 0;
+  cpuTopo.bynodes = NULL;
+  cpuTopo.supported = 0;
+
   if (!obtain_flag)
   {
     if (CmiMyRank() == 0)
@@ -560,6 +575,7 @@ void LrtsInitCpuTopo(char** argv)
       {
         CmiSyncNodeBroadcastAllAndFree(sizeof(nodeTopoMsg) + CmiNumPes() * sizeof(int),
                                        (char*)topomsg);
+        topomsg = NULL;  // freed by the broadcast
 
         CsdSchedulePoll();
       }

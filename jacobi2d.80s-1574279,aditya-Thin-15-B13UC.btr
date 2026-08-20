@@ -1,0 +1,12 @@
+
+jacobi2d:1574279 terminated with signal 11 at PC=7cc79071ebcf SP=7ffe67ad47d0.  Backtrace:
+/home/aditya/charm/reconverse-linux-x86_64/lib/libreconverse.so(_Z9CthResumeP15CthThreadStruct+0x2f)[0x7cc79071ebcf]
+/home/aditya/charm/reconverse-linux-x86_64/lib/libreconverse.so(_Z15CsdSchedulePollv+0x164)[0x7cc790717b04]
+/home/aditya/charm/reconverse-linux-x86_64/lib/libreconverse.so(_Z15LrtsInitCpuTopoPPc+0x38d)[0x7cc7907240dd]
+/home/aditya/charm/examples/charm++/shrink_expand/jacobi2d-iter/jacobi2d(_Z10_initCharmiPPc+0xec0)[0x639673dafbb0]
+/home/aditya/charm/reconverse-linux-x86_64/lib/libreconverse.so(_Z13converseRunPeii+0x160)[0x7cc790712e60]
+/home/aditya/charm/reconverse-linux-x86_64/lib/libreconverse.so(_Z12ConverseInitiPPcPFviS0_Eii+0x4a2)[0x7cc790713432]
+/home/aditya/charm/examples/charm++/shrink_expand/jacobi2d-iter/jacobi2d(charm_main+0x234)[0x639673dae9f4]
+/lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca)[0x7cc78fe2a1ca]
+/lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b)[0x7cc78fe2a28b]
+/home/aditya/charm/examples/charm++/shrink_expand/jacobi2d-iter/jacobi2d(_start+0x25)[0x639673c1ed75]

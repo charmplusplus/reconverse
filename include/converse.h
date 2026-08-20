@@ -107,8 +107,17 @@ extern CmiNodeLock CmiMemLock_lock;
       }                                                                \
       else                                                             \
         CmiMemUnlock();                                                \
-      t* cpvobj = CpvInit_Alloc_scalar(t);                             \
-      CMK_TAG(Cpv_,v) = cpvobj;                                        \
+      /* Initialize once per thread, as Converse does. Allocating a fresh   \
+         cell on every call would silently orphan whatever the variable     \
+         already pointed at, which matters as soon as initialization runs   \
+         more than once in a process: a shrink/expand survivor re-enters    \
+         ConverseInit after the rescale longjmp, and everything reached     \
+         from a Cpv (the scheduler queue, the CCS handler table, ...) has   \
+         to still be there afterwards. */                                   \
+      if (CMK_TAG(Cpv_,v) == NULL) {                                   \
+        t* cpvobj = CpvInit_Alloc_scalar(t);                           \
+        CMK_TAG(Cpv_,v) = cpvobj;                                      \
+      }                                                                \
       CMK_TAG(Cpv_addr_,v)[CmiMyRank()] = CMK_TAG(Cpv_,v);             \
     } while(0)
 

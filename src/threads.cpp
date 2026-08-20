@@ -176,6 +176,15 @@ void CthInit(char **argv) {
   CthThread t;
 
   CthBaseInit(argv);
+
+  // The thread this represents is the one already executing, on the stack it
+  // is already using. If it has been set up before, on an earlier trip through
+  // initialization, keep it: replacing it hands the scheduler a thread whose
+  // recorded context is not where execution actually is, and the first resume
+  // after that jumps into nothing. (A shrink/expand survivor comes back
+  // through here after the rescale longjmp, on the same thread.)
+  if (CpvAccess(CthCurrent) != NULL) return;
+
   t = (CthThread)malloc(sizeof(struct CthThreadStruct));
   //_MEMCHECK(t);
   CpvAccess(CthCurrent) = t;
