@@ -18,26 +18,9 @@ CpvDeclare(int, setRemoteBufHIdx);
 CpvDeclare(int, rmaGetSignalHIdx);
 CpvDeclare(int, exitBenchmarkHIdx);
 
-struct LoopBackMsg {
-  CmiMessageHeader header;
-  void* msg;
-};
-
-void CkRdmaDeviceRecvHandler(void* msg) {
-  printf("[LoopBack bridge] Bridge successful for PE: %d, on Process: %d\n", CmiMyPe(), CmiMyNode());
-  fflush(stdout);
-}
-
-void* loopback_bridge(void* arg) {
-  printf("[LoopBack bridge] I am being called for PE: %d, on Process: %d\n", CmiMyPe(), CmiMyNode());
-  fflush(stdout);
-  LoopBackMsg* recv_msg = (LoopBackMsg*)arg;
-  CkRdmaDeviceRecvHandler(recv_msg->msg);
-  CmiFree(recv_msg);
-  return NULL;
-}
-
-int loopback_handler;
+// The two PEs of this benchmark live in different processes, so "the other PE"
+// is always the one this PE is not.
+static inline int otherPe() { return 1 - CmiMyPe(); }
 
 void setupRMABuf();
 
@@ -59,13 +42,15 @@ void setupRMABuf() {
   char *msg = (char *)CmiAlloc(CmiMsgHeaderSizeBytes + sizeof(CmiNcpyBuffer));
   *((CmiNcpyBuffer *)(msg + CmiMsgHeaderSizeBytes)) = CpvAccess(localBuf);
   CmiSetHandler(msg, CpvAccess(setRemoteBufHIdx));
-  CmiSyncSendAndFree(1 - CmiMyPe(), CmiMsgHeaderSizeBytes + sizeof(CmiNcpyBuffer), msg);
+  CmiSyncSendAndFree(otherPe(), CmiMsgHeaderSizeBytes + sizeof(CmiNcpyBuffer),
+                     msg);
 }
 
 void startWarmUp();
 
 void setRemoteBufHandler(char *msg) {
   CpvAccess(remoteBuf) = *((CmiNcpyBuffer *)(msg + CmiMsgHeaderSizeBytes));
+  CmiFree(msg);
   if (CmiMyPe() == 1) {
     CpvAccess(msgSize) = CpvAccess(remoteBuf).cnt;
     setupRMABuf();
@@ -83,16 +68,7 @@ void startWarmUp() {
 }
 
 void doRMA() {
-  CpvAccess(localBuf).rdmaGet(CpvAccess(remoteBuf), 0,
-                          nullptr, nullptr);
-  LoopBackMsg* conv_msg = (LoopBackMsg*)CmiAlloc(sizeof(LoopBackMsg));
-  loopback_handler = CmiRegisterHandler((CmiHandler) loopback_bridge);
-
-  CmiSetHandler(conv_msg, loopback_handler);
-  CmiPushPE(1 - CmiMyPe(), conv_msg);
-  printf("[doRMA] Loopbacked the message to the correct pe : %d, for PE: %d, on Process: %d\n", 1 - CmiMyPe(), CmiMyPe(), CmiMyNode());
-  fflush(stdout);
-  return;
+  CpvAccess(localBuf).rdmaGet(CpvAccess(remoteBuf), 0, nullptr, nullptr);
 }
 
 void rmaGetLocalComp(void *context) {
@@ -105,13 +81,13 @@ void rmaGetLocalComp(void *context) {
   // send remote completion signal
   char *msg = (char *)CmiAlloc(CmiMsgHeaderSizeBytes);
   CmiSetHandler(msg, CpvAccess(rmaGetSignalHIdx));
-  CmiSyncSendAndFree(1 - CmiMyPe(),
-                     CmiMsgHeaderSizeBytes, msg);
+  CmiSyncSendAndFree(otherPe(), CmiMsgHeaderSizeBytes, msg);
 }
 
 void endRing();
 
-void rmaGetSignalHandler(char*) {
+void rmaGetSignalHandler(char *msg) {
+  CmiFree(msg);
   if (CmiMyPe() == 1) {
     // PE 1 just do a "pong" get back
     doRMA();
@@ -141,7 +117,8 @@ void endRing() {
   CpvAccess(endTime) = CmiWallTimer();
 
   // Print the time for that message size
-  CmiPrintf("Size=%zu bytes, time=%lf microseconds one-way\n", CpvAccess(msgSize),
+  CmiPrintf("Size=%d bytes, time=%lf microseconds one-way\n",
+            CpvAccess(msgSize),
             (1e6 * (CpvAccess(endTime) - CpvAccess(startTime))) /
                 (2. * CpvAccess(nCycles)));
 
@@ -154,7 +131,7 @@ void endRing() {
     exitBenchmark();
   }
 }
-void exitBenchmarkHandler(char*);
+void exitBenchmarkHandler(char *msg);
 
 void exitBenchmark() {
   char *msg = (char *)CmiAlloc(CmiMsgHeaderSizeBytes);
@@ -162,7 +139,8 @@ void exitBenchmark() {
   CmiSyncBroadcastAllAndFree(CmiMsgHeaderSizeBytes, msg);
 }
 
-void exitBenchmarkHandler(char*) {
+void exitBenchmarkHandler(char *msg) {
+  CmiFree(msg);
   // clean up resources
   if (CpvAccess(localBuf).ptr != nullptr) {
     CpvAccess(localBuf).deregisterMem();
@@ -233,9 +211,14 @@ CmiStartFn mymain(int argc, char *argv[]) {
               CpvAccess(factor));
   }
 
-  if (CmiNumNodes() != 2 && CmiNumPes() != 2 && CmiMyPe() == 0) {
-    CmiAbort(
-        "This test is designed for only 2 nodes and with 1 PE per node\n");
+  // Exactly two PEs, one per process. Two PEs in the same process would make
+  // CmiIssueRget take its intra-node shortcut (a plain memcpy), which is not
+  // the path this benchmark exists to measure. Every PE runs this check, so an
+  // unusable configuration tears the whole job down instead of hanging.
+  if (CmiNumPes() != 2 || CmiNumNodes() != 2) {
+    CmiAbort("This test needs exactly 2 PEs in 2 separate processes, so that "
+             "the get goes over the network RDMA path. Run it as: <launcher> "
+             "-n 2 ./reconverse_rdma_pingpong +pe 2\n");
   }
 
   CpvAccess(msgSize) = CpvAccess(minMsgSize);
