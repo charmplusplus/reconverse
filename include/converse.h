@@ -934,6 +934,9 @@ typedef struct ncpystruct {
   int rootNode;
   void *refPtr;
 
+  // ipc specific
+  void* deviceRdmaOpInfo;
+
 } NcpyOperationInfo;
 
 enum ncpyOperationMode {
@@ -1302,6 +1305,12 @@ void CmiInterSyncNodeSendAndFreeFn(int destNode, int partition, int messageSize,
 #define CMI_IPC_CUTOFF_DESC "max message size for cmi-shmem (in bytes)"
 #define CMI_IPC_POOL_SIZE_ARG "ipcpoolsize"
 #define CMI_IPC_POOL_SIZE_DESC "size of cmi-shmem pool (in bytes)"
+
+/* Charm++'s charmrun forwards the ipc settings to the compute nodes through
+   these environment variables, so they have to be part of the converse.h
+   contract even though reconverse itself reads the ++ arguments above. */
+#define CMI_IPC_CUTOFF_ENV_VAR "CmiIpcCutoff"
+#define CMI_IPC_POOL_SIZE_ENV_VAR "CmiIpcPoolSize"
 
 struct CmiIpcManager;
 

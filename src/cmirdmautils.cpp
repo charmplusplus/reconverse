@@ -37,7 +37,8 @@ void setNcpyOpInfo(
     int destPe,
     const void *destRef,
     int rootNode,
-    NcpyOperationInfo *ncpyOpInfo) {
+    NcpyOperationInfo *ncpyOpInfo,
+    void* deviceRdmaOpInfo) {
 
   char *base = (char *)ncpyOpInfo + sizeof(NcpyOperationInfo);
 
@@ -108,6 +109,8 @@ void setNcpyOpInfo(
   ncpyOpInfo->freeMe  = CMK_FREE_NCPYOPINFO; // default freeMe mode is CMK_FREE_NCPYOPINFO
 
   ncpyOpInfo->rootNode = rootNode;
+
+  ncpyOpInfo->deviceRdmaOpInfo = deviceRdmaOpInfo;
 
   ncpyOpInfo->ncpyOpInfoSize = (unsigned short int)(sizeof(NcpyOperationInfo) + srcLayerSize + destLayerSize + srcAckSize + destAckSize);
 }

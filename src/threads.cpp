@@ -276,6 +276,13 @@ static void CthThreadBaseFree(CthThreadBase *th) {
   free(th->data);
 
   if (th->stack != NULL) {
+    for (l = th->listener; l != NULL; l = lnext) {
+      lnext = l->next;
+      l->next = 0;
+      if (l->free)
+        l->free(l);
+    }
+    th->listener = NULL;
     free(th->stack);
   }
   th->stack = NULL;
