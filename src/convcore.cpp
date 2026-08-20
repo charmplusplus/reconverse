@@ -147,6 +147,10 @@ void CommLocalHandler(comm_backend::Status status) {
 // a pointer store per phase.
 const char *se_phase = "boot";
 
+// True when this process entered the job through the coordinator as a
+// newcomer rather than starting with it.
+static bool se_joinedAsNewcomer = false;
+
 std::atomic<long> se_amSent{0};
 std::atomic<long> se_amRecv{0};
 #  define SE_COUNT_SEND() se_amSent.fetch_add(1, std::memory_order_relaxed)
@@ -244,11 +248,16 @@ void converseRunPe(int rank, int everReturn) {
   //printf("[DBG] pe %d rank %d: converseRunPe nodebarrier1 start\n", CmiMyPe(), rank); fflush(stdout);
   comm_backend::init_mempool();
   CmiNodeBarrier();
-  //printf("[DBG] pe %d rank %d: converseRunPe nodebarrier1 done\n", CmiMyPe(), rank); fflush(stdout);
   if (rank == 0) {
-    //printf("[DBG] pe %d: converseRunPe global barrier start\n", CmiMyPe()); fflush(stdout);
+#if CMK_SHRINK_EXPAND
+    // Skipped after a membership change, for the reason given at the matching
+    // barrier in ConverseInit: the backend's is a sequenced collective, and a
+    // process that just joined cannot be on the same instance of it as the
+    // ones already running. The coordinator barrier already synchronized them
+    // all.
+    if (!se_restarting && !se_joinedAsNewcomer)
+#endif
     comm_backend::barrier();
-    //printf("[DBG] pe %d: converseRunPe global barrier done\n", CmiMyPe()); fflush(stdout);
   }
   //printf("[DBG] pe %d rank %d: converseRunPe nodebarrier2 start\n", CmiMyPe(), rank); fflush(stdout);
   CmiNodeBarrier();
@@ -472,11 +481,16 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
         }
         Cmi_mynode = newNode;
         Cmi_numnodes = newNumNodes;
+        // A newcomer has already met the rest of the job at the coordinator's
+        // barrier, inside the bootstrap. The backend barrier below would be a
+        // second, different rendezvous that the processes already running are
+        // never going to enter: they passed it on their own first init.
+        se_joinedAsNewcomer = (isNewcomer != 0);
       }
     }
 #endif
 
-    comm_backend::barrier();
+    if (!se_joinedAsNewcomer) comm_backend::barrier();
     Cmi_startTime = getCurrentTime();
   }
   RDMAInit(argv);
@@ -593,7 +607,15 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
   }
 
   // make sure the queues are allocated before PEs start sending messages around
-  //if (Cmi_mynode == 0) { printf("[DBG] node 0: ConverseInit barrier start\n"); fflush(stdout); }
+#if CMK_SHRINK_EXPAND
+  // Not after a membership change. The backend's barrier is a sequenced
+  // collective: every process has to be on the same instance of it, and a
+  // process that just joined has run none while the others have run many, so
+  // it would wait for an instance they are already past. The coordinator
+  // barrier stands in for it there, and it has the same meaning: everyone,
+  // joiners included, has come through it before anyone sends.
+  if (!_shrinkexpand_restarting && !se_joinedAsNewcomer)
+#endif
   comm_backend::barrier();
   //if (Cmi_mynode == 0) { printf("[DBG] node 0: ConverseInit barrier done\n"); fflush(stdout); }
 

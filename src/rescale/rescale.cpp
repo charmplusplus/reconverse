@@ -144,6 +144,15 @@ int CmiRescaleCoordBootstrap(const char *coordHost, int coordPort,
   _rescaleGeneration = (int)view.epoch;
   comm_backend::reconfigure(toBackendView(view));
 
+  if (isNewcomer) {
+    // Meet the processes already in the job at the barrier they are waiting
+    // in, which is the coordinator's: they reached it from ConverseCleanup,
+    // having already been through the backend's own barrier on their first
+    // init. Waiting on the backend barrier instead would be waiting for
+    // processes that are never going to arrive.
+    if (!coord::barrier(g_coordFd, view.epoch, view.nodeId)) return 0;
+  }
+
   *myNodeId = (int)view.nodeId;
   *numNodes = (int)view.members.size();
   return 1;

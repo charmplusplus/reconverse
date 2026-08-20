@@ -6,6 +6,21 @@ CommBackendBase *gCommBackend = nullptr;
 int gNumNodes = 1;
 int gMyNodeID = 0;
 
+namespace
+{
+// A process started to join a running job begins as a job of one, and grows
+// into the cluster when a membership change admits it. Its backend has to
+// survive that: the single-node shortcut below would otherwise tear down the
+// very endpoint whose address the coordinator is waiting to hand out.
+bool willJoinLargerJob(char **argv)
+{
+  for (int i = 0; argv != nullptr && argv[i] != nullptr; i++) {
+    if (strcmp(argv[i], "+coordinator") == 0) return true;
+  }
+  return false;
+}
+}  // namespace
+
 void init(char **argv) {
   const char *backend_str = nullptr;
 // default to LCI2 if both are enabled
@@ -43,7 +58,7 @@ void init(char **argv) {
   gCommBackend->init(argv);
   gMyNodeID = gCommBackend->getMyNodeId();
   gNumNodes = gCommBackend->getNumNodes();
-  if (gNumNodes == 1) {
+  if (gNumNodes == 1 && !willJoinLargerJob(argv)) {
     //DEBUGF("Only one node detected, exiting comm backend\n");
     exit();
   }
