@@ -24,6 +24,7 @@
 #include <setjmp.h>
 #include <unistd.h>
 #include <cstdlib>
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -265,7 +266,19 @@ int CmiRescaleCoordBootstrap(const char *coordHost, int coordPort,
     // Needed before any send; otherwise set up later in converseRunPe.
     // Shrink/expand runs one PE per process, so this is that PE.
     comm_backend::initThread(0, 1);
-    if (!view.members.empty()) {
+    // Off by default. This used to take the job down whenever a newcomer
+    // registered, because handler registration ran after this bootstrap and
+    // the sends below went out with the initializer value -1 as the handler
+    // index; peers dispatched that out of bounds. Registration now happens
+    // before the bootstrap, so the index is valid, but the path has not been
+    // measured end to end and the payoff is small: wireup costs 1.0-1.5 ms for
+    // three peers, against a GPU expansion of a few ms in total. Note also
+    // that UCX's equivalent is not an application message at all -- ucp_ep_create
+    // plus ucp_worker_flush is a transport-level handshake that delivers
+    // nothing to the peer, and LCI has no such primitive.
+    const char* wireupEnv = getenv("CHARM_NEWCOMER_WIREUP");
+    const bool wireupEnabled = wireupEnv && strcmp(wireupEnv, "0") != 0;
+    if (wireupEnabled && !view.members.empty()) {
       double t0 = rescale_wall_now();
       // A rank is needed to reconfigure, and this process does not have its
       // real one yet; anything outside the current membership will do, since

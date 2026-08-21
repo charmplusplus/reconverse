@@ -456,6 +456,23 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
     Cmi_mynode = comm_backend::getMyNodeId();
     Cmi_numnodes = comm_backend::getNumNodes();
 
+    // Register am handlers before the coordinator bootstrap below, not after.
+    // A newcomer's speculative wireup sends from inside that bootstrap, and
+    // with registration happening later it was sending with the initializer
+    // value -1 as the handler index. Peers dispatched that out-of-bounds and
+    // died, taking the job down whenever a newcomer registered. Registration
+    // is CmiRegisterHandler-backed and must not repeat on a survivor restart,
+    // or the index drifts away from the one newcomers compute; the order here
+    // is identical for survivors and newcomers, so the indices agree.
+#if CMK_SHRINK_EXPAND
+    if (!_shrinkexpand_restarting) {
+      g_amHandler = comm_backend::registerAmHandler(CommRemoteHandler);
+      CmiRegisterRescaleFanoutHandler();
+    }
+#else
+    g_amHandler = comm_backend::registerAmHandler(CommRemoteHandler);
+#endif
+
 #if CMK_SHRINK_EXPAND
     // Join the coordinator, if the launcher pointed us at one. It becomes the
     // authority on who is in the job from here on: this process publishes the
@@ -567,20 +584,6 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
               Cmi_mynodesize);
     exit(1);
   }
-#endif
-
-  // register am handlers
-#if CMK_SHRINK_EXPAND
-  // CmiRegisterHandler-backed; must not re-register on a survivor restart or
-  // the handler index drifts away from the one newcomers compute. The rescale
-  // broadcast handler is registered here too, immediately after and under the
-  // same guard, so every process agrees on its index as well.
-  if (!_shrinkexpand_restarting) {
-    g_amHandler = comm_backend::registerAmHandler(CommRemoteHandler);
-    CmiRegisterRescaleFanoutHandler();
-  }
-#else
-  g_amHandler = comm_backend::registerAmHandler(CommRemoteHandler);
 #endif
 
 #ifdef RECONVERSE_ENABLE_CPU_AFFINITY
