@@ -132,6 +132,32 @@ int CmiPersistentHandleSend(int destPE, int messageSize, void *msg);
    is dropped, to hand the buffer back to its sender. */
 void CmiPersistentReleaseBuffer(void *msg);
 
+/* --- Compatibility with the classic Converse persistent API ---------------
+
+   Classic Charm++ offers compressing variants of the channel constructors,
+   selected by a CMI_* payload type. Reconverse does not compress messages in
+   flight, so these fall back to the plain constructors: the channel still
+   carries maxBytes, the payload just travels uncompressed. Kept so that
+   applications written against the classic API (NAMD's PME, for one) compile
+   and run unchanged. */
+#ifndef CMI_CHAR
+#define CMI_CHAR     0
+#define CMI_FLOATING 1
+#define CMI_DOUBLE   2
+#define CMI_ZLIB     3
+#define CMI_LZ4      4
+#endif
+
+#define CmiCreateCompressPersistent(destPE, maxBytes, start, type)             \
+  CmiCreatePersistent((destPE), (maxBytes))
+#define CmiCreateCompressPersistentSize(destPE, maxBytes, start, size, type)   \
+  CmiCreatePersistent((destPE), (maxBytes))
+#define CmiCreateCompressNodePersistent(destNode, maxBytes, start, type)       \
+  CmiCreateNodePersistent((destNode), (maxBytes))
+#define CmiCreateCompressNodePersistentSize(destNode, maxBytes, start, size,   \
+                                            type)                              \
+  CmiCreateNodePersistent((destNode), (maxBytes))
+
 #ifdef __cplusplus
 }
 #endif
