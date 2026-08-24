@@ -158,7 +158,7 @@ void converseRunPe(int rank, int everReturn) {
   CmiNodeBarrier();
   //printf("[DBG] pe %d rank %d: converseRunPe nodebarrier2 done\n", CmiMyPe(), rank); fflush(stdout);
 
-  CthInit(NULL);
+  CthInit(CmiMyArgv);
   CthSchedInit();
 
   CpvInitialize(int, isHelperOn);
@@ -1245,6 +1245,24 @@ int CmiGetArgDoubleDesc(char **argv, const char *arg, double *optDest,
 }
 int CmiGetArgDouble(char **argv, const char *arg, double *optDest) {
   return CmiGetArgDoubleDesc(argv, arg, optDest, "");
+}
+
+/* Parse a size, optionally suffixed with K/M/G (e.g. "8M" == 8388608). */
+double CmiReadSize(const char *str) {
+  double val;
+  if (strpbrk(str, "Gg")) {
+    val = atof(str);
+    val *= 1024ll * 1024 * 1024;
+  } else if (strpbrk(str, "Mm")) {
+    val = atof(str);
+    val *= 1024 * 1024;
+  } else if (strpbrk(str, "Kk")) {
+    val = atof(str);
+    val *= 1024;
+  } else {
+    val = atof(str);
+  }
+  return val;
 }
 
 /** Find the given argument and integer option in argv.

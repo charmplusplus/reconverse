@@ -794,6 +794,7 @@ int CmiGetArgStringDesc(char **argv, const char *arg, char **optDest,
                         const char *desc);
 int CmiGetArgFlag(char **argv, const char *arg);
 int CmiGetArgFlagDesc(char **argv, const char *arg, const char *desc);
+double CmiReadSize(const char *str);
 void CmiDeleteArgs(char **argv, int k);
 int CmiGetArgc(char **argv);
 char **CmiCopyArgs(char **argv);
