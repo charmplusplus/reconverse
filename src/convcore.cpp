@@ -515,6 +515,15 @@ void CmiPushPE(int destRank, int messageSize, void *msg) {
   Cmi_queues[rank]->push(msg);
 }
 
+/* Classic Converse scheduler-queue enqueue API, used by Charm++'s
+ * record-replay engine (ck.C) to re-inject messages it delayed. Reconverse's
+ * per-PE queues have no front insertion, so both variants map to a FIFO push
+ * onto the caller's own queue. For the replay engine this is correct, merely
+ * less prompt: CsdEnqueueLifo is a "process this next" hint, and every
+ * delivery re-checks the engine's expected-next predicate. */
+void CsdEnqueue(void *msg) { CmiPushPE(CmiMyRank(), msg); }
+void CsdEnqueueLifo(void *msg) { CmiPushPE(CmiMyRank(), msg); }
+
 void CmiPushPE(int destRank, void *msg) {
   CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
   int messageSize = header->messageSize;
