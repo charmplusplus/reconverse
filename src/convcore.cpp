@@ -10,6 +10,7 @@
 #include <cstdarg>
 #include <pthread.h>
 #include <stdio.h>
+#include <sys/stat.h>
 #include <stdlib.h>
 #include <thread>
 #include <vector>
@@ -523,6 +524,9 @@ void CmiPushPE(int destRank, int messageSize, void *msg) {
  * delivery re-checks the engine's expected-next predicate. */
 void CsdEnqueue(void *msg) { CmiPushPE(CmiMyRank(), msg); }
 void CsdEnqueueLifo(void *msg) { CmiPushPE(CmiMyRank(), msg); }
+
+/* Classic Converse filesystem utility, used by Charm++'s checkpoint code. */
+extern "C" void CmiMkdir(const char *dirName) { mkdir(dirName, 0777); }
 
 void CmiPushPE(int destRank, void *msg) {
   CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
