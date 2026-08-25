@@ -248,6 +248,20 @@ void CommBackendLCI2::drain(void) {
   }
 }
 
+static void seSumLongOp(const void *a, const void *b, void *dst, size_t n) {
+  const long *x = (const long *)a;
+  const long *y = (const long *)b;
+  long *d = (long *)dst;
+  for (size_t i = 0; i < n; i++) d[i] = x[i] + y[i];
+}
+
+void CommBackendLCI2::allreduceSumLong(long *inout, int n) {
+  std::vector<long> in(inout, inout + n);
+  lci::allreduce_x((const void *)in.data(), (void *)inout, (size_t)n,
+                   sizeof(long), seSumLongOp)
+      .device(getThreadLocalDevice())();
+}
+
 bool CommBackendLCI2::supportsRescale(void) {
   // A membership change replaces one device's peer table. With several devices
   // each has its own endpoint address, so the coordinator would have to carry

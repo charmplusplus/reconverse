@@ -17,6 +17,13 @@
 #include <thread>
 #include <vector>
 #include <sys/time.h>
+#include <unistd.h>
+#if defined(__GLIBC__) || defined(__APPLE__)
+#define CMK_HAS_EXECINFO_H 1
+#include <execinfo.h>
+#else
+#define CMK_HAS_EXECINFO_H 0
+#endif
 
 // GLOBALS
 static char **Cmi_argv;
@@ -72,6 +79,7 @@ int backend_poll_thread;
 
 void (*CmiTraceFn)(char **argv) = nullptr;
 void (*CmiCcsInitFn)(char **argv) = nullptr;
+void (*CmiIsomallocInitFn)(char **argv) = nullptr;
 
 void CldModuleInit(char **);
 
@@ -134,6 +142,10 @@ void registerCcsInit(void (*fn)(char **argv)) {
   CmiCcsInitFn = fn;
 }
 
+void registerIsomallocInit(void (*fn)(char **argv)) {
+  CmiIsomallocInitFn = fn;
+}
+
 void CommLocalHandler(comm_backend::Status status) {
   CmiFree(const_cast<void *>(status.local_buf));
 }
@@ -159,10 +171,47 @@ extern double rescale_wall_now();
 
 std::atomic<long> se_amSent{0};
 std::atomic<long> se_amRecv{0};
-#  define SE_COUNT_SEND() se_amSent.fetch_add(1, std::memory_order_relaxed)
+// Arrival histogram by handler index, for attributing a message storm.
+// 256 slots is far beyond any real handler count.
+std::atomic<long> se_amRecvByHandler[256];
+// Per-destination-node cumulative send counts, for the targeted rescale drain
+// (quiet probe): traffic toward doomed node d has stopped exactly when
+// sum-over-processes(se_sentToNode[d]) equals d's se_amRecv, in two
+// consecutive samples. Bumped at the same four sites as se_amSent so the two
+// views can never disagree about what counts as a send. Fixed cap keeps the
+// bump lock-free and realloc-free across rescales.
+enum { SE_SENTTO_MAX = 4096 };
+std::atomic<long> se_sentToNode[SE_SENTTO_MAX];
+// The per-destination view deliberately EXCLUDES broadcast-relay messages
+// (handler Cmi_bcastHandler / Cmi_nodeBcastHandler): an application that
+// broadcasts every iteration keeps every PE -- doomed ones included -- in the
+// relay tree until the cut, so bcast traffic toward a doomed PE never stops
+// and would keep the quiet probe from ever settling. In-flight broadcasts at
+// the cut are drained by the global flush regardless; the probe only needs
+// the point-to-point traffic (element forwards, location updates) to have
+// drained. se_p2pRecv is the matching arrival-side filter.
+extern int Cmi_bcastHandler;
+extern int Cmi_nodeBcastHandler;
+std::atomic<long> se_p2pRecv{0};
+#  define SE_COUNT_SEND(node, hid)                                            \
+    do {                                                                       \
+      se_amSent.fetch_add(1, std::memory_order_relaxed);                       \
+      if ((unsigned)(node) < (unsigned)SE_SENTTO_MAX &&                        \
+          (hid) != Cmi_bcastHandler && (hid) != Cmi_nodeBcastHandler)          \
+        se_sentToNode[node].fetch_add(1, std::memory_order_relaxed);           \
+    } while (0)
 #  define SE_PHASE(p) (se_phase = (p))
 
 static void se_dumpState(int) {
+  {
+    char buf[512];
+    int off = 0;
+    for (int h = 0; h < 256 && off < 400; h++) {
+      long c = se_amRecvByHandler[h].load(std::memory_order_relaxed);
+      if (c > 0) off += snprintf(buf + off, sizeof(buf) - off, " h%d:%ld", h, c);
+    }
+    fprintf(stderr, "[%d] recv-by-handler:%s\n", CmiMyPe(), buf);
+  }
   fprintf(stderr,
           "[%d] rescale dump: node %d of %d, phase=%s, am sent=%ld recv=%ld, "
           "localq=%zu nodeq=%zu schedq_nonempty=%d\n",
@@ -177,8 +226,89 @@ static void se_dumpState(int) {
               : -1);
   fflush(stderr);
 }
+// Deliver everything already queued on this PE without returning to the
+// scheduler. Used by a departing node during the pre-teardown rescale flush:
+// its queued messages are strays for elements that were evacuated off it, and
+// delivering them lets the location layer forward each to the element's new
+// host while the transport still includes everyone. Left queued, they would
+// exit with the process. Survivors never call this -- their queues survive the
+// longjmp and are drained by the restore machinery.
+int CmiRescalePumpQueuesOnce(void) {
+  int delivered = 0;
+  ConverseQueue<void *> *queue = CmiGetQueue(CmiMyRank());
+  ConverseNodeQueue<void *> *nodeQueue = CmiGetNodeQueue();
+  bool moved = true;
+  while (moved) {
+    moved = false;
+    if (nodeQueue && !nodeQueue->empty()) {
+      auto r = nodeQueue->pop();
+      if (r) {
+        CmiHandleMessage(r.value());
+        delivered++;
+        moved = true;
+      }
+    }
+    // The reordering window holds messages that have arrived but not yet run.
+    // A departing process draining its queues has to hand those over too, or
+    // it will exit still holding them and call itself quiet.
+    {
+      void *held = CmiRandomizedQueueTake();
+      if (held != NULL) {
+        CmiHandleMessage(held);
+        delivered++;
+        moved = true;
+      }
+    }
+    if (queue && !queue->empty()) {
+      auto r = queue->pop();
+      if (r) {
+        CmiHandleMessage(r.value());
+        delivered++;
+        moved = true;
+      }
+    }
+    if (CpvInitialized(CsdSchedQueue) && CpvAccess(CsdSchedQueue) &&
+        !QueueEmpty(CpvAccess(CsdSchedQueue))) {
+      void *m = QueueTop(CpvAccess(CsdSchedQueue));
+      QueuePop(CpvAccess(CsdSchedQueue));
+      if (m) {
+        CmiHandleMessage(m);
+        delivered++;
+        moved = true;
+      }
+    }
+  }
+  return delivered;
+}
+
+long CmiRescaleAmSent(void) {
+  return se_amSent.load(std::memory_order_relaxed);
+}
+long CmiRescaleAmRecv(void) {
+  return se_amRecv.load(std::memory_order_relaxed);
+}
+long CmiRescaleAmSentTo(int node) {
+  if ((unsigned)node >= (unsigned)SE_SENTTO_MAX) return 0;
+  return se_sentToNode[node].load(std::memory_order_relaxed);
+}
+long CmiRescaleAmRecvP2p(void) {
+  return se_p2pRecv.load(std::memory_order_relaxed);
+}
+// Called once the flush has verified that nothing is in flight. The counters
+// must restart from zero each epoch: they are per-process cumulative totals,
+// and a departing process takes its share of both sums with it, leaving the
+// survivors' sent/arrived sums offset by a constant no later flush could ever
+// close (observed: the second rescale's flush spinning to its round cap).
+void CmiRescaleResetAmCounters(void) {
+  se_amSent.store(0, std::memory_order_relaxed);
+  se_amRecv.store(0, std::memory_order_relaxed);
+  for (int i = 0; i < SE_SENTTO_MAX; i++)
+    se_sentToNode[i].store(0, std::memory_order_relaxed);
+  se_p2pRecv.store(0, std::memory_order_relaxed);
+}
+
 #else
-#  define SE_COUNT_SEND() ((void)0)
+#  define SE_COUNT_SEND(node, hid) ((void)0)
 #  define SE_PHASE(p) ((void)0)
 #endif
 
@@ -190,10 +320,17 @@ void CmiHandlerReservedSlot(void *msg) {
 }
 
 void CommRemoteHandler(comm_backend::Status status) {
+  CmiMessageHeader *header = (CmiMessageHeader *)status.local_buf;
 #if CMK_SHRINK_EXPAND
   se_amRecv.fetch_add(1, std::memory_order_relaxed);
+  {
+    const int h = header->handlerId;
+    if (h != Cmi_bcastHandler && h != Cmi_nodeBcastHandler)
+      se_p2pRecv.fetch_add(1, std::memory_order_relaxed);
+    if (h >= 0 && h < 256)
+      se_amRecvByHandler[h].fetch_add(1, std::memory_order_relaxed);
+  }
 #endif
-  CmiMessageHeader *header = (CmiMessageHeader *)status.local_buf;
   int destPE = header->destPE;
   if (destPE == CmiMessageDestPENode) {
     CmiNodeQueue->push(const_cast<void *>(status.local_buf));
@@ -272,6 +409,18 @@ void converseRunPe(int rank, int everReturn) {
   //printf("[DBG] pe %d rank %d: converseRunPe nodebarrier2 start\n", CmiMyPe(), rank); fflush(stdout);
   CmiNodeBarrier();
   //printf("[DBG] pe %d rank %d: converseRunPe nodebarrier2 done\n", CmiMyPe(), rank); fflush(stdout);
+
+  // Before CthInit: a migratable thread's stack comes out of an Isomalloc
+  // context, so the global address range has to be negotiated first. The
+  // negotiation is a node reduction, so this also has to be after
+  // collectiveInit above.
+  SE_PHASE("runpe:isomalloc");
+  if (CmiIsomallocInitFn)
+    CmiIsomallocInitFn(CmiMyArgv);
+
+  // Before the scheduler runs anything: the reordering window is per PE, and
+  // the flags that turn it on have to be consumed on every PE.
+  CmiRandomizedQueueInit(CmiMyArgv);
 
   SE_PHASE("runpe:threads");
   CthInit(NULL);
@@ -815,6 +964,52 @@ void CmiPushNode(void *msg) {
   CmiNodeQueue->push(msg);
 }
 
+/* Best-effort call stack, for diagnostics. Skips the innermost nSkip frames
+   plus this function itself, so a caller passing 1 gets its own caller first.
+   Prints nothing where the platform has no unwinder. */
+void CmiPrintStackTrace(int nSkip) {
+#if CMK_HAS_EXECINFO_H
+  void *frames[64];
+  const int n = backtrace(frames, (int)(sizeof(frames) / sizeof(frames[0])));
+  const int skip = nSkip + 1;
+  if (n <= skip) return;
+  char **names = backtrace_symbols(frames + skip, n - skip);
+  if (names == NULL) {
+    backtrace_symbols_fd(frames + skip, n - skip, fileno(stdout));
+    return;
+  }
+  for (int i = 0; i < n - skip; i++)
+    CmiPrintf("  [%d] %s\n", i, names[i]);
+  free(names);
+#endif
+}
+
+int CmiGetPageSize(void) {
+#ifdef _WIN32
+  SYSTEM_INFO system_info;
+  GetSystemInfo(&system_info);
+  return (int)system_info.dwPageSize;
+#else
+  static int cached = 0;
+  if (cached == 0) {
+    long ps = sysconf(_SC_PAGESIZE);
+    cached = (ps > 0) ? (int)ps : 4096;
+  }
+  return cached;
+#endif
+}
+
+void CmiInitMsgHeader(void *msg, int size) {
+  CmiMessageHeader *h = (CmiMessageHeader *)msg;
+  h->handlerId = 0;
+  h->destPE = CmiMessageDestPENode;
+  h->messageSize = size;
+  h->collectiveMetaInfo = 0;
+  h->swapHandlerId = 0;
+  h->nokeep = false;
+  h->zcMsgType = CMK_REG_NO_ZC_MSG;
+}
+
 void *CmiAlloc(int size) {
   if (size <= 0) {
     CmiPrintf("CmiAlloc: size <= 0\n");
@@ -935,7 +1130,7 @@ void CmiSyncSendAndFreeNoPersistent(int destPE, int messageSize, void *msg) {
   if (CmiMyNode() == destNode) {
     CmiPushPE(CmiRankOf(destPE), messageSize, msg);
   } else {
-    SE_COUNT_SEND();
+    SE_COUNT_SEND(destNode, header->handlerId);
   comm_backend::issueAm(destNode, msg, messageSize, MRFIELD(msg),
                           CommLocalHandler, g_amHandler,
                           nullptr); // Commlocalhandler will free msg
@@ -966,7 +1161,7 @@ void CmiInterSyncSendAndFree(int destPE, int partition, int messageSize,
   int globalDestPE = CmiGetPeGlobal(destPE, partition);
   header->destPE = globalDestPE;
   int destNode = CmiGetNodeGlobal(CmiNodeOf(globalDestPE), partition);
-  SE_COUNT_SEND();
+  SE_COUNT_SEND(destNode, header->handlerId);
   comm_backend::issueAm(destNode, msg, messageSize, MRFIELD(msg),
                         CommLocalHandler, g_amHandler, nullptr);
 }
@@ -1165,7 +1360,7 @@ void CmiSyncNodeSendAndFree(unsigned int destNode, unsigned int size,
   if (CmiMyNode() == destNode) {
     CmiNodeQueue->push(msg);
   } else {
-    SE_COUNT_SEND();
+    SE_COUNT_SEND(destNode, header->handlerId);
   comm_backend::issueAm(destNode, msg, size, MRFIELD(msg),
                           CommLocalHandler, g_amHandler, nullptr);
   }
@@ -1192,7 +1387,7 @@ void CmiInterSyncNodeSendAndFree(int destNode, int partition, int messageSize,
   // not my partition, use comm backend
   int globalDestNode = CmiGetNodeGlobal(destNode, partition);
   header->destPE = CmiMessageDestPENode;
-  SE_COUNT_SEND();
+  SE_COUNT_SEND(globalDestNode, header->handlerId);
   comm_backend::issueAm(globalDestNode, msg, messageSize, MRFIELD(msg),
                         CommLocalHandler, g_amHandler, nullptr);
 }
@@ -1769,6 +1964,8 @@ int CmiMemoryIs(int flag)
 {
 	return (CmiMemoryIs_flag&flag)==flag;
 }
+
+void CmiMemoryIsSetFlag(int flag) { CmiMemoryIs_flag |= flag; }
 
 static char *CopyMsg(char *msg, int len) {
   char *copy = (char *)CmiAlloc(len);

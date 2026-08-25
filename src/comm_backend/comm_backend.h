@@ -143,6 +143,7 @@ struct ClusterView {
  * rebuild is about to remove.
  */
 void drain(void);
+void allreduceSumLong(long *inout, int n);
 
 /**
  * @brief Whether this backend implements the rescale hooks below. Thread-safe.

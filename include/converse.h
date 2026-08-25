@@ -379,6 +379,137 @@ extern char *CthGetData(CthThread t);
 
 #define CtvInitialized(v) (CsvAccess(CtvOffs##v) != (-1))
 
+/* ---------------- Isomalloc and migratable threads ---------------- */
+
+/* Opaque handle to an Isomalloc context: a heap whose allocations sit at the
+   same virtual addresses in every process of the job, so that a thread using
+   one can be moved between them without rewriting any pointer.
+
+   Reconverse never creates a context and does not implement Isomalloc. A
+   provider (Charm++'s isomalloc) registers itself through
+   CthRegisterIsomallocOps below; without one, migratable threads degrade to
+   ordinary threads with malloc'd stacks and CthMigratable() answers 0. */
+#ifndef CMI_ISOMALLOC_CONTEXT_DEFINED
+#define CMI_ISOMALLOC_CONTEXT_DEFINED 1
+typedef struct CmiIsomallocContext {
+  void *opaque;
+} CmiIsomallocContext;
+#endif
+
+/* A byte-stream serializer supplied by the caller.
+
+   Moving a thread means serializing it, and Reconverse has no serialization
+   framework of its own -- the one in use belongs to the layer above (PUP, for
+   Charm++). So the caller passes one in: `user` is its own serializer object,
+   handed back verbatim to `bytes`, and `mode` says which direction this pass
+   is going. */
+#define CMI_PUP_SIZING (1 << 0)
+#define CMI_PUP_PACKING (1 << 1)
+#define CMI_PUP_UNPACKING (1 << 2)
+#define CMI_PUP_DELETING (1 << 3)
+typedef struct CmiPupStream {
+  void *user;
+  int mode;
+  void (*bytes)(struct CmiPupStream *p, void *data, size_t n);
+} CmiPupStream;
+#define CmiPupIsSizing(p) (((p)->mode & CMI_PUP_SIZING) != 0)
+#define CmiPupIsPacking(p) (((p)->mode & CMI_PUP_PACKING) != 0)
+#define CmiPupIsUnpacking(p) (((p)->mode & CMI_PUP_UNPACKING) != 0)
+#define CmiPupIsDeleting(p) (((p)->mode & CMI_PUP_DELETING) != 0)
+#define CmiPupBytes(p, d, n) ((p)->bytes((p), (d), (n)))
+
+/* The Isomalloc operations a migratable thread needs. Register once per
+   process, before the first migratable thread is created. */
+typedef struct CthIsomallocOps {
+  /* Is Isomalloc usable at all? A provider that could not reserve a global
+     address range answers 0, and migratable threads fall back to malloc. */
+  int (*enabled)(void);
+  /* Allocate from a context, never to be freed individually: thread stacks
+     and thread-local segments live here and are released with the context. */
+  void *(*permanentAllocAlign)(CmiIsomallocContext ctx, size_t align,
+                               size_t size);
+  void (*contextDelete)(CmiIsomallocContext ctx);
+  void (*contextPup)(CmiPupStream *p, CmiIsomallocContext *ctx);
+  /* Make this context the target of intercepted mallocs on this PE. Passing
+     an empty context turns interception off. */
+  void (*contextActivate)(CmiIsomallocContext ctx);
+} CthIsomallocOps;
+void CthRegisterIsomallocOps(const CthIsomallocOps *ops);
+
+/* Create a thread whose stack is allocated from `ctx`, so that the thread can
+   later be serialized with CthPupThread and resumed in another process. Falls
+   back to CthCreate's behavior when no Isomalloc provider is registered. */
+#define CMI_MIGRATABLE_THREADS_DECLARED 1
+CthThread CthCreateMigratable(CthVoidFn fn, void *arg, int size,
+                              CmiIsomallocContext ctx);
+
+/* Can threads created by CthCreateMigratable actually migrate? */
+int CthMigratable(void);
+
+/* Serialize a thread. On an unpacking pass `t` is ignored and a newly
+   allocated thread is returned; otherwise `t` comes back. The thread must not
+   be the one running. */
+CthThread CthPupThread(CmiPupStream *p, CthThread t);
+
+CmiIsomallocContext CthGetIsomallocContext(CthThread t);
+
+/* Record a position on a thread's stack in a form that survives migration,
+   and recover a pointer from it. Offset 0 means "not on this stack". */
+size_t CthStackOffset(CthThread t, char *p);
+char *CthPointer(CthThread t, size_t pos);
+
+/* Which flavor of user-level thread this build provides, and which optional
+   properties they have. Callers use these to decide things they cannot
+   otherwise ask about -- whether a stack address is stable across a migration,
+   for instance. */
+#define CMI_THREAD_IS_QT (1 << 1)
+#define CMI_THREAD_IS_CONTEXT (1 << 2)
+#define CMI_THREAD_IS_UJCONTEXT (1 << 3)
+#define CMI_THREAD_IS_PTHREADS (1 << 4)
+#define CMI_THREAD_IS_FIBERS (1 << 5)
+#define CMI_THREAD_IS_ALIAS (1 << 6)
+#define CMI_THREAD_IS_STACKCOPY (1 << 7)
+#define CMI_THREAD_IS_TLS (1 << 8)
+int CmiThreadIs(int flag);
+
+/* Print the current call stack to stdout, skipping the innermost nSkip
+   frames. Best effort: prints nothing if the platform cannot walk the stack. */
+void CmiPrintStackTrace(int nSkip);
+
+/* Converse Thread Globals: swapping a private copy of the program's global
+   variables in and out around each thread, for languages whose runtimes assume
+   one set of globals per rank. Reconverse does not implement swapping -- the
+   position-independent-executable approach puts a rank's globals in its
+   Isomalloc heap instead, which needs no per-switch work -- so these are the
+   no-op shape of that interface, kept so callers written against it compile
+   and do nothing. */
+typedef struct CtgGlobalStruct {
+  void *data_seg;
+} CtgGlobals;
+
+#define CMI_PIC_NOP 0
+#define CMI_PIC_ELFGOT 1
+CpvExtern(int, CmiPICMethod);
+
+void CtgInit(void);
+size_t CtgGetSize(void);
+CtgGlobals CtgCreate(void *buf);
+void CtgInstall(CtgGlobals g);
+void CtgUninstall(void);
+CtgGlobals CtgCurrentGlobals(void);
+
+/* Interceptions -- Isomalloc heap redirection today, thread-local storage and
+   global-variable swapping when those arrive -- are on while a thread runs its
+   own code and off while it is inside the runtime. These bracket the
+   transitions and nest; a thread starts out deactivated, so the first Pop is
+   what turns it on. */
+void CthInterceptionsDeactivatePush(CthThread t);
+void CthInterceptionsDeactivatePop(CthThread t);
+/* Force interceptions on regardless of nesting depth, and put the depth back.
+   Used to run a callback in the thread's own heap from inside the runtime. */
+int CthInterceptionsTemporarilyActivateStart(CthThread t);
+void CthInterceptionsTemporarilyActivateEnd(CthThread t, int old);
+
 /* Given a user chunk m, extract the enclosing chunk header fields: */
 #define BLKSTART(m) ((CmiChunkHeader *)(((intptr_t)m) - sizeof(CmiChunkHeader)))
 #define SIZEFIELD(m) ((BLKSTART(m))->size)
@@ -415,6 +546,15 @@ void CmiNumberHandlerEx(int n, CmiHandlerEx h, void *userPtr);
 
 // message allocation/memory
 void *CmiAlloc(int size);
+
+// Size of a virtual memory page, in bytes.
+int CmiGetPageSize(void);
+
+// Fill in the reserved header fields of a message that was not built by
+// CmiAlloc (a stack- or heap-allocated struct that is about to be handed to a
+// collective, for example).
+void CmiInitMsgHeader(void *msg, int size);
+
 void CmiFree(void *msg);
 #define CmiRdmaAlloc CmiAlloc
 #define CmiRdmaFree CmiFree
@@ -1142,6 +1282,36 @@ enum ncpyFreeNcpyOpInfoMode {
 
 extern void CsdSchedulePoll(void);
 
+/* Deliberate message reordering, for shaking out order-dependent bugs.
+   `+randomizedqueue [depth]` makes the scheduler hold up to `depth` ready
+   messages and pick among them at random rather than running them in arrival
+   order; `+randomizedqueueseed N` makes the choice reproducible. Off by
+   default, and when off it costs one predictable branch per scheduled
+   message.
+
+   Nothing is held past the point where the PE would otherwise go idle, so no
+   message is delayed indefinitely and quiescence still means quiescence. */
+int CmiRandomizedQueueEnabled(void);
+/* Hand back everything the reordering buffer is holding, one message at a
+   time, or NULL when it is empty. Anything that drains the ready queue
+   directly has to drain this too, or it will conclude the PE is quiet while
+   messages are still in hand. */
+void *CmiRandomizedQueueTake(void);
+/* The window starts suspended and stays that way until the layer above says
+   its startup is finished; a rescale suspends it again for the restore. Both
+   are fixed bootstrap sequences whose steps read each other back synchronously
+   (a group created, then reached through ckLocalBranch by whatever is created
+   next), and perturbing them tests nothing that could happen in a real run.
+   Suspensions nest and are counted. ResumeAll drops all of them at once, for
+   the far side of a rescale, where nothing pairs with what came before. */
+void CmiRandomizedQueueSuspend(void);
+void CmiRandomizedQueueResume(void);
+void CmiRandomizedQueueResumeAll(void);
+/* How many messages this PE drew from the window, and how many of those were
+   not the one FIFO would have run. The second number is the one that says
+   whether a run actually exercised anything. */
+void CmiRandomizedQueueStats(long *taken, long *reordered);
+
 // topology
 extern int CmiNumCores(void);
 extern int CmiCpuTopologyEnabled(void);
@@ -1185,6 +1355,19 @@ void registerTraceInit(void (*fn)(char **argv));
 // startup sequence: after per-PE state exists, before the start function.
 void registerCcsInit(void (*fn)(char **argv));
 
+// Charm++ registers CmiIsomallocInit here. Isomalloc is not part of
+// Reconverse -- it needs a serialization framework Reconverse does not have --
+// so it lives above and is initialized through this hook, on every PE, after
+// collectives are up (its address-range negotiation is a node reduction) and
+// before CthInit, which is the first thing that could ask for a migratable
+// stack.
+void registerIsomallocInit(void (*fn)(char **argv));
+
+// Record that a memory module with the given CMI_MEMORY_IS_* character has
+// been installed. Reconverse tracks this for CmiMemoryIs(), which callers use
+// to ask whether allocations are being intercepted.
+void CmiMemoryIsSetFlag(int flag);
+
 /* Registered before ConverseInit by a layer that has expensive per-process
    setup to do, such as creating a GPU context. A joining process is invoked
    here just before it blocks waiting to be admitted to a running job, a wait
@@ -1209,6 +1392,18 @@ int CmiDeliverMsgs(int maxmsgs);
 
 void ConverseCleanup(void);
 
+/* Rescale drain counters (defined in convcore.cpp when CMK_SHRINK_EXPAND).
+   AmSent/AmRecv are this process's cumulative active-message totals for the
+   current membership epoch; AmSentTo(node) is the cumulative count of AMs
+   this process sent to that node. Traffic toward node d has drained exactly
+   when sum-over-processes(AmSentTo(d)) == d's AmRecv, stable across two
+   samples. The counters reset together at the end of each rescale flush. */
+long CmiRescaleAmSent(void);
+long CmiRescaleAmRecv(void);
+long CmiRescaleAmSentTo(int node);   /* p2p only: broadcast relays excluded */
+long CmiRescaleAmRecvP2p(void);      /* arrivals with the same exclusion */
+void CmiRescaleResetAmCounters(void);
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -1230,6 +1425,15 @@ int CmiRescalePending(void);
    ConverseInit, alongside the Converse handler, so that every process assigns
    it the same index. */
 void CmiRegisterRescaleFanoutHandler(void);
+
+/* Departing-node pre-flush hook: set by the layer above (Charm++) so held
+   message state (e.g. an interior reduction node's partials) is forwarded to
+   survivors before the exit flush. Called once, only on departing nodes. */
+extern void (*CmiRescaleDoomedFlushFn)(void);
+
+/* Old-world PE -> new-world PE across the most recent rescale (identity if
+   none; -1 for a departed PE). Valid for one generation. */
+int CmiRescaleOldPeToNew(int oldPe);
 
 /* Bootstrap from a coordinator rather than from the launcher's process
    manager, which is what lets a job survive losing a host. Returns nonzero if

@@ -49,6 +49,13 @@ public:
   // defaults report "not supported" so ConverseCleanup can refuse a rescale
   // with a clear message rather than half-perform one.
   virtual void drain(void) {}
+  // Sum `n` longs across all current members, in place. Used by the
+  // pre-teardown rescale flush to verify that every counted send has arrived
+  // somewhere; only meaningful on a backend that supportsRescale().
+  virtual void allreduceSumLong(long *inout, int n) {
+    (void)inout;
+    (void)n;
+  }
   virtual bool supportsRescale(void) { return false; }
   virtual std::vector<unsigned char> getMyAddress(void) { return {}; }
   virtual const std::vector<Member> &getMembers(void) {

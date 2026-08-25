@@ -206,6 +206,13 @@ void drain(void) {
   gCommBackend->drain();
 }
 
+void allreduceSumLong(long *inout, int n) {
+  if (gCommBackend == nullptr) {
+    return;
+  }
+  gCommBackend->allreduceSumLong(inout, n);
+}
+
 bool supportsRescale(void) {
   if (gCommBackend == nullptr) {
     return false;

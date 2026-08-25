@@ -4,8 +4,219 @@
 #include "queue.h"
 #include "taskqueue.h"
 #include <thread>
+#include <cstdlib>
+#include <vector>
 
 CpvExtern(TaskQueue, CsdTaskQueue);
+
+/* ---------------- Deliberate message reordering ---------------- */
+
+/* A bounded random-reordering window over the per-PE ready queue.
+ *
+ * Message-driven code is meant to tolerate any order its messages can
+ * legitimately arrive in, but on one machine over one transport that order is
+ * nearly always the same -- so code that quietly depends on it passes every
+ * local test and fails somewhere else. This makes the scheduler choose at
+ * random among the next `depth` ready messages instead of taking them in
+ * order.
+ *
+ * The window is bounded, and it is drained before the PE goes idle: this
+ * reorders, it does not starve, and quiescence still means quiescence.
+ */
+CpvStaticDeclare(std::vector<void *> *, randomHoldBuf);
+CpvStaticDeclare(unsigned int, randomHoldState);
+static int randomQueueDepth = 0;  /* 0 = off */
+
+/* Perturbing a bootstrap is not what this is for. Bringing a Charm++ program
+   up is a fixed sequence of creations that later steps read back synchronously
+   -- AMPI's ampiPeMgr group before the ampiParent elements that call
+   ckLocalBranch() on it, the ampiParent element before the ampi element that
+   calls ckLocal() on it -- and none of that is the concurrency a randomized
+   queue is meant to explore. Reordering it does not find bugs, it only stops
+   the program from starting.
+
+   So the window is suspended by default and the layers above resume it when
+   their own startup is finished: Charm++ at the end of _initDone, AMPI later
+   still, once MPI_COMM_WORLD exists. Nested suspensions count, because they
+   nest -- AMPI suspends before Charm++ resumes. A rescale suspends again at
+   the cut and resumes on the far side of the restore, which is a bootstrap of
+   the same kind. */
+/* Per PE, not per process: in an SMP build every PE runs its own copy of the
+   startup, and a shared counter would have one PE's resume cancel another
+   PE's suspension. */
+CpvStaticDeclare(int, randomQueueSuspends);
+
+void CmiRandomizedQueueStats(long *taken, long *reordered);
+
+void CmiRandomizedQueueSuspend(void) {
+  if (CpvInitialized(randomQueueSuspends)) CpvAccess(randomQueueSuspends)++;
+}
+void CmiRandomizedQueueResume(void) {
+  if (CpvInitialized(randomQueueSuspends) && CpvAccess(randomQueueSuspends) > 0)
+    CpvAccess(randomQueueSuspends)--;
+}
+/* For the far side of a rescale: the restore is not paired with the
+   suspensions taken before the cut, and re-running a proc-init on the way back
+   takes fresh ones that nothing will ever pair with either. */
+void CmiRandomizedQueueResumeAll(void) {
+  /* This is the only caller-visible moment inside a run, and a rescale
+     campaign never reaches the atexit report -- its processes are killed. Say
+     where the counters stand, so a campaign log carries the evidence that the
+     window was open through everything before this point. */
+  if (randomQueueDepth > 0) {
+    long taken = 0, reordered = 0;
+    CmiRandomizedQueueStats(&taken, &reordered);
+    /* stderr: this runs inside the rescale restore, where the path that
+       forwards CmiPrintf output to the launcher is still being repaired. */
+    fprintf(stderr,
+            "Converse> Randomized message queue, PE %d: %ld of %ld scheduled "
+            "messages out of FIFO order so far.\n",
+            CmiMyPe(), reordered, taken);
+    fflush(stderr);
+  }
+  if (CpvInitialized(randomQueueSuspends)) CpvAccess(randomQueueSuspends) = 0;
+}
+
+static inline bool randomHoldActive(void) {
+  return randomQueueDepth > 0 && CpvInitialized(randomQueueSuspends) &&
+         CpvAccess(randomQueueSuspends) == 0;
+}
+
+int CmiRandomizedQueueEnabled(void) { return randomHoldActive(); }
+
+static inline bool randomHoldNonEmpty(void) {
+  /* Not randomHoldActive(): a window filled while armed must still be drained
+     after a disarm, or those messages are simply lost. */
+  return randomQueueDepth > 0 && CpvInitialized(randomHoldBuf) &&
+         CpvAccess(randomHoldBuf) != NULL && !CpvAccess(randomHoldBuf)->empty();
+}
+
+static inline unsigned int randomHoldNext(void) {
+  /* xorshift32: per PE, no locking, good enough to shuffle with. */
+  unsigned int x = CpvAccess(randomHoldState);
+  x ^= x << 13; x ^= x >> 17; x ^= x << 5;
+  CpvAccess(randomHoldState) = x;
+  return x;
+}
+
+/* How much reordering actually happened. A window only perturbs anything when
+   two or more messages are in it at once, and how often that is true depends
+   entirely on the application; without these counters "randomization is on" is
+   not evidence that any order was changed. */
+CpvStaticDeclare(long, randomHoldTaken);     /* messages drawn from the window */
+CpvStaticDeclare(long, randomHoldReordered); /* ... that were not at its head */
+
+/* Remove and return one message from the window, chosen at random. */
+static void *randomHoldTakeOne(void) {
+  std::vector<void *> &buf = *CpvAccess(randomHoldBuf);
+  if (buf.empty()) return NULL;
+  const size_t i = randomHoldNext() % buf.size();
+  void *msg = buf[i];
+  buf[i] = buf.back();
+  buf.pop_back();
+  CpvAccess(randomHoldTaken)++;
+  if (i != 0) CpvAccess(randomHoldReordered)++;
+  return msg;
+}
+
+/* Reported on the way out rather than at ConverseExit: the exit path a Charm++
+   program takes does not reliably pass through there, and this number is worth
+   nothing if it is sometimes missing. */
+static void randomHoldReportAtExit(void) {
+  if (randomQueueDepth <= 0) return;
+  long taken = 0, reordered = 0;
+  CmiRandomizedQueueStats(&taken, &reordered);
+  fprintf(stderr,
+          "Converse> Randomized message queue: %ld of %ld scheduled messages "
+          "ran out of FIFO order on this process's first PE.\n",
+          reordered, taken);
+}
+
+void CmiRandomizedQueueStats(long *taken, long *reordered) {
+  *taken = CpvInitialized(randomHoldTaken) ? CpvAccess(randomHoldTaken) : 0;
+  *reordered =
+      CpvInitialized(randomHoldReordered) ? CpvAccess(randomHoldReordered) : 0;
+}
+
+void *CmiRandomizedQueueTake(void) {
+  if (!randomHoldNonEmpty()) return NULL;
+  return randomHoldTakeOne();
+}
+
+void CmiRandomizedQueueInit(char **argv) {
+  CpvInitialize(std::vector<void *> *, randomHoldBuf);
+  CpvInitialize(unsigned int, randomHoldState);
+  CpvInitialize(long, randomHoldTaken);
+  CpvInitialize(long, randomHoldReordered);
+  CpvInitialize(int, randomQueueSuspends);
+  /* Suspended until the layer above says its startup is done. A survivor
+     coming back through here is about to run a restore, which wants the same
+     treatment; CkRestoreGroupData drops it on the far side. */
+  CpvAccess(randomQueueSuspends) = 1;
+  /* A survivor comes back through here after a rescale, and its window may
+     still hold messages that arrived before the cut. Keep the buffer. */
+  if (CpvAccess(randomHoldBuf) == NULL)
+    CpvAccess(randomHoldBuf) = new std::vector<void *>();
+
+  int depth = 0;
+  if (CmiGetArgIntDesc(argv, "+randomizedqueue", &depth,
+                       "Run ready messages in a random order within a window "
+                       "of this many, to shake out order-dependent bugs")) {
+    if (depth < 2) depth = 2;
+  } else {
+    /* Not on the command line -- either it was never asked for, or this is a
+       survivor's second pass and the first one already consumed the flag.
+       Only the first case means "off". */
+    depth = randomQueueDepth;
+  }
+
+  int seed = 0;
+  if (!CmiGetArgIntDesc(argv, "+randomizedqueueseed", &seed,
+                        "Seed for +randomizedqueue, to make a run repeatable"))
+    seed = 12345;
+
+  if (CmiMyRank() == 0) randomQueueDepth = depth;
+  /* Per PE, so PEs make different choices rather than the same ones. A
+     survivor whose PE number changed picks up a different stream, which is
+     what we want: the point is variety, not reproducibility across rescales. */
+  CpvAccess(randomHoldState) = (unsigned int)(seed + 7919 * (CmiMyPe() + 1));
+
+  static bool announced = false;
+  if (depth > 0 && CmiMyRank() == 0 && !announced) {
+    static bool registered = false;
+    if (!registered) { registered = true; atexit(randomHoldReportAtExit); }
+  }
+  if (depth > 0 && CmiMyPe() == 0 && !announced) {
+    announced = true;
+    CmiPrintf("Converse> Randomized message queue: window %d, seed %d. "
+              "Message order is deliberately perturbed; timings from this run "
+              "are not meaningful.\n", depth, seed);
+  }
+}
+
+/* The next message to run from the per-PE queue, or NULL if there is none.
+   With reordering off this is exactly "pop the head". */
+static void *CsdNextLocalMessage(ConverseQueue<void *> *queue) {
+  if (!randomHoldActive()) {
+    /* Anything the window was still holding when it was suspended goes first,
+       in the order the shuffle left it; after that this is a plain FIFO pop. */
+    void *held = CmiRandomizedQueueTake();
+    if (held != NULL) return held;
+    if (queue->empty()) return NULL;
+    return queue->pop().value();
+  }
+
+  std::vector<void *> &buf = *CpvAccess(randomHoldBuf);
+  /* Fill the window from the queue, then choose within it. When the queue runs
+     dry the window is drained rather than held, which is what keeps this from
+     delaying anything indefinitely. */
+  while ((int)buf.size() < randomQueueDepth && !queue->empty()) {
+    auto r = queue->pop();
+    if (!r) break;
+    buf.push_back(r.value());
+  }
+  return randomHoldTakeOne();
+}
 
 /**
  * The main scheduler loop for the Charm++ runtime.
@@ -48,9 +259,9 @@ void CsdScheduler() {
     }
 
     // poll thread queue
-    else if (!queue->empty()) {
-      // get next event (guaranteed to be there because only single consumer)
-      void *msg = queue->pop().value();
+    else if (!queue->empty() || randomHoldNonEmpty()) {
+      void *msg = CsdNextLocalMessage(queue);
+      if (msg == NULL) continue;
 
       // release idle if necessary
       if (CmiGetIdle()) {
@@ -226,9 +437,9 @@ void CsdSchedulePoll() {
     }
 
     // poll thread queue
-    else if (!queue->empty()) {
-      // get next event (guaranteed to be there because only single consumer)
-      void *msg = queue->pop().value();
+    else if (!queue->empty() || randomHoldNonEmpty()) {
+      void *msg = CsdNextLocalMessage(queue);
+      if (msg == NULL) continue;
 
       // release idle if necessary
       if (CmiGetIdle()) {

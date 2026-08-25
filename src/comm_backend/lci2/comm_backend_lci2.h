@@ -64,6 +64,7 @@ public:
 
   // No-restart shrink/expand.
   void drain(void) override;
+  void allreduceSumLong(long *inout, int n) override;
   bool supportsRescale(void) override;
   std::vector<unsigned char> getMyAddress(void) override;
   const std::vector<Member> &getMembers(void) override;

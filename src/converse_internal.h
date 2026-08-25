@@ -197,4 +197,9 @@ CmiBroadcastRoot CmiGetBcastRoot(void *msg);
 // helpers for RDMA
 void RDMAInit(char **argv);
 
+
+/* Set up the per-PE message-reordering window (+randomizedqueue). Called once
+   per PE during startup; see scheduler.cpp. */
+void CmiRandomizedQueueInit(char **argv);
+
 #endif

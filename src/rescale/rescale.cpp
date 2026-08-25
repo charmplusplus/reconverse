@@ -50,6 +50,12 @@ extern double rescale_t_barrier_done;
 extern double rescale_t_longjmp;
 extern double rescale_wall_now();
 
+// Defined in convcore.cpp; the pre-teardown flush below uses them.
+int CmiRescalePumpQueuesOnce(void);
+long CmiRescaleAmSent(void);
+long CmiRescaleAmRecv(void);
+void CmiRescaleResetAmCounters(void);
+
 namespace {
 
 // Coordinator connection, established at bootstrap and held for the life of
@@ -342,8 +348,35 @@ int CmiRescaleCoordBootstrap(const char *coordHost, int coordPort,
 // Called by Charm++ from its exit handler. On a normal exit this returns and
 // the caller proceeds to ConverseExit. On a rescale it never returns: the
 // process either longjmps back into charm_main or exits.
+// Set by Charm++ at init: a departing node calls this before the exit flush
+// so higher-layer state that only exists as *held messages* (an interior
+// reduction node's partials) is forwarded to survivors while the transport
+// still includes everyone. Null when the layer above has nothing to flush.
+extern "C" {
+void (*CmiRescaleDoomedFlushFn)(void) = nullptr;
+
+// Old-world PE -> new-world PE across the most recent committed rescale,
+// computed from the availability vector that drove it (which survives the
+// longjmp until the next request overwrites it). Identity when no rescale
+// has happened; -1 for a PE that left. Valid for exactly one generation --
+// callers gate on their own generation stamps.
+int CmiRescaleOldPeToNew(int oldPe) {
+  if (oldPe < 0 || oldPe >= (int)g_availVector.size()) return oldPe;
+  if (!g_availVector[oldPe]) return -1;
+  int rank = 0;
+  for (int i = 0; i < oldPe; i++)
+    if (g_availVector[i]) rank++;
+  return rank;
+}
+}
+
 void ConverseCleanup(void) {
   if (!CmiRescalePending()) return;
+
+  // What follows -- the drain, the cut, and the restore on the way back -- is
+  // a bootstrap sequence, not application concurrency. Close the reordering
+  // window; the layer above opens it again once the restore is complete.
+  CmiRandomizedQueueSuspend();
 
   if (!comm_backend::supportsRescale()) {
     CmiAbort("Shrink/expand was requested but the active communication "
@@ -360,24 +393,70 @@ void ConverseCleanup(void) {
   if (myNode == 0) rescale_t_cleanup_enter = rescale_wall_now();
   const std::vector<coord::Member> oldMembers = currentMembers();
 
-  // Quiesce the old membership before anyone's peer table is touched.
-  //
-  // Reconfiguring means rebuilding that table, and an operation still
-  // outstanding names an address that is about to be removed from under it.
-  // Draining locally is not enough on its own: a peer that has not drained yet
-  // can still deliver into this process afterwards. So everyone drains and
-  // then meets here, on the transport that is still whole and still includes
-  // the process that is about to leave.
-  comm_backend::drain();
-  comm_backend::barrier();
-
-  coord::ClusterView view;
   // Every node holds the availability vector (Charm++ broadcasts it before it
   // triggers this path), so each one knows locally whether it is leaving. That
   // is what lets the departing nodes stay on the coordinator socket for DIE
   // while the survivors take the delta from the tree: nobody forwards to a
   // node that is about to exit.
   bool departing = (myNode < (int)g_availVector.size() && !g_availVector[myNode]);
+
+  // Give the layer above one chance to forward held state (see the pointer's
+  // comment) before anything is quiesced; the sends it makes are counted and
+  // drained by the flush below.
+  if (departing && CmiRescaleDoomedFlushFn) CmiRescaleDoomedFlushFn();
+
+  // Quiesce the old membership before anyone's peer table is touched.
+  //
+  // drain() only fences operations this process POSTED: for an eager active
+  // message, completion means injection, not arrival, so after a plain
+  // drain+barrier a message can still be in the network -- and a barrier-less
+  // rescale reaches here with application traffic in full flight (observed:
+  // ghosts lost at the cut, application wedged after restore). Flush instead
+  // until the cluster-wide send and arrival counters agree. This is
+  // quiescence detection with "processed" counted at arrival-into-queue
+  // rather than at delivery: gating delivery cannot starve it, and the
+  // arrived-but-undelivered messages it leaves behind sit in survivor queues
+  // that live across the longjmp.
+  //
+  // A departing node additionally delivers everything already queued on it:
+  // those are strays for elements evacuated off it, and delivering them here
+  // lets the location layer forward each to the element's new host while the
+  // transport still includes everyone. Left queued, they would exit with the
+  // process. The equality must hold in two consecutive rounds with nothing
+  // pumped anywhere, guarding the window between a node sampling its counters
+  // and the reduction reading them.
+  {
+    long prev[2] = {-1, -1};
+    const int maxRounds = 4000;
+    int round = 0;
+    for (;; ++round) {
+      if (round >= maxRounds) {
+        CmiPrintf("Charm> Warning: rescale flush did not converge after %d "
+                  "rounds (sent=%ld arrived=%ld); proceeding anyway.\n",
+                  round, prev[0], prev[1]);
+        break;
+      }
+      long pumped = 0;
+      if (departing) pumped = (long)CmiRescalePumpQueuesOnce();
+      comm_backend::drain();
+      comm_backend::barrier();
+      long v[3] = {CmiRescaleAmSent(), CmiRescaleAmRecv(), pumped};
+      comm_backend::allreduceSumLong(v, 3);
+      if (v[0] == v[1] && v[2] == 0 && v[0] == prev[0] && v[1] == prev[1])
+        break;
+      prev[0] = v[0];
+      prev[1] = v[1];
+    }
+    if (myNode == 0 && round > 1)
+      CmiPrintf("Charm> Rescale flush: %d rounds to quiesce the old world.\n",
+                round + 1);
+    // Counters restart each epoch: a departing process takes its share of
+    // both sums with it, and nothing is in flight right now, so zero is the
+    // one value every survivor and every future newcomer can agree on.
+    CmiRescaleResetAmCounters();
+  }
+
+  coord::ClusterView view;
 
   if (departing) {
     coord::ClusterView ignored;

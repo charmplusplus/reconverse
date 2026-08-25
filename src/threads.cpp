@@ -41,6 +41,15 @@ typedef struct CthThreadBase {
   int magic;     /* magic number for checking corruption */
   struct CthThreadListener *listener;
 
+  /* Migration. isMigratable means the stack came out of isomallocContext
+     rather than out of malloc, so it sits at an address every process in the
+     job agrees on and the thread can be serialized and resumed elsewhere. */
+  int isMigratable;
+  CmiIsomallocContext isomallocContext;
+  /* Nesting depth of "interceptions off" (see CthInterceptionsDeactivatePush).
+     Starts at 1: a thread is born inside the runtime, not in its own code. */
+  int interceptionDeactivations;
+
   int eventID;
   int srcPE;
 
@@ -69,6 +78,12 @@ CpvStaticDeclare(CthThread, CthSchedulingThread);
 CpvStaticDeclare(CthThread, CthSleepingStandins);
 
 CthThreadToken *CthGetToken(CthThread t) { return B(t)->token; }
+
+/* Which flavor of thread this build provides. Set in CthInit; read by callers
+   that need to know whether a stack address survives a migration. */
+static int CmiThreadIs_flag = 0;
+
+int CmiThreadIs(int flag) { return (CmiThreadIs_flag & flag) == flag; }
 
 static void CthFixData(CthThread t) {
   size_t newsize = CpvAccess(CthDatasize);
@@ -163,6 +178,10 @@ static void CthThreadInit(CthThread t) {
   th->stack = NULL;
   th->stacksize = 0;
 
+  th->isMigratable = 0;
+  th->isomallocContext.opaque = NULL;
+  th->interceptionDeactivations = 1;
+
   th->tid.id[0] = CmiMyPe();
   th->tid.id[1] = std::atomic_fetch_add(&serialno, 1);
   th->tid.id[2] = 0;
@@ -200,17 +219,65 @@ void CthInit(char **argv) {
   CthThreadInit(t);
   CpvInitialize(CthThread, doomedThreadPool);
   CpvAccess(doomedThreadPool) = (CthThread)NULL;
+
+  /* boost fcontext: a saved context is a stack pointer into the thread's own
+     stack, so a migratable thread's stack has to keep its address -- which is
+     what Isomalloc gives it. Not aliased, not copied. */
+  if (CmiMyRank() == 0)
+    CmiThreadIs_flag |= CMI_THREAD_IS_UJCONTEXT;
+}
+
+/* Globals swapping: not implemented here. See the comment in converse.h --
+   Reconverse's answer to per-rank globals is to put them in the rank's
+   Isomalloc heap, which costs nothing per context switch, so there is nothing
+   to swap. These keep code written against the swapping interface compiling
+   and inert. */
+CpvDeclare(int, CmiPICMethod);
+
+void CtgInit(void) {
+  CpvInitialize(int, CmiPICMethod);
+  CpvAccess(CmiPICMethod) = CMI_PIC_NOP;
+}
+size_t CtgGetSize(void) { return 0; }
+CtgGlobals CtgCreate(void *buffer) { return CtgGlobals{}; }
+CtgGlobals CtgCurrentGlobals(void) { return CtgGlobals{}; }
+void CtgInstall(CtgGlobals g) {}
+void CtgUninstall(void) {}
+
+/* The registered Isomalloc provider, or null when nobody registered one.
+   Set once, before any migratable thread exists, and read from every PE. */
+static const CthIsomallocOps *cth_isoOps = NULL;
+
+void CthRegisterIsomallocOps(const CthIsomallocOps *ops) { cth_isoOps = ops; }
+
+int CthMigratable(void) {
+  return (cth_isoOps != NULL && cth_isoOps->enabled()) ? 1 : 0;
 }
 
 static void *CthAllocateStack(CthThreadBase *th, int *stackSize,
-                              int useMigratable) {
+                              int useMigratable, CmiIsomallocContext ctx) {
   void *ret = NULL;
   if (*stackSize == 0)
     *stackSize = CpvAccess(_defaultStackSize);
   th->stacksize = *stackSize;
 
-  ret = malloc(*stackSize);
-  // CmiEnforce(ret != nullptr);
+  if (useMigratable && CthMigratable()) {
+    /* The stack has to live at an address the destination process agrees on,
+       which is what the Isomalloc context provides. It is never freed on its
+       own -- the context owns it. */
+    th->isMigratable = 1;
+    th->isomallocContext = ctx;
+    ret = cth_isoOps->permanentAllocAlign(ctx, 16, (size_t)*stackSize);
+    if (ret == NULL)
+      CmiAbort("CthAllocateStack: isomalloc could not provide a %d byte "
+               "migratable stack.\n",
+               *stackSize);
+  } else {
+    ret = malloc(*stackSize);
+    if (ret == NULL)
+      CmiAbort("CthAllocateStack: out of memory for a %d byte stack.\n",
+               *stackSize);
+  }
 
   th->stack = ret;
 
@@ -218,14 +285,14 @@ static void *CthAllocateStack(CthThreadBase *th, int *stackSize,
 }
 
 static CthThread CthCreateInner(CthVoidFn fn, void *arg, int size,
-                                int migratable) {
+                                int migratable, CmiIsomallocContext ctx) {
   CthThread result;
   char *stack, *ss_sp, *ss_end;
 
   result = (CthThread)malloc(sizeof(struct CthThreadStruct));
   //_MEMCHECK(result);
   CthThreadInit(result);
-  CthAllocateStack(&result->base, &size, migratable);
+  CthAllocateStack(&result->base, &size, migratable, ctx);
   stack = (char *)result->base.stack;
   ss_end = stack + size;
 
@@ -259,7 +326,14 @@ static CthThread CthCreateInner(CthVoidFn fn, void *arg, int size,
 }
 
 CthThread CthCreate(CthVoidFn fn, void *arg, int size) {
-  return CthCreateInner(fn, arg, size, 0);
+  CmiIsomallocContext none;
+  none.opaque = NULL;
+  return CthCreateInner(fn, arg, size, 0, none);
+}
+
+CthThread CthCreateMigratable(CthVoidFn fn, void *arg, int size,
+                              CmiIsomallocContext ctx) {
+  return CthCreateInner(fn, arg, size, 1, ctx);
 }
 
 static void CthThreadBaseFree(CthThreadBase *th) {
@@ -284,14 +358,14 @@ static void CthThreadBaseFree(CthThreadBase *th) {
   th->listener = NULL;
   free(th->data);
 
-  if (th->stack != NULL) {
-    for (l = th->listener; l != NULL; l = lnext) {
-      lnext = l->next;
-      l->next = 0;
-      if (l->free)
-        l->free(l);
+  if (th->isMigratable) {
+    /* The stack was carved out of the Isomalloc context and is released with
+       it, not on its own. */
+    if (th->isomallocContext.opaque != NULL) {
+      cth_isoOps->contextDelete(th->isomallocContext);
+      th->isomallocContext.opaque = NULL;
     }
-    th->listener = NULL;
+  } else if (th->stack != NULL) {
     free(th->stack);
   }
   th->stack = NULL;
@@ -553,6 +627,145 @@ void CthFree(CthThread t)
     CthThreadFree(t);
   } else
     t->base.exiting = 1;
+}
+
+/* ------------------------- Migration support ------------------------- */
+
+CmiIsomallocContext CthGetIsomallocContext(CthThread t) {
+  return B(t)->isomallocContext;
+}
+
+size_t CthStackOffset(CthThread t, char *p) {
+  CthThreadBase *base = B(t);
+  size_t o = (size_t)(p - (char *)base->stack);
+  /* Zero is the "not on this stack" answer, so a pointer to the very first
+     byte of the stack cannot be represented -- no caller has one. */
+  if (base->stack == NULL || o >= (size_t)base->stacksize)
+    return 0;
+  return o;
+}
+
+char *CthPointer(CthThread t, size_t pos) {
+  if (pos == 0)
+    return NULL;
+  return (char *)B(t)->stack + pos;
+}
+
+/* Interceptions: whatever has to be swapped in while a thread runs its own
+   code and out while it is inside the runtime. Today that is only the
+   Isomalloc heap redirection; thread-local storage and global-variable
+   swapping plug in here when they arrive.
+
+   Deactivations nest, and a thread is born deactivated, so the count reaching
+   zero -- not merely decrementing -- is what turns interceptions on. */
+
+static void CthInterceptionsImmediateActivate(CthThread th) {
+  CthThreadBase *const base = B(th);
+  if (base->isMigratable && cth_isoOps != NULL)
+    cth_isoOps->contextActivate(base->isomallocContext);
+}
+
+static void CthInterceptionsImmediateDeactivate(CthThread th) {
+  CthThreadBase *const base = B(th);
+  if (base->isMigratable && cth_isoOps != NULL) {
+    CmiIsomallocContext none;
+    none.opaque = NULL;
+    cth_isoOps->contextActivate(none);
+  }
+}
+
+void CthInterceptionsDeactivatePush(CthThread th) {
+  CthThreadBase *const base = B(th);
+  if (++base->interceptionDeactivations != 1)
+    return;
+  CthInterceptionsImmediateDeactivate(th);
+}
+
+void CthInterceptionsDeactivatePop(CthThread th) {
+  CthThreadBase *const base = B(th);
+  CmiAssert(base->interceptionDeactivations > 0);
+  if (--base->interceptionDeactivations > 0)
+    return;
+  CthInterceptionsImmediateActivate(th);
+}
+
+int CthInterceptionsTemporarilyActivateStart(CthThread th) {
+  CthThreadBase *const base = B(th);
+  const int old = base->interceptionDeactivations;
+  CmiAssert(old != 0);
+  base->interceptionDeactivations = 0;
+  CthInterceptionsImmediateActivate(th);
+  return old;
+}
+
+void CthInterceptionsTemporarilyActivateEnd(CthThread th, int old) {
+  CthThreadBase *const base = B(th);
+  CmiAssert(base->interceptionDeactivations == 0);
+  base->interceptionDeactivations = old;
+  CthInterceptionsImmediateDeactivate(th);
+}
+
+/* Serialize the parts of a thread that have to travel with it.
+
+   The machine context is copied as raw bytes. That is only sound because the
+   stack it points into is Isomalloc'd: the saved stack pointer is a virtual
+   address the destination process has reserved for this same context, so it
+   still means what it meant here. */
+CthThread CthPupThread(CmiPupStream *p, CthThread t) {
+  CthThreadBase *base;
+
+  if (CmiPupIsUnpacking(p)) {
+    t = (CthThread)malloc(sizeof(struct CthThreadStruct));
+    if (t == NULL)
+      CmiAbort("CthPupThread: out of memory.\n");
+    CthThreadInit(t);
+  }
+
+  base = B(t);
+
+  if (!CmiPupIsSizing(p) && t == CpvAccess(CthCurrent))
+    CmiAbort("CthPupThread: cannot serialize the running thread.\n");
+
+  CmiPupBytes(p, &base->awakenfn, sizeof(base->awakenfn));
+  CmiPupBytes(p, &base->choosefn, sizeof(base->choosefn));
+  CmiPupBytes(p, &base->next, sizeof(base->next));
+  CmiPupBytes(p, &base->suspendable, sizeof(base->suspendable));
+
+  CmiPupBytes(p, &base->datasize, sizeof(base->datasize));
+  if (CmiPupIsUnpacking(p)) {
+    base->data = (char *)malloc(base->datasize);
+    if (base->datasize > 0 && base->data == NULL)
+      CmiAbort("CthPupThread: out of memory for thread-private data.\n");
+  }
+  CmiPupBytes(p, base->data, base->datasize);
+
+  CmiPupBytes(p, &base->isMigratable, sizeof(base->isMigratable));
+  CmiPupBytes(p, &base->stacksize, sizeof(base->stacksize));
+
+  /* The stack pointer is meaningful across processes only for a migratable
+     thread; for any other, this is a diagnostic that will not be dereferenced
+     on the far side. */
+  CmiPupBytes(p, &base->stack, sizeof(base->stack));
+
+  if (base->isMigratable) {
+    if (cth_isoOps == NULL)
+      CmiAbort("CthPupThread: no Isomalloc provider is registered, so a "
+               "migratable thread cannot be serialized.\n");
+    cth_isoOps->contextPup(p, &base->isomallocContext);
+  }
+
+  if (CmiPupIsUnpacking(p)) {
+    /* Listeners are process-local; whoever cares re-attaches them. */
+    base->listener = NULL;
+  }
+
+  CmiPupBytes(p, &base->magic, sizeof(base->magic));
+  CmiPupBytes(p, &base->interceptionDeactivations,
+              sizeof(base->interceptionDeactivations));
+
+  CmiPupBytes(p, &t->context, sizeof(t->context));
+
+  return t;
 }
 
 int CthImplemented(void) { return 1; }
