@@ -50,6 +50,11 @@ int quietMode;
 int quietModeRequested;
 int userDrivenMode;
 int _replaySystem = 0;
+// No-op, as in classic Converse's default allocator (memory.C): only the
+// charmdebug allocator implements it. Charm's record-replay (+record/+replay,
+// ck.C CkMessageWatcherInit) calls it unconditionally when CMK_REPLAYSYSTEM
+// is enabled, so the symbol must exist for replay-capable builds.
+void CpdSetInitializeMemory(int v) { }
 static int CmiMemoryIs_flag=0;
 CsvDeclare(CmiIpcManager*, coreIpcManager_);
 int Cmi_usched;

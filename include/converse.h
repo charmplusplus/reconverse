@@ -421,6 +421,7 @@ extern void
 #define CMI_MEMORY_IS_OS          (1<<5)
 #define CMI_MEMORY_IS_CHARMDEBUG  (1<<6)
 int CmiMemoryIs(int flag); /* return state of this flag */
+void CpdSetInitializeMemory(int v); /* no-op outside charmdebug; needed by record-replay */
 
 // state getters
 int CmiMyPe();
