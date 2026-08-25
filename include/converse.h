@@ -421,6 +421,8 @@ extern void
 #define CMI_MEMORY_IS_OS          (1<<5)
 #define CMI_MEMORY_IS_CHARMDEBUG  (1<<6)
 int CmiMemoryIs(int flag); /* return state of this flag */
+void CpdSetInitializeMemory(int v); /* no-op outside charmdebug; needed by record-replay */
+CLINKAGE void CmiMkdir(const char *dirName);
 
 // state getters
 int CmiMyPe();
@@ -452,6 +454,8 @@ void CmiSyncSendAndFree(int destPE, int messageSize, void *msg);
 void CmiSyncListSend(int npes, const int *pes, int len, void *msg);
 void CmiSyncListSendAndFree(int npes, const int *pes, int len, void *msg);
 void CmiPushPE(int destRank, void *msg);
+void CsdEnqueue(void *msg);     /* classic scheduler-enqueue API; */
+void CsdEnqueueLifo(void *msg); /* FIFO here -- see convcore.cpp (record-replay) */
 void CmiPushNode(void *msg);
 
 void CmiSyncSendFn(int destPE, int messageSize, char *msg);

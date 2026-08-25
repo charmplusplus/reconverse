@@ -10,6 +10,7 @@
 #include <cstdarg>
 #include <pthread.h>
 #include <stdio.h>
+#include <sys/stat.h>
 #include <stdlib.h>
 #include <thread>
 #include <vector>
@@ -50,6 +51,11 @@ int quietMode;
 int quietModeRequested;
 int userDrivenMode;
 int _replaySystem = 0;
+// No-op, as in classic Converse's default allocator (memory.C): only the
+// charmdebug allocator implements it. Charm's record-replay (+record/+replay,
+// ck.C CkMessageWatcherInit) calls it unconditionally when CMK_REPLAYSYSTEM
+// is enabled, so the symbol must exist for replay-capable builds.
+void CpdSetInitializeMemory(int v) { }
 static int CmiMemoryIs_flag=0;
 CsvDeclare(CmiIpcManager*, coreIpcManager_);
 int Cmi_usched;
@@ -509,6 +515,18 @@ void CmiPushPE(int destRank, int messageSize, void *msg) {
       CmiMyPe(), destRank, Cmi_mynodesize);
   Cmi_queues[rank]->push(msg);
 }
+
+/* Classic Converse scheduler-queue enqueue API, used by Charm++'s
+ * record-replay engine (ck.C) to re-inject messages it delayed. Reconverse's
+ * per-PE queues have no front insertion, so both variants map to a FIFO push
+ * onto the caller's own queue. For the replay engine this is correct, merely
+ * less prompt: CsdEnqueueLifo is a "process this next" hint, and every
+ * delivery re-checks the engine's expected-next predicate. */
+void CsdEnqueue(void *msg) { CmiPushPE(CmiMyRank(), msg); }
+void CsdEnqueueLifo(void *msg) { CmiPushPE(CmiMyRank(), msg); }
+
+/* Classic Converse filesystem utility, used by Charm++'s checkpoint code. */
+extern "C" void CmiMkdir(const char *dirName) { mkdir(dirName, 0777); }
 
 void CmiPushPE(int destRank, void *msg) {
   CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
