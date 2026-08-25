@@ -7,6 +7,10 @@
 #ifndef RECONVERSE_INCLUDE_CHARM_CONFIG_H
 #define RECONVERSE_INCLUDE_CHARM_CONFIG_H
 
+/* Universal runtime discriminator for code shared with classic Converse
+ * builds (whose conv-autoconfig.h defines it 0). */
+#define CMK_RECONVERSE 1
+
 #define CMK_LBDB_ON 1
 
 // Size of the machine-layer buffer in CmiNcpyBuffer::layerInfo.
