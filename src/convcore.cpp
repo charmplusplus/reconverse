@@ -169,7 +169,13 @@ void converseRunPe(int rank, int everReturn) {
   CthSchedInit();
 
   CpvInitialize(int, isHelperOn);
-  CpvAccess(isHelperOn) = 0;
+  // Every worker thread is a CkLoop/OpenMP helper by default, matching Converse
+  // (charm/src/conv-core/convcore.C).  With this 0, CkLoop_Parallelize dispatches
+  // no work at all: SingleHelperStealWork() returns early on every helper and the
+  // fan-out loops skip every PE via CpvAccessOther(isHelperOn, i), so the calling
+  // PE silently executes all chunks itself.  Correct results, zero speedup.
+  CpvAccess(isHelperOn) = 1;
+  CmiMemoryWriteFence();
 
   if (CmiTraceFn)
     CmiTraceFn(CmiMyArgv);
