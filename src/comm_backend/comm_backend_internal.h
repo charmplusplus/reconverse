@@ -31,7 +31,7 @@ public:
     CmiAbort("Rget not supported in this backend");
   }
   virtual void issueRput(int rank, const void *local_buf, size_t size,
-                         mr_t local_mr, uintptr_t remote_disp, void *rmr,
+                         mr_t local_mr, void *remote_buf, void *rmr,
                          CompHandler localComp, void *user_context) {
     // Default implementation: not supported
     CmiAbort("Rput not supported in this backend");

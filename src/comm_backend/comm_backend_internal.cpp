@@ -114,11 +114,11 @@ void issueRget(int rank, const void *local_buf, size_t size, mr_t local_mr,
 }
 
 void issueRput(int rank, const void *local_buf, size_t size, mr_t local_mr,
-               uintptr_t remote_disp, void *rmr, CompHandler localComp, void *user_context) {
+               void *remote_buf, void *rmr, CompHandler localComp, void *user_context) {
   if (gCommBackend == nullptr) {
     return;
   }
-  gCommBackend->issueRput(rank, local_buf, size, local_mr, remote_disp, rmr,
+  gCommBackend->issueRput(rank, local_buf, size, local_mr, remote_buf, rmr,
                           localComp, user_context);
 }
 

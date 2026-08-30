@@ -342,8 +342,8 @@ void writeToBuffer(PersistentSendsTable *slot, int bufIndex, int size,
     /* The notification is only sent once this put completes locally, which is
        what orders it behind the data on the wire. */
     comm_backend::issueRput(slot->destNode, msg, size, MRFIELD(msg),
-                            (uintptr_t)buf.disp, buf.rmr, persistentPutDone,
-                            ctx);
+                            (void *)(uintptr_t)buf.addr, buf.rmr,
+                            persistentPutDone, ctx);
   } else {
     /* No one-sided support: the notification carries the payload and the
        receiver copies it into the buffer. */

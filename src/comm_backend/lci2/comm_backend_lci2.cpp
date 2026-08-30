@@ -317,10 +317,17 @@ void CommBackendLCI2::issueRget(int rank, const void *local_buf, size_t size,
 }
 
 void CommBackendLCI2::issueRput(int rank, const void *local_buf, size_t size,
-                                mr_t local_mr, uintptr_t remote_disp, void *rmr,
+                                mr_t local_mr, void *remote_buf, void *rmr,
                                 CompHandler localComp, void *user_context) {
   auto args = new localCallbackArgs{localComp, user_context};
   lci::status_t status;
+  // The remote address has to be turned into a displacement from the region
+  // base, exactly as issueRget does. The base is not the address the peer asked
+  // to register: with the registration cache on, LCI records the enclosing
+  // rcache region's page-aligned start (see mem_reg_cb in lci reg_cache.cpp),
+  // so a hardcoded displacement of 0 writes ahead of the intended buffer by
+  // however far into its region the buffer sits.
+  uintptr_t remote_disp = (uintptr_t)remote_buf - getThreadLocalRMR(rmr).base;
   do {
     status = lci::post_put_x(rank, const_cast<void *>(local_buf), size,
                              m_local_comp, remote_disp, getThreadLocalRMR(rmr))
