@@ -87,10 +87,11 @@ typedef void *PersistentHandle;
    can be memcpy'd into a message. */
 typedef struct PersistentBufDesc {
   CmiUInt8 addr; /* address of the message area in the receiver's address
-                    space; informational, a remote sender addresses the buffer
-                    through rmr and disp */
-  CmiUInt8 disp; /* offset of the message area from the start of the
-                    registered memory region, for one-sided puts */
+                    space; a remote sender addresses the buffer with this and
+                    rmr, and the backend resolves it against the region base */
+  CmiUInt8 disp; /* offset of the message area from the start of the buffer the
+                    receiver asked to register; kept for diagnostics only, it is
+                    not the displacement a put wants -- see issueRput */
   char rmr[CMK_PERSISTENT_RMR_BYTES]; /* serialized remote memory region */
 } PersistentBufDesc;
 

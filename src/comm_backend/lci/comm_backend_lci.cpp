@@ -381,10 +381,17 @@ void CommBackendLCI::issueRget(int rank, const void *local_buf, size_t size,
 }
 
 void CommBackendLCI::issueRput(int rank, const void *local_buf, size_t size,
-                                mr_t local_mr, uintptr_t remote_disp, void *rmr,
+                                mr_t local_mr, void *remote_buf, void *rmr,
                                 CompHandler localComp, void *user_context) {
   auto args = new localCallbackArgs{localComp, user_context};
   lci::status_t status;
+  // The remote address has to be turned into a displacement from the region
+  // base, exactly as issueRget does. The base is not the address the peer asked
+  // to register: with the registration cache on, LCI records the enclosing
+  // rcache region's page-aligned start (see mem_reg_cb in lci reg_cache.cpp),
+  // so a hardcoded displacement of 0 writes ahead of the intended buffer by
+  // however far into its region the buffer sits.
+  uintptr_t remote_disp = (uintptr_t)remote_buf - getThreadLocalRMR(rmr).base;
   // Same reentrancy guard as issueAm/issueRget: when called from inside a
   // completion callback this thread already holds m_progress_locks[dev], so the
   // nested progress() below is a no-op. Spinning on retry would then hold that

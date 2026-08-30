@@ -595,8 +595,8 @@ if (target_node == CmiMyNode()) {
   auto mr = *(comm_backend::mr_t *)ncpyOpInfo->srcLayerInfo;
   void *rmr = ncpyOpInfo->destLayerInfo + sizeof(comm_backend::mr_t);
   comm_backend::issueRput(CmiNodeToGlobal(CmiNodeOf(ncpyOpInfo->destPe)),
-                          ncpyOpInfo->srcPtr,
-                          len, mr, 0, rmr,
+                          ncpyOpInfo->srcPtr, len, mr,
+                          (void *)ncpyOpInfo->destPtr, rmr,
                           CommRputLocalHandler, ncpyOpInfo);
 } else {
   CmiIssueRputCopyBased(ncpyOpInfo);
