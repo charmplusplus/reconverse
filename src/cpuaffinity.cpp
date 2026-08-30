@@ -734,7 +734,15 @@ void CmiCheckAffinity(void)
     if (get_affinity(&my_aff) == -1) CmiAbort("get_affinity failed\n");
     CPU_OR(&core_usage, &core_usage, &my_aff); // add my affinity (pe0)
 
-    cpuAffSyncWait(cpuPhyAffCheckDone);
+    // Only wait when somebody is actually going to report. cpuPhyAffCheckDone
+    // is set exclusively by cpuPhyNodeAffinityRecvHandler, which no one invokes
+    // when this PE is the only one on physical node 0 -- nobody sends, the flag
+    // is never set, and this spins forever while every other PE blocks at the
+    // CmiBarrier below waiting for a PE 0 that never gets there. That layout is
+    // one process per physical node on a multi-node job, which is exactly what
+    // one-GPU-per-process asks for.
+    if (CmiNumPesOnPhysicalNode(0) > 1)
+      cpuAffSyncWait(cpuPhyAffCheckDone);
 
   }
   else if (CmiPhysicalNodeID(CmiMyPe()) == 0)
