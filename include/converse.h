@@ -980,7 +980,11 @@ enum ncpyOperationMode {
   CMK_BCAST_EM_API = 5,
   CMK_BCAST_EM_API_REVERSE = 6,
   CMK_READONLY_BCAST = 7,
-  CMK_ZC_PUP = 8
+  CMK_ZC_PUP = 8,
+  // A device-payload correction put. Its completion is raised on the initiator,
+  // which is the sender, so the upper layer must notify the target rather than
+  // resolve the operation locally.
+  CMK_DEVICE_RESTAGE_PUT = 9
 };
 
 enum cmiZCMsgType {
