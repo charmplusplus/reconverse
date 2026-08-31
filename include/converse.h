@@ -1180,6 +1180,9 @@ extern int CmiOnCore(void);
 
 int CmiNumPhysicalNodes();
 int CmiGetFirstPeOnPhysicalNode(int node);
+/* Rank of a logical node among those sharing its physical node.
+ * Topology-derived; O(PEs on the physical node), so cache it. */
+int CmiNodeRankOnPhysicalNode(int node);
 
 static char *CopyMsg(char *msg, int len);
 void CmiForwardMsgToPeers(int size, char *msg);
