@@ -607,4 +607,39 @@ void CmiGetPesOnPhysicalNode(int node, int** pelist, int* num)
 int CmiPhysicalRank(int pe) { return LrtsRankOf(pe); }
 int CmiPhysicalNodeID(int pe) { return LrtsNodeOf(pe); }
 int CmiGetFirstPeOnPhysicalNode(int node) { return LrtsNodeFirst(node); }
+
+/* Rank of a logical node (process) among the logical nodes that share its
+ * physical node -- the quantity callers need to index per-host structures
+ * such as GPU device assignments and IPC pools.
+ *
+ * Derived from the topology the machine layer reports, not from arithmetic
+ * over node counts. A formula like
+ *     CmiNodeOf(pe) % (CmiNumNodes() / CmiNumPhysicalNodes())
+ * assumes processes per host are uniform, that logical node numbering is
+ * contiguous within a host and ordered by host, and that the totals do not
+ * change; heterogeneous launches, cyclic rank placement and job resizing each
+ * break one of those silently. Enumeration holds in all of them.
+ *
+ * O(PEs on the physical node): intended to be called once and cached, not on
+ * a per-operation path.
+ */
+int CmiNodeRankOnPhysicalNode(int node)
+{
+  int* pelist = NULL;
+  int num = 0;
+  CmiGetPesOnPhysicalNode(CmiPhysicalNodeID(CmiNodeFirst(node)), &pelist, &num);
+  if (pelist == NULL || num <= 0) return 0; // topology unavailable: one node per host
+
+  std::vector<int> nodes;
+  nodes.reserve(num);
+  for (int i = 0; i < num; i++)
+  {
+    const int n = CmiNodeOf(pelist[i]);
+    if (std::find(nodes.begin(), nodes.end(), n) == nodes.end()) nodes.push_back(n);
+  }
+  std::sort(nodes.begin(), nodes.end());
+  const std::vector<int>::iterator it = std::lower_bound(nodes.begin(), nodes.end(), node);
+  if (it == nodes.end() || *it != node) return 0;
+  return (int)(it - nodes.begin());
+}
 void CmiInitCPUTopology(char** argv) { LrtsInitCpuTopo(argv); }
