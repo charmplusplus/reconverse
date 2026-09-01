@@ -1021,6 +1021,10 @@ void CmiAbortHelper(const char *source, const char *message,
   CmiPrintf("------- Processor %d Exiting: %s ------\n"
             "Reason: %s\n",
             CmiMyPe(), source, message);
+  /* CmiPrintf leaves this in stdout's buffer, and the abort() that follows does
+     not flush it, so without this the reason is lost whenever stdout is a pipe
+     rather than a terminal -- which is how CTest and most job schedulers run. */
+  fflush(stdout);
 }
 
 void CmiAbort(const char *format, ...) {
