@@ -82,7 +82,10 @@ void CldModuleInit(char **);
 static ConverseQueue<void *> **Cmi_queues; // array of queue pointers
 
 // PE LOCALS
-thread_local int Cmi_myrank;
+// -1 until CmiInitState runs, so threads that are not PEs (which have no self
+// queue) never match a destination rank in CmiPushPE
+thread_local int Cmi_myrank = -1;
+thread_local ConverseSelfQueue<void *> Cmi_selfQueue;
 thread_local CmiState Cmi_state;
 thread_local bool idle_condition;
 thread_local double idle_time;
@@ -458,6 +461,8 @@ void CmiInitState(int rank) {
 
 ConverseQueue<void *> *CmiGetQueue(int rank) { return Cmi_queues[rank]; }
 
+ConverseSelfQueue<void *> *CmiGetSelfQueue() { return &Cmi_selfQueue; }
+
 int CmiMyRank() { return CmiGetState()->rank; }
 
 int CmiMyPe() { return CmiGetState()->pe; }
@@ -522,6 +527,12 @@ void CmiPushPE(int destRank, int messageSize, void *msg) {
       rank >= 0 && rank < Cmi_mynodesize,
       "CmiPushPE(myPe: %d, destPe: %d, nodeSize: %d): rank out of range",
       CmiMyPe(), destRank, Cmi_mynodesize);
+  // a PE sending to itself owns both ends of the queue, so it can bypass the
+  // atomics of the shared per-PE queue
+  if (rank == Cmi_myrank) {
+    Cmi_selfQueue.push(msg);
+    return;
+  }
   Cmi_queues[rank]->push(msg);
 }
 

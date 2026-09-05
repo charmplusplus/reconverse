@@ -109,14 +109,16 @@ void CthSetStrategy(CthThread t, CthAwkFn awkfn, CthThFn chsfn) {
 void CthEnqueueNormalThread(CthThreadToken *token, int s, int pb,
                             unsigned int *prio) {
   CmiSetHandler(token, CpvAccess(CthResumeNormalThreadIdx));
-  CmiGetQueue(CmiMyRank())->push(token);
+  // the token always goes to the PE that is awakening the thread, so it can
+  // take the self queue and skip the shared queue's atomics
+  CmiGetSelfQueue()->push(token);
 }
 
 void CthEnqueueSchedulingThread(CthThreadToken *token, int s, int pb,
                                 unsigned int *prio) {
   CmiSetHandler(token, CpvAccess(CthResumeSchedulingThreadIdx));
   CpvStaticDeclare(int, CthResumeSchedulingThreadIdx);
-  CmiGetQueue(CmiMyRank())->push(token);
+  CmiGetSelfQueue()->push(token);
 }
 
 static CthThread CthSuspendNormalThread(void) {
