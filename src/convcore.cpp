@@ -10,6 +10,7 @@
 #include <cstdarg>
 #include <pthread.h>
 #include <stdio.h>
+#include <sys/stat.h>
 #include <stdlib.h>
 #include <thread>
 #include <vector>
@@ -34,6 +35,7 @@ ConverseNodeQueue<void *> *CmiNodeQueue;
 CpvDeclare(Queue, CsdSchedQueue);
 CpvDeclare(TaskQueue, CsdTaskQueue);
 CsvDeclare(Queue, CsdNodeQueue);
+CsvDeclare(std::atomic<int>, CsdNodeQueueLen);
 CsvDeclare(CmiNodeLock, CsdNodeQueueLock);
 double Cmi_startTime;
 CmiSpanningTreeInfo *_topoTree = NULL;
@@ -50,6 +52,11 @@ int quietMode;
 int quietModeRequested;
 int userDrivenMode;
 int _replaySystem = 0;
+// No-op, as in classic Converse's default allocator (memory.C): only the
+// charmdebug allocator implements it. Charm's record-replay (+record/+replay,
+// ck.C CkMessageWatcherInit) calls it unconditionally when CMK_REPLAYSYSTEM
+// is enabled, so the symbol must exist for replay-capable builds.
+void CpdSetInitializeMemory(int v) { }
 static int CmiMemoryIs_flag=0;
 CsvDeclare(CmiIpcManager*, coreIpcManager_);
 int Cmi_usched;
@@ -75,7 +82,10 @@ void CldModuleInit(char **);
 static ConverseQueue<void *> **Cmi_queues; // array of queue pointers
 
 // PE LOCALS
-thread_local int Cmi_myrank;
+// -1 until CmiInitState runs, so threads that are not PEs (which have no self
+// queue) never match a destination rank in CmiPushPE
+thread_local int Cmi_myrank = -1;
+thread_local ConverseSelfQueue<void *> Cmi_selfQueue;
 thread_local CmiState Cmi_state;
 thread_local bool idle_condition;
 thread_local double idle_time;
@@ -147,18 +157,30 @@ void converseRunPe(int rank, int everReturn) {
   // Cmi_multicastHandler = CmiRegisterHandler(CmiMulticastHandler);
 
   // A global barrier to ensure all global structs are initialized
+  //printf("[DBG] pe %d rank %d: converseRunPe nodebarrier1 start\n", CmiMyPe(), rank); fflush(stdout);
   comm_backend::init_mempool();
   CmiNodeBarrier();
+  //printf("[DBG] pe %d rank %d: converseRunPe nodebarrier1 done\n", CmiMyPe(), rank); fflush(stdout);
   if (rank == 0) {
+    //printf("[DBG] pe %d: converseRunPe global barrier start\n", CmiMyPe()); fflush(stdout);
     comm_backend::barrier();
+    //printf("[DBG] pe %d: converseRunPe global barrier done\n", CmiMyPe()); fflush(stdout);
   }
+  //printf("[DBG] pe %d rank %d: converseRunPe nodebarrier2 start\n", CmiMyPe(), rank); fflush(stdout);
   CmiNodeBarrier();
+  //printf("[DBG] pe %d rank %d: converseRunPe nodebarrier2 done\n", CmiMyPe(), rank); fflush(stdout);
 
-  CthInit(NULL);
+  CthInit(CmiMyArgv);
   CthSchedInit();
 
   CpvInitialize(int, isHelperOn);
-  CpvAccess(isHelperOn) = 0;
+  // Every worker thread is a CkLoop/OpenMP helper by default, matching Converse
+  // (charm/src/conv-core/convcore.C).  With this 0, CkLoop_Parallelize dispatches
+  // no work at all: SingleHelperStealWork() returns early on every helper and the
+  // fan-out loops skip every PE via CpvAccessOther(isHelperOn, i), so the calling
+  // PE silently executes all chunks itself.  Correct results, zero speedup.
+  CpvAccess(isHelperOn) = 1;
+  CmiMemoryWriteFence();
 
   if (CmiTraceFn)
     CmiTraceFn(CmiMyArgv);
@@ -276,25 +298,16 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
                   int initret) {
 
 
-  Cmi_npes = 1; // default to 1
-  int plusPeSet = CmiGetArgInt(argv, "+pe", &Cmi_npes); //total number of pes
-  int plusPorPPNSet = 0; // pes per process
-  int Cmi_mynodesize_p;
-  int Cmi_mynodesize_ppn;
-  int plusPSet = CmiGetArgInt(argv, "+p", &Cmi_mynodesize_p);
-  int plusPPNSet = CmiGetArgInt(argv, "+ppn", &Cmi_mynodesize_ppn);
-  if (plusPSet || plusPPNSet)
-  {
-    plusPorPPNSet = 1;
-    if (plusPPNSet && plusPSet) {
-      printf("warning: both +ppn and +p specified, using +ppn\n");
-      Cmi_mynodesize = Cmi_mynodesize_ppn;
-    }
-    else if (plusPPNSet)
-      Cmi_mynodesize = Cmi_mynodesize_ppn;
-    else
-      Cmi_mynodesize = Cmi_mynodesize_p;
-  } 
+  // Run size options. Exactly one of these may be given:
+  //   +pe <N>  : total number of PEs across all processes
+  //   +ppn <N> : number of PEs per process
+  //   +p <N>   : same as +ppn, kept for backward compatibility with Converse
+  // If none is given, we default to one PE per process.
+  int totalPes = 0;      // value of +pe
+  int pesPerProcess = 0; // value of +ppn or +p
+  int plusPeSet = CmiGetArgInt(argv, "+pe", &totalPes);
+  int plusPSet = CmiGetArgInt(argv, "+p", &pesPerProcess);
+  int plusPPNSet = CmiGetArgInt(argv, "+ppn", &pesPerProcess);
   Cmi_argvcopy = CmiCopyArgs(argv); // init for tracing
 
   comm_backend::init(argv);
@@ -303,32 +316,49 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
   comm_backend::barrier();
   Cmi_startTime = getCurrentTime();
   RDMAInit(argv);
-  if (plusPeSet && plusPorPPNSet && Cmi_npes != Cmi_mynodesize * Cmi_numnodes) {
-    fprintf(stderr,
-            "Error: +pe <N> and (+p/+ppn) <M> both set, but N != M * numnodes\n");
-    exit(1);
-  }
-  if (plusPorPPNSet)
-    Cmi_npes = Cmi_mynodesize * Cmi_numnodes;
-  if (Cmi_mynode == 0)
-    printf("Charm++> Running in SMP mode on %d nodes and %d PEs\n",
-           Cmi_numnodes, Cmi_npes);
-  // Need to discuss this with the team
-  if (Cmi_npes < Cmi_numnodes) {
-    fprintf(stderr, "Error: Number of PEs must be greater than or equal to "
-                    "number of nodes\n");
-    exit(1);
-  }
-  if (Cmi_npes % Cmi_numnodes != 0) {
-    fprintf(stderr,
-            "Error: Number of PEs must be a multiple of number of nodes\n");
+  // Validate the run size options. Every process runs the same checks, but only
+  // global PE 0 (rank 0 of node 0, which is this thread) reports the failure.
+  // All of these are fatal, so every process exits.
+  const char *sizeArgError = nullptr;
+  if (plusPeSet + plusPSet + plusPPNSet > 1)
+    sizeArgError = "only one of +pe, +ppn and +p may be specified";
+  else if (plusPeSet && totalPes < 1)
+    sizeArgError = "+pe must be at least 1";
+  else if ((plusPPNSet || plusPSet) && pesPerProcess < 1)
+    sizeArgError = "+ppn/+p must be at least 1";
+  else if (plusPeSet && totalPes < Cmi_numnodes)
+    // Need to discuss this with the team
+    sizeArgError =
+        "Number of PEs must be greater than or equal to number of nodes";
+  else if (plusPeSet && totalPes % Cmi_numnodes != 0)
+    sizeArgError = "Number of PEs must be a multiple of number of nodes";
+  if (sizeArgError != nullptr) {
+    if (Cmi_mynode == 0)
+      fprintf(stderr, "Error: %s\n", sizeArgError);
     exit(1);
   }
 
-  if (plusPeSet)
-    Cmi_mynodesize = Cmi_npes / Cmi_numnodes;
-  if (!plusPeSet && !plusPorPPNSet)
+  // Now that the number of processes is known, derive the total PE count and
+  // the per-process PE count from whichever option was given.
+  if (plusPeSet) {
+    Cmi_npes = totalPes;
+    Cmi_mynodesize = totalPes / Cmi_numnodes;
+  } else if (plusPPNSet || plusPSet) {
+    Cmi_mynodesize = pesPerProcess;
+    Cmi_npes = pesPerProcess * Cmi_numnodes;
+  } else {
     Cmi_mynodesize = 1;
+    Cmi_npes = Cmi_numnodes;
+  }
+
+  if (Cmi_mynode == 0)
+  {
+    std::string processType = (Cmi_numnodes == 1) ? "process" : "processes";
+    std::string peType = (Cmi_npes == 1) ? "PE" : "PEs";
+    std::string ppnType = (Cmi_mynodesize == 1) ? "PE per process" : "PEs per process";
+      printf("Reconverse> Starting Reconverse with %d %s, %d %s (1 PE = 1 thread), and %d %s\n",
+           Cmi_numnodes, processType.c_str(), Cmi_npes, peType.c_str(), Cmi_mynodesize, ppnType.c_str());
+  }
   Cmi_nodestart = Cmi_mynode * Cmi_mynodesize;
   // register am handlers
   g_amHandler = comm_backend::registerAmHandler(CommRemoteHandler);
@@ -374,7 +404,9 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
   CmiMemLock_lock = CmiCreateLock();
 
   // make sure the queues are allocated before PEs start sending messages around
+  //if (Cmi_mynode == 0) { printf("[DBG] node 0: ConverseInit barrier start\n"); fflush(stdout); }
   comm_backend::barrier();
+  //if (Cmi_mynode == 0) { printf("[DBG] node 0: ConverseInit barrier done\n"); fflush(stdout); }
 
   //launch threads on rank 1+
   CmiStartThreads();
@@ -422,15 +454,19 @@ void CmiInitState(int rank) {
   CpvAccess(CsdSchedQueue) = (Queue)malloc(sizeof(QueueImpl));
   QueueInit(CpvAccess(CsdSchedQueue));
   CsvInitialize(Queue, CsdNodeQueue);
+  CsvInitialize(std::atomic<int>, CsdNodeQueueLen);
   if (CmiMyRank() == 0) {
     CsvAccess(CsdNodeQueueLock) = CmiCreateLock();
     CsvAccess(CsdNodeQueue) = (Queue)malloc(sizeof(QueueImpl));
     QueueInit(CsvAccess(CsdNodeQueue));
+    CsvAccess(CsdNodeQueueLen).store(0, std::memory_order_relaxed);
   }
   CmiNodeBarrier();
 }
 
 ConverseQueue<void *> *CmiGetQueue(int rank) { return Cmi_queues[rank]; }
+
+ConverseSelfQueue<void *> *CmiGetSelfQueue() { return &Cmi_selfQueue; }
 
 int CmiMyRank() { return CmiGetState()->rank; }
 
@@ -496,8 +532,26 @@ void CmiPushPE(int destRank, int messageSize, void *msg) {
       rank >= 0 && rank < Cmi_mynodesize,
       "CmiPushPE(myPe: %d, destPe: %d, nodeSize: %d): rank out of range",
       CmiMyPe(), destRank, Cmi_mynodesize);
+  // a PE sending to itself owns both ends of the queue, so it can bypass the
+  // atomics of the shared per-PE queue
+  if (rank == Cmi_myrank) {
+    Cmi_selfQueue.push(msg);
+    return;
+  }
   Cmi_queues[rank]->push(msg);
 }
+
+/* Classic Converse scheduler-queue enqueue API, used by Charm++'s
+ * record-replay engine (ck.C) to re-inject messages it delayed. Reconverse's
+ * per-PE queues have no front insertion, so both variants map to a FIFO push
+ * onto the caller's own queue. For the replay engine this is correct, merely
+ * less prompt: CsdEnqueueLifo is a "process this next" hint, and every
+ * delivery re-checks the engine's expected-next predicate. */
+void CsdEnqueue(void *msg) { CmiPushPE(CmiMyRank(), msg); }
+void CsdEnqueueLifo(void *msg) { CmiPushPE(CmiMyRank(), msg); }
+
+/* Classic Converse filesystem utility, used by Charm++'s checkpoint code. */
+extern "C" void CmiMkdir(const char *dirName) { mkdir(dirName, 0777); }
 
 void CmiPushPE(int destRank, void *msg) {
   CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
@@ -629,8 +683,8 @@ void CmiSyncSendAndFreeNoPersistent(int destPE, int messageSize, void *msg) {
   if (CmiMyNode() == destNode) {
     CmiPushPE(CmiRankOf(destPE), messageSize, msg);
   } else {
-    comm_backend::issueAm(destNode, msg, messageSize, MRFIELD(msg),
-                          CommLocalHandler, g_amHandler,
+    comm_backend::issueAm(CmiNodeToGlobal(destNode), msg, messageSize,
+                          MRFIELD(msg), CommLocalHandler, g_amHandler,
                           nullptr); // Commlocalhandler will free msg
   }
 }
@@ -658,7 +712,10 @@ void CmiInterSyncSendAndFree(int destPE, int partition, int messageSize,
   // translate destPE to global
   int globalDestPE = CmiGetPeGlobal(destPE, partition);
   header->destPE = globalDestPE;
-  int destNode = CmiGetNodeGlobal(CmiNodeOf(globalDestPE), partition);
+  /* pe_lToGTranslate already returned a global PE, so its node is global too.
+     Running it through node_lToGTranslate again would add the destination
+     partition's node prefix a second time. */
+  int destNode = CmiNodeOf(globalDestPE);
   comm_backend::issueAm(destNode, msg, messageSize, MRFIELD(msg),
                         CommLocalHandler, g_amHandler, nullptr);
 }
@@ -673,12 +730,18 @@ void CmiInterFreeSendFn(int destPE, int partition, int messageSize, char *msg) {
 
 // EXIT TOOLS
 
+// The status travels in the payload, not in the header's collectiveMetaInfo:
+// that field belongs to whichever collective is carrying the message, and the
+// broadcast below overwrites it with the spanning tree root.
+struct CmiExitMsg {
+  CmiMessageHeader header;
+  int status;
+};
+
 void CmiExitHelper(int status) {
-  CmiMessageHeader *exitMsg = (CmiMessageHeader *)CmiAlloc(
-      CmiMsgHeaderSizeBytes); // might need to allocate
-  exitMsg->handlerId = Cmi_exitHandler;
-  exitMsg->collectiveMetaInfo =
-      status; // use collectiveMetaInfo to pass exit status
+  CmiExitMsg *exitMsg = (CmiExitMsg *)CmiAlloc(sizeof(CmiExitMsg));
+  exitMsg->header.handlerId = Cmi_exitHandler;
+  exitMsg->status = status;
   CmiSyncBroadcastAllAndFree(sizeof(*exitMsg), exitMsg);
 }
 
@@ -803,8 +866,7 @@ void CmiAssignOnce(int *variable, int value) {
 void CsdExitScheduler() { CmiGetState()->stopFlag = 1; }
 
 void CmiExitHandler(void *msg) {
-  CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
-  int status = header->collectiveMetaInfo;
+  int status = static_cast<CmiExitMsg *>(msg)->status;
 
   if (status == 1)
     abort();
@@ -833,7 +895,7 @@ void CmiSyncNodeSendAndFree(unsigned int destNode, unsigned int size,
   if (CmiMyNode() == destNode) {
     CmiNodeQueue->push(msg);
   } else {
-    comm_backend::issueAm(destNode, msg, size, MRFIELD(msg),
+    comm_backend::issueAm(CmiNodeToGlobal(destNode), msg, size, MRFIELD(msg),
                           CommLocalHandler, g_amHandler, nullptr);
   }
 }
@@ -975,6 +1037,10 @@ void CmiAbortHelper(const char *source, const char *message,
   CmiPrintf("------- Processor %d Exiting: %s ------\n"
             "Reason: %s\n",
             CmiMyPe(), source, message);
+  /* CmiPrintf leaves this in stdout's buffer, and the abort() that follows does
+     not flush it, so without this the reason is lost whenever stdout is a pipe
+     rather than a terminal -- which is how CTest and most job schedulers run. */
+  fflush(stdout);
 }
 
 void CmiAbort(const char *format, ...) {
@@ -1229,6 +1295,24 @@ int CmiGetArgDoubleDesc(char **argv, const char *arg, double *optDest,
 }
 int CmiGetArgDouble(char **argv, const char *arg, double *optDest) {
   return CmiGetArgDoubleDesc(argv, arg, optDest, "");
+}
+
+/* Parse a size, optionally suffixed with K/M/G (e.g. "8M" == 8388608). */
+double CmiReadSize(const char *str) {
+  double val;
+  if (strpbrk(str, "Gg")) {
+    val = atof(str);
+    val *= 1024ll * 1024 * 1024;
+  } else if (strpbrk(str, "Mm")) {
+    val = atof(str);
+    val *= 1024 * 1024;
+  } else if (strpbrk(str, "Kk")) {
+    val = atof(str);
+    val *= 1024;
+  } else {
+    val = atof(str);
+  }
+  return val;
 }
 
 /** Find the given argument and integer option in argv.
@@ -1711,6 +1795,20 @@ void CmiCreatePartitions(char **argv) {
   _Cmi_numpes_global = Cmi_npes;
   Cmi_nodestartGlobal = _Cmi_mynode_global * Cmi_mynodesize;
   create_partition_map(argv);
+
+  /* create_partition_map() rebases Cmi_mynode onto this partition; the rest of
+     the run size has to follow, because everything above Converse (Charm++'s
+     PE numbering, the spanning trees, the reductions) counts within a
+     partition. The global values stay available as _Cmi_*_global, and
+     CmiNodeToGlobal() maps back whenever the backend is addressed. */
+  Cmi_numnodes = _partitionInfo.partitionSize[_partitionInfo.myPartition];
+  Cmi_npes = Cmi_numnodes * Cmi_mynodesize;
+  Cmi_nodestart = Cmi_mynode * Cmi_mynodesize;
+
+  if (_partitionInfo.numPartitions > 1 && _Cmi_mynode_global == 0) {
+    printf("Reconverse> %d partitions, %d processes and %d PEs each\n",
+           _partitionInfo.numPartitions, Cmi_numnodes, Cmi_npes);
+  }
 }
 
 // Since we are not implementing converse level seed balancers yet

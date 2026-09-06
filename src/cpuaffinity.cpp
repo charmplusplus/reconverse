@@ -734,7 +734,13 @@ void CmiCheckAffinity(void)
     if (get_affinity(&my_aff) == -1) CmiAbort("get_affinity failed\n");
     CPU_OR(&core_usage, &core_usage, &my_aff); // add my affinity (pe0)
 
-    cpuAffSyncWait(cpuPhyAffCheckDone);
+    // Only wait if another PE on this physical node will actually send.
+    // cpuPhyAffCheckDone is set only in cpuPhyNodeAffinityRecvHandler, and
+    // the senders below are exactly the PEs with CmiPhysicalNodeID(pe) == 0,
+    // so with a single PE on physical node 0 there is no sender and this
+    // wait never completes.
+    if (CmiNumPesOnPhysicalNode(0) > 1)
+      cpuAffSyncWait(cpuPhyAffCheckDone);
 
   }
   else if (CmiPhysicalNodeID(CmiMyPe()) == 0)

@@ -149,9 +149,14 @@ thread_local static struct ccd_cond_callbacks conds;
 /**
  * List of periodic callbacks maintained by the scheduler
  */
+// Default resolution of .005 seconds aka 5 milliseconds
+#define CCD_DEFAULT_RESOLUTION 5.0e-3
+
 struct ccd_periodic_callbacks {
   double lastCheck; /*Time of last check*/
   double nextCall[CCD_PERIODIC_MAX];
+  unsigned int nSkip;  /*Scheduler iterations to skip before checking again*/
+  double resolution;   /*How often the timer callbacks want to be serviced*/
 };
 
 /** */
@@ -218,6 +223,8 @@ void CcdModuleInit() {
   _ccd_num_timed_cond_cbs = 0;
   _ccd_numchecks = 1;
   double curTime = CmiWallTimer();
+  pcb.nSkip = 1;
+  pcb.resolution = CCD_DEFAULT_RESOLUTION;
   pcb.lastCheck = curTime;
   for (int i = 0; i < CCD_PERIODIC_MAX; i++)
     pcb.nextCall[i] = curTime + periodicCallInterval[i];
@@ -295,6 +302,27 @@ void CcdCallBacks(void) {
 
   /* Figure out how many times to skip Ccd processing */
   double curWallTime = CmiWallTimer();
+
+  /* Adjust the number of scheduler iterations to skip by a factor between
+     0.5, if we skipped too few last time, and 2, if we skipped too many.
+     Ideally elapsed == resolution and the multiplier is 1.  Without this the
+     scheduler would read the clock on every iteration once any timer callback
+     exists, which is what CsdPeriodic()'s second guard exists to prevent. */
+  unsigned int nSkip = o->nSkip;
+  double elapsed = curWallTime - o->lastCheck;
+  if (elapsed > 0.0) {
+    nSkip = (unsigned int)(nSkip * fmax(0.5, fmin(2.0, o->resolution / elapsed)));
+  }
+#define minSkip 1u
+#define maxSkip 20u
+  if (nSkip < minSkip)
+    nSkip = minSkip;
+  else if (nSkip > maxSkip)
+    nSkip = maxSkip;
+#undef minSkip
+#undef maxSkip
+
+  _ccd_numchecks = o->nSkip = nSkip;
   o->lastCheck = curWallTime;
 
   ccd_heap_update(curWallTime);
@@ -312,5 +340,9 @@ void CcdCallBacks(void) {
  */
 void CcdCallBacksReset(void *ignored) {
   ccd_periodic_callbacks *o = &pcb;
+  /* Something drastic changed (the PE went idle or came back), so the skip
+     count learned under the old conditions is stale -- check again next
+     iteration rather than coasting on it. */
+  _ccd_numchecks = o->nSkip = 1;
   o->lastCheck = CmiWallTimer();
 }

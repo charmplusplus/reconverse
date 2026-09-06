@@ -63,6 +63,8 @@ extern int backend_poll_thread; // every backend_poll_thread threads will call p
 CmiState *CmiGetState(void);
 void CmiInitState(int pe);
 ConverseQueue<void *> *CmiGetQueue(int pe);
+// queue of messages the calling PE sent to itself
+ConverseSelfQueue<void *> *CmiGetSelfQueue();
 void CrnInit(void);
 void CmiPushPE(int destRank, int messageSize, void *msg);
 
@@ -103,7 +105,9 @@ extern int CmiSetCPUAffinity(int);
 
 using CmiReductionID =
     decltype(CmiMessageHeader::collectiveMetaInfo); // needs to match header
-using CmiBroadcastSource =
+// The node a broadcast originated from. The spanning tree is rooted there, so
+// intermediate nodes need it to work out their position in the tree.
+using CmiBroadcastRoot =
     decltype(CmiMessageHeader::collectiveMetaInfo); // needs to match header
 typedef struct {
   int ReductionID; // ID associated with the reduction. Different reductions
@@ -179,8 +183,8 @@ CmiReductionID CmiGetRedID(void *msg);
 void CmiSetRedID(void *msg, CmiReductionID redID);
 
 // helpers for broadcast
-void CmiSetBcastSource(void *msg, CmiBroadcastSource source);
-CmiBroadcastSource CmiGetBcastSource(void *msg);
+void CmiSetBcastRoot(void *msg, CmiBroadcastRoot root);
+CmiBroadcastRoot CmiGetBcastRoot(void *msg);
 
 // helpers for RDMA
 void RDMAInit(char **argv);
