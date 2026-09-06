@@ -52,7 +52,8 @@ struct PendingMsg {
 
 struct PersistentSendsTable {
   int destPE;
-  int destNode;
+  int destNode;       // node number within our partition
+  int destNodeGlobal; // process rank the comm backend addresses
   int sizeMax;
   bool isLocal;   // destination PE shares our address space
   bool useRdma;   // payload goes out as a one-sided put
@@ -267,6 +268,7 @@ PersistentSendsTable *newSendSlot(int destPE, int maxBytes) {
   auto *slot = new PersistentSendsTable();
   slot->destPE = destPE;
   slot->destNode = CmiNodeOf(destPE);
+  slot->destNodeGlobal = CmiNodeToGlobal(slot->destNode);
   slot->sizeMax = (int)ALIGN_DEFAULT((size_t)maxBytes);
   slot->isLocal = (slot->destNode == CmiMyNode());
   slot->useRdma = !slot->isLocal && rdmaAvailable();
@@ -341,7 +343,7 @@ void writeToBuffer(PersistentSendsTable *slot, int bufIndex, int size,
                                bufIndex,         size, msg};
     /* The notification is only sent once this put completes locally, which is
        what orders it behind the data on the wire. */
-    comm_backend::issueRput(slot->destNode, msg, size, MRFIELD(msg),
+    comm_backend::issueRput(slot->destNodeGlobal, msg, size, MRFIELD(msg),
                             (uintptr_t)buf.disp, buf.rmr, persistentPutDone,
                             ctx);
   } else {

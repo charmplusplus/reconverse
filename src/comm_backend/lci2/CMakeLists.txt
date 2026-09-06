@@ -39,6 +39,24 @@ if(RECONVERSE_TRY_ENABLE_COMM_LCI2)
       )
     endif()
     include(FetchContent)
+    if(RECONVERSE_ENABLE_CUDA)
+      set(LCI_USE_CUDA ON CACHE BOOL "Enable CUDA support in LCI" FORCE)
+    endif()
+    if(RECONVERSE_ENABLE_HIP)
+      set(LCI_USE_HIP ON CACHE BOOL "Enable HIP support in LCI" FORCE)
+    endif()
+    # LCI registers a buffer on every send above the eager threshold, at a
+    # per-message cost of tens of microseconds, and its registration cache is
+    # off by default. Reconverse's traffic is the case the cache exists for: a
+    # bounded set of long-lived buffers sent repeatedly, so after the first
+    # send every lookup hits. Without it, a long-running job can also exhaust
+    # the NIC's registration table outright (ENOSPC from fi_mr_regattr).
+    # Not available on Apple, where LCI cannot build the cache.
+    # LCI_ATTR_USE_REG_CACHE=OFF still disables it at run time.
+    if(NOT APPLE)
+      set(LCI_USE_REG_CACHE ON CACHE BOOL
+          "Enable LCI's memory registration cache" FORCE)
+    endif()
     FetchContent_Declare(
       lci
       GIT_REPOSITORY https://github.com/uiuc-hpc/lci.git

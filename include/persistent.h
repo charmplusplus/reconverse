@@ -69,8 +69,12 @@ extern "C" {
 #define PERSIST_BUFFERS_NUM 4
 
 /* Bytes reserved for a serialized remote memory region handle. Must be large
-   enough for whatever comm_backend::getRMR() produces. */
-#define CMK_PERSISTENT_RMR_BYTES 64
+   enough for whatever comm_backend::getRMR() produces, which for LCI2 is one
+   lci::rmr_t (24 B) per device -- so this scales with +lci_ndevices, not with
+   anything fixed. At 64 only two devices fit and any run with three or more
+   aborted in fillBufDescs() the moment the persistent path engaged. 2048
+   covers a full 72-core node one device per PE. */
+#define CMK_PERSISTENT_RMR_BYTES 2048
 
 /* Reference count base used to mark a persistent receive buffer. CmiFree()
    recognizes counts above this as "buffer, not allocation" and releases the
@@ -131,6 +135,32 @@ int CmiPersistentHandleSend(int destPE, int messageSize, void *msg);
 /* Called by CmiFree() when the last reference to a persistent receive buffer
    is dropped, to hand the buffer back to its sender. */
 void CmiPersistentReleaseBuffer(void *msg);
+
+/* --- Compatibility with the classic Converse persistent API ---------------
+
+   Classic Charm++ offers compressing variants of the channel constructors,
+   selected by a CMI_* payload type. Reconverse does not compress messages in
+   flight, so these fall back to the plain constructors: the channel still
+   carries maxBytes, the payload just travels uncompressed. Kept so that
+   applications written against the classic API (NAMD's PME, for one) compile
+   and run unchanged. */
+#ifndef CMI_CHAR
+#define CMI_CHAR     0
+#define CMI_FLOATING 1
+#define CMI_DOUBLE   2
+#define CMI_ZLIB     3
+#define CMI_LZ4      4
+#endif
+
+#define CmiCreateCompressPersistent(destPE, maxBytes, start, type)             \
+  CmiCreatePersistent((destPE), (maxBytes))
+#define CmiCreateCompressPersistentSize(destPE, maxBytes, start, size, type)   \
+  CmiCreatePersistent((destPE), (maxBytes))
+#define CmiCreateCompressNodePersistent(destNode, maxBytes, start, type)       \
+  CmiCreateNodePersistent((destNode), (maxBytes))
+#define CmiCreateCompressNodePersistentSize(destNode, maxBytes, start, size,   \
+                                            type)                              \
+  CmiCreateNodePersistent((destNode), (maxBytes))
 
 #ifdef __cplusplus
 }

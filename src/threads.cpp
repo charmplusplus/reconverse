@@ -11,8 +11,15 @@
 #include <errno.h>
 #include <signal.h>
 
+/* Default user-level thread stack size. Converse used a 32K fallback but
+ * overrode it per-machine-layer (64K for MPI, 256K on Darwin); reconverse has
+ * no such per-layer headers, so the fallback is the value everyone gets. 32K is
+ * not enough for a threaded entry method that calls into a vendor runtime --
+ * a single CUDA driver call (cuMemAlloc, cuLaunchKernel) can overrun it, and
+ * because stacks are plain malloc'd blocks with no guard page the overflow
+ * silently corrupts the neighbouring heap chunk. Override with +stacksize. */
 #ifndef CMK_STACKSIZE_DEFAULT
-#define CMK_STACKSIZE_DEFAULT 32768
+#define CMK_STACKSIZE_DEFAULT 262144
 #endif
 
 #define THD_MAGIC_NUM 0x12345678
@@ -102,14 +109,16 @@ void CthSetStrategy(CthThread t, CthAwkFn awkfn, CthThFn chsfn) {
 void CthEnqueueNormalThread(CthThreadToken *token, int s, int pb,
                             unsigned int *prio) {
   CmiSetHandler(token, CpvAccess(CthResumeNormalThreadIdx));
-  CmiGetQueue(CmiMyRank())->push(token);
+  // the token always goes to the PE that is awakening the thread, so it can
+  // take the self queue and skip the shared queue's atomics
+  CmiGetSelfQueue()->push(token);
 }
 
 void CthEnqueueSchedulingThread(CthThreadToken *token, int s, int pb,
                                 unsigned int *prio) {
   CmiSetHandler(token, CpvAccess(CthResumeSchedulingThreadIdx));
   CpvStaticDeclare(int, CthResumeSchedulingThreadIdx);
-  CmiGetQueue(CmiMyRank())->push(token);
+  CmiGetSelfQueue()->push(token);
 }
 
 static CthThread CthSuspendNormalThread(void) {
@@ -125,6 +134,11 @@ static void CthBaseInit(char **argv) {
 
   CpvInitialize(int, _defaultStackSize);
   CpvAccess(_defaultStackSize) = CMK_STACKSIZE_DEFAULT;
+  /* CthInit is public API and may legitimately be handed a null argv. */
+  if (argv != NULL && CmiGetArgStringDesc(argv, "+stacksize", &str,
+                                          "Default user-level thread stack size")) {
+    CpvAccess(_defaultStackSize) = (int)CmiReadSize(str);
+  }
 
   CpvInitialize(CthThread, CthCurrent);
   CpvInitialize(char *, CthData);
@@ -276,6 +290,13 @@ static void CthThreadBaseFree(CthThreadBase *th) {
   free(th->data);
 
   if (th->stack != NULL) {
+    for (l = th->listener; l != NULL; l = lnext) {
+      lnext = l->next;
+      l->next = 0;
+      if (l->free)
+        l->free(l);
+    }
+    th->listener = NULL;
     free(th->stack);
   }
   th->stack = NULL;

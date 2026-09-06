@@ -160,6 +160,29 @@ extern CmiNodeLock CmiMemLock_lock;
 
 // End of NOTE
 
+// Portable thread-local storage specifier.
+// NOTE: 'thread_local' is a keyword in C++11 and in C23, but in C11/C17 the
+// keyword is spelled '_Thread_local' ('thread_local' is only a macro provided
+// by <threads.h>).  This header is included by C sources that are compiled as
+// C17 (GKlib, for instance), so the bare keyword cannot be used here.
+#ifdef __cplusplus
+#define CMI_THREAD_LOCAL thread_local
+#elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 202311L
+// C23 has thread_local
+#define CMI_THREAD_LOCAL thread_local
+#elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+// C11 has _Thread_local
+#define CMI_THREAD_LOCAL _Thread_local
+#elif defined(__GNUC__) || defined(__clang__)
+#define CMI_THREAD_LOCAL __thread
+#elif defined(_MSC_VER)
+// MSVC
+#define CMI_THREAD_LOCAL __declspec(thread)
+#else
+// Fallback - no thread-local storage (may cause issues on some platforms)
+#define CMI_THREAD_LOCAL
+#endif
+
 typedef void (*CmiHandler)(void *msg);
 typedef void (*CmiHandlerEx)(void *msg, void *userPtr); // ignore for now
 
@@ -180,8 +203,8 @@ typedef struct Header {
   CmiInt2 handlerId;
   CmiUInt4 destPE; // global ID of destination PE
   int messageSize;
-  // used for bcast (bcast source pe/node), multicast (group id), reductions
-  // (reduction id)
+  // used for bcast (the node the broadcast is rooted at), multicast (group id),
+  // reductions (reduction id)
   CmiUInt4 collectiveMetaInfo;
   // used for special ops (bcast, reduction, multicast) when the handler field
   // is repurposed
@@ -398,6 +421,8 @@ extern void
 #define CMI_MEMORY_IS_OS          (1<<5)
 #define CMI_MEMORY_IS_CHARMDEBUG  (1<<6)
 int CmiMemoryIs(int flag); /* return state of this flag */
+void CpdSetInitializeMemory(int v); /* no-op outside charmdebug; needed by record-replay */
+CLINKAGE void CmiMkdir(const char *dirName);
 
 // state getters
 int CmiMyPe();
@@ -429,6 +454,8 @@ void CmiSyncSendAndFree(int destPE, int messageSize, void *msg);
 void CmiSyncListSend(int npes, const int *pes, int len, void *msg);
 void CmiSyncListSendAndFree(int npes, const int *pes, int len, void *msg);
 void CmiPushPE(int destRank, void *msg);
+void CsdEnqueue(void *msg);     /* classic scheduler-enqueue API; */
+void CsdEnqueueLifo(void *msg); /* FIFO here -- see convcore.cpp (record-replay) */
 void CmiPushNode(void *msg);
 
 void CmiSyncSendFn(int destPE, int messageSize, char *msg);
@@ -519,6 +546,32 @@ void* QueueTop(Queue q);
 CpvExtern(Queue, CsdSchedQueue);
 CsvExtern(Queue, CsdNodeQueue);
 CsvExtern(CmiNodeLock, CsdNodeQueueLock);
+/* Number of messages sitting in CsdNodeQueue. Maintained under CsdNodeQueueLock
+   but read without it, so that an idle PE can skip the lock entirely when the
+   queue is empty -- see CsdScheduler().
+
+   Spelled std::atomic<int> to C++ and _Atomic int to C, because this header is
+   included by C translation units (GKlib's b64.c, for one) and std::atomic is
+   not C -- the same split CmiChunkHeader uses above for its refcount, and the
+   reason <stdatomic.h> is included at the top of this file. The two spellings
+   describe the same object: both are int-sized, int-aligned and lock-free, and
+   C11 and C++11 atomics share one ABI on every compiler this builds with.
+   CsdNodeQueueLenAdd/Get hide the syntax that genuinely differs, so callers
+   need no #ifdef of their own. */
+#ifdef __cplusplus
+CsvExtern(std::atomic<int>, CsdNodeQueueLen);
+#define CsdNodeQueueLenAdd(n)                                                  \
+  CsvAccess(CsdNodeQueueLen).fetch_add((n), std::memory_order_relaxed)
+#define CsdNodeQueueLenGet()                                                   \
+  CsvAccess(CsdNodeQueueLen).load(std::memory_order_relaxed)
+#else
+CsvExtern(_Atomic int, CsdNodeQueueLen);
+#define CsdNodeQueueLenAdd(n)                                                  \
+  atomic_fetch_add_explicit(&CsvAccess(CsdNodeQueueLen), (n),                  \
+                            memory_order_relaxed)
+#define CsdNodeQueueLenGet()                                                   \
+  atomic_load_explicit(&CsvAccess(CsdNodeQueueLen), memory_order_relaxed)
+#endif
 void CqsEnqueueGeneral(Queue q, void *Message, int strategy, int priobits,
                          unsigned int *prioptr);
 #define CsdEnqueueGeneral(msg, strategy, priobits, prioptr) \
@@ -526,6 +579,7 @@ void CqsEnqueueGeneral(Queue q, void *Message, int strategy, int priobits,
 #define CsdNodeEnqueueGeneral(msg, strategy, priobits, prioptr) do { \
           CmiLock(CsvAccess(CsdNodeQueueLock)); \
           CqsEnqueueGeneral((Queue)CsvAccess(CsdNodeQueue),(msg),(strategy),(priobits),(prioptr)); \
+          CsdNodeQueueLenAdd(1); \
           CmiUnlock(CsvAccess(CsdNodeQueueLock)); \
         } while(0)
 
@@ -659,6 +713,39 @@ void CcdCancelCallOnConditionKeep(int condnum, int idx);
 void CcdRaiseCondition(int condnum);
 void CcdCallBacks(void);
 
+/* How many callbacks are timer-based.  If none are, CcdCallBacks() has no
+   work to do and the scheduler can skip it outright. */
+int CcdNumTimerCBs(void);
+
+/* Countdown to the next CcdCallBacks(), maintained adaptively by
+   CcdCallBacks() itself so that it fires at roughly CCD_DEFAULT_RESOLUTION. */
+extern CMI_THREAD_LOCAL int _ccd_numchecks;
+
+/* The scheduler's periodic hook.
+ *
+ * Calling CcdCallBacks() unconditionally on every trip round the scheduler
+ * loop -- which is what this used to do -- costs a CmiWallTimer() (a clock
+ * read, ~60 ns on Delta) plus a heap probe every iteration, whether or not any
+ * timer callback exists.  For a program that registers none, which includes
+ * every Task Bench run, that is pure overhead on the hottest loop in the
+ * runtime.
+ *
+ * Both guards matter and they do different jobs.  The first collapses the
+ * whole thing to one predictable branch when nothing is timer-based.  The
+ * second bounds the cost when something is: CcdCallBacks() retunes
+ * _ccd_numchecks so the clock is read about every CCD_DEFAULT_RESOLUTION
+ * rather than every iteration.
+ *
+ * Ported from the original Converse (charm/src/conv-core/converse.h). */
+#define CsdPeriodic()                                                          \
+  do {                                                                         \
+    if ((CcdNumTimerCBs() > 0) && (_ccd_numchecks-- <= 0)) {                   \
+      CcdCallBacks();                                                          \
+    }                                                                          \
+  } while (0)
+
+#define CsdResetPeriodic() (_ccd_numchecks = 0)
+
 #define CQS_QUEUEING_FIFO 2
 #define CQS_QUEUEING_LIFO 3
 #define CQS_QUEUEING_IFIFO 4
@@ -738,6 +825,7 @@ int CmiGetArgStringDesc(char **argv, const char *arg, char **optDest,
                         const char *desc);
 int CmiGetArgFlag(char **argv, const char *arg);
 int CmiGetArgFlagDesc(char **argv, const char *arg, const char *desc);
+double CmiReadSize(const char *str);
 void CmiDeleteArgs(char **argv, int k);
 int CmiGetArgc(char **argv);
 char **CmiCopyArgs(char **argv);
@@ -877,6 +965,9 @@ typedef struct ncpystruct {
   short int ncpyOpInfoSize;
   int rootNode;
   void *refPtr;
+
+  // ipc specific
+  void* deviceRdmaOpInfo;
 
 } NcpyOperationInfo;
 
@@ -1089,6 +1180,9 @@ extern int CmiOnCore(void);
 
 int CmiNumPhysicalNodes();
 int CmiGetFirstPeOnPhysicalNode(int node);
+/* Rank of a logical node among those sharing its physical node.
+ * Topology-derived; O(PEs on the physical node), so cache it. */
+int CmiNodeRankOnPhysicalNode(int node);
 
 static char *CopyMsg(char *msg, int len);
 void CmiForwardMsgToPeers(int size, char *msg);
@@ -1175,6 +1269,13 @@ int 	   CmmGetLastTag(CmmTable t, int ntags, int *tags);
 #endif
 //partitions
 
+/* Charm++ and NAMD both gate their replica support on this macro: with it
+   undefined, +partitions/+replicas is never parsed and every replica primitive
+   (replicaSend, replicaRecv, replicaBarrier, ...) compiles away to a no-op, so
+   a multi-replica run silently behaves as a single one. Reconverse implements
+   partitions, so turn them on. */
+#define CMK_HAS_PARTITION 1
+
 typedef enum Partition_Type {
   PARTITION_SINGLETON,
   PARTITION_DEFAULT,
@@ -1223,6 +1324,16 @@ int pe_lToGTranslate(int pe, int partition);
 
 #define CmiGetPeGlobal(pe, part) pe_lToGTranslate(pe, part)
 #define CmiGetNodeGlobal(node, part) node_lToGTranslate(node, part)
+
+/* Charm++ above us numbers nodes within its own partition, while the
+   communication backend numbers processes across the whole job, so every
+   backend call has to cross that boundary. One partition is by far the common
+   case, so keep that path to a single predictable branch. */
+static inline int CmiNodeToGlobal(int node) {
+  return _partitionInfo.numPartitions == 1
+             ? node
+             : node_lToGTranslate(node, _partitionInfo.myPartition);
+}
 #define CmiGetPeLocal(pe) pe_gToLTranslate(pe)
 #define CmiGetNodeLocal(node) node_gToLTranslate(node)
 
@@ -1246,6 +1357,12 @@ void CmiInterSyncNodeSendAndFreeFn(int destNode, int partition, int messageSize,
 #define CMI_IPC_CUTOFF_DESC "max message size for cmi-shmem (in bytes)"
 #define CMI_IPC_POOL_SIZE_ARG "ipcpoolsize"
 #define CMI_IPC_POOL_SIZE_DESC "size of cmi-shmem pool (in bytes)"
+
+/* Charm++'s charmrun forwards the ipc settings to the compute nodes through
+   these environment variables, so they have to be part of the converse.h
+   contract even though reconverse itself reads the ++ arguments above. */
+#define CMI_IPC_CUTOFF_ENV_VAR "CmiIpcCutoff"
+#define CMI_IPC_POOL_SIZE_ENV_VAR "CmiIpcPoolSize"
 
 struct CmiIpcManager;
 

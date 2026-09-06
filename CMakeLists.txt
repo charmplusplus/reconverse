@@ -33,12 +33,15 @@ endif()
 
 option(RECONVERSE_BUILD_TESTS "Build tests" ${RECONVERSE_ROOT_PROJECT})
 
+option(RECONVERSE_ENABLE_CUDA "Enable CUDA support (GPUDirect via LCI, cudaMemcpy for loopback)" OFF)
+option(RECONVERSE_ENABLE_HIP "Enable HIP/ROCm support (GPUDirect via LCI, hipMemcpy for loopback)" OFF)
+
 option(RECONVERSE_TRY_ENABLE_COMM_LCI2 "whether to enable the LCIv2 backend" ON)
 option(RECONVERSE_AUTOFETCH_LCI2
         "whether to autofetch LCIv2 if LCI2 cannot be found" OFF)
 set(RECONVERSE_AUTOFETCH_LCI2_TAG
-    "70ae5b397dd909fb76ba1fe3bcfddad631158a21"
-    CACHE STRING "The tag to fetch for LCIv2") # master branch as of 2026-07-25
+    "ca88ce2c4b429ce72dfc3233fa21f8833299440c"
+    CACHE STRING "The tag to fetch for LCIv2") # uiuc-hpc/lci master branch tip as of 2026-08-06
 
 option(RECONVERSE_TRY_ENABLE_COMM_LCW "whether to enable the LCW backend" ON)
 option(RECONVERSE_AUTOFETCH_LCW
@@ -114,6 +117,16 @@ endif()
 
 find_package(Threads REQUIRED)
 
+if(RECONVERSE_ENABLE_CUDA)
+  find_package(CUDAToolkit REQUIRED)
+  set(CMK_CUDA ON)
+endif()
+
+if(RECONVERSE_ENABLE_HIP)
+  find_package(hip REQUIRED CONFIG)
+  set(CMK_HIP ON)
+endif()
+
 if(RECONVERSE_ATOMIC_QUEUE)
   add_definitions(-DATOMIC_QUEUE_ENABLED)
   message(STATUS "Atomic queue enabled")
@@ -126,6 +139,14 @@ set_target_properties(reconverse PROPERTIES CXX_STANDARD 17)
 add_subdirectory(include)
 add_subdirectory(src)
 target_link_libraries(reconverse PUBLIC Threads::Threads)
+
+if(RECONVERSE_ENABLE_CUDA)
+  target_link_libraries(reconverse PUBLIC CUDA::cudart)
+endif()
+
+if(RECONVERSE_ENABLE_HIP)
+  target_link_libraries(reconverse PUBLIC hip::host)
+endif()
 
 if(RECONVERSE_ROOT_PROJECT)
   # When building standalone, set CMK_OPTIMIZE based on build type.

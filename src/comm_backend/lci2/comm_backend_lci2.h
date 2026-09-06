@@ -2,6 +2,7 @@
 #define RECONVERSE_COMM_BACKEND_LCI2_H
 
 #include "lci.hpp"
+#include <atomic>
 #include "comm_backend_internal.h"
 
 #include <mutex>
@@ -47,7 +48,7 @@ public:
   void issueAm(int rank, const void *local_buf, size_t size, mr_t mr,
                CompHandler localComp, AmHandler remoteComp, void *user_context) override;
   void issueRget(int rank, const void *local_buf, size_t size, mr_t local_mr,
-                 uintptr_t remote_disp, void *rmr,
+                 void* remote_buf, void *rmr,
                  CompHandler localComp, void *user_context) override;
   void issueRput(int rank, const void *local_buf, size_t size, mr_t local_mr,
                  uintptr_t remote_disp, void *rmr,
@@ -67,6 +68,9 @@ private:
   };
 
   std::vector<lci::device_t> m_devices;
+  // One trylock per device: prevents concurrent fi_cq_read calls on the same CQ
+  // (OFI fi_cq_read is not thread-safe without FI_THREAD_SAFE domain).
+  std::vector<std::atomic<bool>> m_progress_locks;
   lci::comp_t m_local_comp;
   lci::comp_t m_remote_comp;
   lci::rcomp_t m_rcomp;
