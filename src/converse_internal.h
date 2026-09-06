@@ -66,12 +66,15 @@ ConverseQueue<void *> *CmiGetQueue(int pe);
 // queue of messages the calling PE sent to itself
 ConverseSelfQueue<void *> *CmiGetSelfQueue();
 void CrnInit(void);
-
 void CmiPushPE(int destRank, int messageSize, void *msg);
 
 // CmiSyncSendAndFree without the CmiUsePersistentHandle() detour, used by the
 // persistent module itself for its setup, notification, and credit messages.
 void CmiSyncSendAndFreeNoPersistent(int destPE, int messageSize, void *msg);
+
+//queue reg init
+void CmiQueueRegisterInit(void);
+void CmiQueueRegisterInitThread(void); 
 
 // node queue
 ConverseNodeQueue<void *> *CmiGetNodeQueue();
