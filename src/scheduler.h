@@ -22,6 +22,12 @@ using Groups = std::array<std::vector<QueuePollHandlerFn>, 64>;
 
 void add_handler(QueuePollHandlerFn fn, unsigned period, unsigned phase = 0);
 
+// Hook for the seed-LB strategy (cldb.*.cpp) to contribute poll handlers to
+// the per-PE table before it is built. Strategies with no queue of their own
+// provide an empty definition.
+void CldAddPollHandlers(
+    std::vector<std::pair<QueuePollHandlerFn, unsigned int>> &handlers);
+
 // Add multiple handlers at once
 // pairs of poll handlers and relative frequencies (will be normalized regardless of actual value)
 // (frequency/total)*64
