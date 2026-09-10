@@ -1172,6 +1172,7 @@ extern int CmiPeOnSamePhysicalNode(int pe1, int pe2);
 extern int CmiNumPesOnPhysicalNode(int node);
 extern void CmiGetPesOnPhysicalNode(int node, int **pelist, int *num);
 extern int CmiPhysicalRank(int pe);
+extern int CmiNodeRankOnPhysicalNode(int node);
 extern void CmiInitCPUAffinity(char **argv);
 extern int CmiPrintCPUAffinity(void);
 extern int CmiSetCPUAffinity(int core);
