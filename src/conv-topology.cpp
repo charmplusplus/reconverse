@@ -605,6 +605,21 @@ void CmiGetPesOnPhysicalNode(int node, int** pelist, int* num)
   LrtsPeOnNode(node, pelist, num);
 }
 int CmiPhysicalRank(int pe) { return LrtsRankOf(pe); }
+
+// Rank of a logical node (process) among the logical nodes sharing its physical
+// node, ordered by logical node index. The grouping comes from
+// CmiPhysicalNodeID(), so this assumes neither that processes are spread evenly
+// over hosts nor that logical node numbering is contiguous and host-ordered.
+// Until CmiInitCPUTopology() has detected hosts shared by several processes,
+// each process is its own physical node and every process is rank 0.
+int CmiNodeRankOnPhysicalNode(int node)
+{
+  const int physnode = CmiPhysicalNodeID(CmiNodeFirst(node));
+  int rank = 0;
+  for (int n = 0; n < node; n++)
+    if (CmiPhysicalNodeID(CmiNodeFirst(n)) == physnode) ++rank;
+  return rank;
+}
 int CmiPhysicalNodeID(int pe) { return LrtsNodeOf(pe); }
 int CmiGetFirstPeOnPhysicalNode(int node) { return LrtsNodeFirst(node); }
 void CmiInitCPUTopology(char** argv) { LrtsInitCpuTopo(argv); }
