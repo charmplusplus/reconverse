@@ -17,6 +17,9 @@ void CsdScheduler() {
   // get node level queue
   ConverseNodeQueue<void *> *nodeQueue = CmiGetNodeQueue();
 
+  // get this PE's self queue
+  ConverseSelfQueue<void *> *selfQueue = CmiGetSelfQueue();
+
   int loop_counter = 0;
 
   while (CmiStopFlag() == 0) {
@@ -45,6 +48,20 @@ void CsdScheduler() {
         // process event
         CmiHandleMessage(msg);
       }
+    }
+
+    // poll self queue
+    else if (!selfQueue->empty()) {
+      void *msg = selfQueue->pop();
+
+      // release idle if necessary
+      if (CmiGetIdle()) {
+        CmiSetIdle(false);
+        CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
+      }
+
+      // process event
+      CmiHandleMessage(msg);
     }
 
     // poll thread queue
@@ -208,6 +225,9 @@ void CsdSchedulePoll() {
   // get node level queue
   ConverseNodeQueue<void *> *nodeQueue = CmiGetNodeQueue();
 
+  // get this PE's self queue
+  ConverseSelfQueue<void *> *selfQueue = CmiGetSelfQueue();
+
   while(1){
 
     CsdPeriodic();
@@ -230,6 +250,20 @@ void CsdSchedulePoll() {
         CmiHandleMessage(msg);
 
       }
+    }
+
+    // poll self queue
+    else if (!selfQueue->empty()) {
+      void *msg = selfQueue->pop();
+
+      // release idle if necessary
+      if (CmiGetIdle()) {
+        CmiSetIdle(false);
+        CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
+      }
+
+      // process event
+      CmiHandleMessage(msg);
     }
 
     // poll thread queue

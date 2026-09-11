@@ -82,7 +82,10 @@ void CldModuleInit(char **);
 static ConverseQueue<void *> **Cmi_queues; // array of queue pointers
 
 // PE LOCALS
-thread_local int Cmi_myrank;
+// -1 until CmiInitState runs, so threads that are not PEs (which have no self
+// queue) never match a destination rank in CmiPushPE
+thread_local int Cmi_myrank = -1;
+thread_local ConverseSelfQueue<void *> Cmi_selfQueue;
 thread_local CmiState Cmi_state;
 thread_local bool idle_condition;
 thread_local double idle_time;
@@ -458,6 +461,8 @@ void CmiInitState(int rank) {
 
 ConverseQueue<void *> *CmiGetQueue(int rank) { return Cmi_queues[rank]; }
 
+ConverseSelfQueue<void *> *CmiGetSelfQueue() { return &Cmi_selfQueue; }
+
 int CmiMyRank() { return CmiGetState()->rank; }
 
 int CmiMyPe() { return CmiGetState()->pe; }
@@ -522,6 +527,12 @@ void CmiPushPE(int destRank, int messageSize, void *msg) {
       rank >= 0 && rank < Cmi_mynodesize,
       "CmiPushPE(myPe: %d, destPe: %d, nodeSize: %d): rank out of range",
       CmiMyPe(), destRank, Cmi_mynodesize);
+  // a PE sending to itself owns both ends of the queue, so it can bypass the
+  // atomics of the shared per-PE queue
+  if (rank == Cmi_myrank) {
+    Cmi_selfQueue.push(msg);
+    return;
+  }
   Cmi_queues[rank]->push(msg);
 }
 
@@ -667,8 +678,8 @@ void CmiSyncSendAndFreeNoPersistent(int destPE, int messageSize, void *msg) {
   if (CmiMyNode() == destNode) {
     CmiPushPE(CmiRankOf(destPE), messageSize, msg);
   } else {
-    comm_backend::issueAm(destNode, msg, messageSize, MRFIELD(msg),
-                          CommLocalHandler, g_amHandler,
+    comm_backend::issueAm(CmiNodeToGlobal(destNode), msg, messageSize,
+                          MRFIELD(msg), CommLocalHandler, g_amHandler,
                           nullptr); // Commlocalhandler will free msg
   }
 }
@@ -696,7 +707,10 @@ void CmiInterSyncSendAndFree(int destPE, int partition, int messageSize,
   // translate destPE to global
   int globalDestPE = CmiGetPeGlobal(destPE, partition);
   header->destPE = globalDestPE;
-  int destNode = CmiGetNodeGlobal(CmiNodeOf(globalDestPE), partition);
+  /* pe_lToGTranslate already returned a global PE, so its node is global too.
+     Running it through node_lToGTranslate again would add the destination
+     partition's node prefix a second time. */
+  int destNode = CmiNodeOf(globalDestPE);
   comm_backend::issueAm(destNode, msg, messageSize, MRFIELD(msg),
                         CommLocalHandler, g_amHandler, nullptr);
 }
@@ -876,7 +890,7 @@ void CmiSyncNodeSendAndFree(unsigned int destNode, unsigned int size,
   if (CmiMyNode() == destNode) {
     CmiNodeQueue->push(msg);
   } else {
-    comm_backend::issueAm(destNode, msg, size, MRFIELD(msg),
+    comm_backend::issueAm(CmiNodeToGlobal(destNode), msg, size, MRFIELD(msg),
                           CommLocalHandler, g_amHandler, nullptr);
   }
 }
@@ -1018,6 +1032,10 @@ void CmiAbortHelper(const char *source, const char *message,
   CmiPrintf("------- Processor %d Exiting: %s ------\n"
             "Reason: %s\n",
             CmiMyPe(), source, message);
+  /* CmiPrintf leaves this in stdout's buffer, and the abort() that follows does
+     not flush it, so without this the reason is lost whenever stdout is a pipe
+     rather than a terminal -- which is how CTest and most job schedulers run. */
+  fflush(stdout);
 }
 
 void CmiAbort(const char *format, ...) {
@@ -1772,6 +1790,20 @@ void CmiCreatePartitions(char **argv) {
   _Cmi_numpes_global = Cmi_npes;
   Cmi_nodestartGlobal = _Cmi_mynode_global * Cmi_mynodesize;
   create_partition_map(argv);
+
+  /* create_partition_map() rebases Cmi_mynode onto this partition; the rest of
+     the run size has to follow, because everything above Converse (Charm++'s
+     PE numbering, the spanning trees, the reductions) counts within a
+     partition. The global values stay available as _Cmi_*_global, and
+     CmiNodeToGlobal() maps back whenever the backend is addressed. */
+  Cmi_numnodes = _partitionInfo.partitionSize[_partitionInfo.myPartition];
+  Cmi_npes = Cmi_numnodes * Cmi_mynodesize;
+  Cmi_nodestart = Cmi_mynode * Cmi_mynodesize;
+
+  if (_partitionInfo.numPartitions > 1 && _Cmi_mynode_global == 0) {
+    printf("Reconverse> %d partitions, %d processes and %d PEs each\n",
+           _partitionInfo.numPartitions, Cmi_numnodes, Cmi_npes);
+  }
 }
 
 // Since we are not implementing converse level seed balancers yet

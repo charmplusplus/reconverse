@@ -1176,7 +1176,6 @@ extern int CmiPeOnSamePhysicalNode(int pe1, int pe2);
 extern int CmiNumPesOnPhysicalNode(int node);
 extern void CmiGetPesOnPhysicalNode(int node, int **pelist, int *num);
 extern int CmiPhysicalRank(int pe);
-extern int CmiNodeRankOnPhysicalNode(int node);
 extern void CmiInitCPUAffinity(char **argv);
 extern int CmiPrintCPUAffinity(void);
 extern int CmiSetCPUAffinity(int core);
@@ -1185,6 +1184,9 @@ extern int CmiOnCore(void);
 
 int CmiNumPhysicalNodes();
 int CmiGetFirstPeOnPhysicalNode(int node);
+/* Rank of a logical node among those sharing its physical node.
+ * Topology-derived; O(PEs on the physical node), so cache it. */
+int CmiNodeRankOnPhysicalNode(int node);
 
 static char *CopyMsg(char *msg, int len);
 void CmiForwardMsgToPeers(int size, char *msg);
@@ -1271,6 +1273,13 @@ int 	   CmmGetLastTag(CmmTable t, int ntags, int *tags);
 #endif
 //partitions
 
+/* Charm++ and NAMD both gate their replica support on this macro: with it
+   undefined, +partitions/+replicas is never parsed and every replica primitive
+   (replicaSend, replicaRecv, replicaBarrier, ...) compiles away to a no-op, so
+   a multi-replica run silently behaves as a single one. Reconverse implements
+   partitions, so turn them on. */
+#define CMK_HAS_PARTITION 1
+
 typedef enum Partition_Type {
   PARTITION_SINGLETON,
   PARTITION_DEFAULT,
@@ -1319,6 +1328,16 @@ int pe_lToGTranslate(int pe, int partition);
 
 #define CmiGetPeGlobal(pe, part) pe_lToGTranslate(pe, part)
 #define CmiGetNodeGlobal(node, part) node_lToGTranslate(node, part)
+
+/* Charm++ above us numbers nodes within its own partition, while the
+   communication backend numbers processes across the whole job, so every
+   backend call has to cross that boundary. One partition is by far the common
+   case, so keep that path to a single predictable branch. */
+static inline int CmiNodeToGlobal(int node) {
+  return _partitionInfo.numPartitions == 1
+             ? node
+             : node_lToGTranslate(node, _partitionInfo.myPartition);
+}
 #define CmiGetPeLocal(pe) pe_gToLTranslate(pe)
 #define CmiGetNodeLocal(node) node_gToLTranslate(node)
 

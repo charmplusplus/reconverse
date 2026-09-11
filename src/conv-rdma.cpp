@@ -491,7 +491,8 @@ void CmiIssueRget(NcpyOperationInfo *ncpyOpInfo) {
   } else if (!CmiUseCopyBasedRDMA) {
     auto mr = *(comm_backend::mr_t *)ncpyOpInfo->destLayerInfo;
     void *rmr = ncpyOpInfo->srcLayerInfo + sizeof(comm_backend::mr_t);
-    comm_backend::issueRget(CmiNodeOf(ncpyOpInfo->srcPe), ncpyOpInfo->destPtr,
+    comm_backend::issueRget(CmiNodeToGlobal(CmiNodeOf(ncpyOpInfo->srcPe)),
+                            ncpyOpInfo->destPtr,
                             ncpyOpInfo->srcSize, mr, (void*)ncpyOpInfo->srcPtr, rmr,
                             CommRgetLocalHandler, ncpyOpInfo);
     // printf("reconverse rgets from src pe %d to dest pe %d, baseptr %p, srcptr %p, dstptr %p, size %zu\n", ncpyOpInfo->srcPe, ncpyOpInfo->destPe, comm_backend::getRMRBase(rmr), ncpyOpInfo->srcPtr, ncpyOpInfo->destPtr, ncpyOpInfo->srcSize);
@@ -522,9 +523,11 @@ if (target_node == CmiMyNode()) {
 } else if (!CmiUseCopyBasedRDMA) {
   auto mr = *(comm_backend::mr_t *)ncpyOpInfo->srcLayerInfo;
   void *rmr = ncpyOpInfo->destLayerInfo + sizeof(comm_backend::mr_t);
-  comm_backend::issueRput(CmiNodeOf(ncpyOpInfo->destPe), ncpyOpInfo->srcPtr,
-                          ncpyOpInfo->srcSize, mr, (void *)ncpyOpInfo->destPtr,
-                          rmr, CommRputLocalHandler, ncpyOpInfo);
+  comm_backend::issueRput(CmiNodeToGlobal(CmiNodeOf(ncpyOpInfo->destPe)),
+                          ncpyOpInfo->srcPtr,
+                          ncpyOpInfo->srcSize, mr,
+                          (void *)ncpyOpInfo->destPtr, rmr,
+                          CommRputLocalHandler, ncpyOpInfo);
 } else {
   CmiIssueRputCopyBased(ncpyOpInfo);
 }
