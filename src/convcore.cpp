@@ -959,6 +959,14 @@ void CmiFreeBroadcastAllFn(int size, char *msg) {
   CmiSyncBroadcastAllAndFree(size, (void *)msg);
 }
 
+void CmiInitMsgHeader(void *msg, int size) {
+  if (size < (int)CmiMsgHeaderSizeBytes) return;
+  CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
+  header->messageSize = size;
+  header->zcMsgType = CMK_REG_NO_ZC_MSG;
+  header->nokeep = false;
+}
+
 void CmiSetHandler(void *msg, int handlerId) {
   CmiMessageHeader *header = (CmiMessageHeader *)msg;
   header->handlerId = handlerId;
