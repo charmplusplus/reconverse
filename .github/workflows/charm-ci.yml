@@ -1,0 +1,96 @@
+# Build Charm++ against THIS reconverse and run Charm++'s reconverse test
+# tier. Charm++ is reconverse's one user today, and the Charm++-level
+# behaviour is what reconverse's own tests cannot see: the two runtime
+# bugs of 2026-09-10/11 (within-node broadcast delivery contract, and the
+# quiescence count for one-sided RDMA) were both invisible to ctest and
+# both caught by Charm++ tests. Charm++'s CMake takes an out-of-tree
+# reconverse through RECONVERSE_SOURCE_DIR, so no submodule bump is needed
+# to test a pull request's tree.
+#
+# Which Charm++ to pair with is the repository variable CHARM_REF (a branch
+# or SHA); it defaults to the reconverse integration branch. Move it
+# deliberately: a Charm++ change that breaks the pairing turns this job red
+# on every reconverse PR, which is the point, but somebody owns the pin.
+#
+# The test tier mirrors charm's .github/workflows/reconverse-ci.yaml, plus
+# within_node_bcast and the zerocopy dirs that caught #217 and #222. This
+# job builds Charm++ against the PR's reconverse tree, not against charm's
+# submodule, so those pass here as soon as reconverse main has the fixes.
+# zerocopy/zc_post_modify_size stays out until #223 (two-process data
+# mismatch) is fixed; zerocopy/large_p2p (2 GiB transfer) does not fit a
+# hosted runner.
+name: Charm++ on this reconverse
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: charm-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CHARM_REF: ${{ vars.CHARM_REF || 'reviewed-with-reconverse' }}
+  # Pin the OFI provider, as charm's job does: LCI takes the first
+  # fi_getinfo() match, and a hosted runner that exposes an RDMA-capable
+  # NIC ranks a hardware provider ahead of tcp, which then fails to enable.
+  FI_PROVIDER: tcp
+  TEST_DIRS: >-
+    tests/charm++/megatest
+    tests/charm++/simplearrayhello
+    tests/charm++/anytime_migration
+    tests/charm++/anytime_bcastred
+    tests/charm++/qd
+    tests/charm++/within_node_bcast
+    tests/charm++/zerocopy/zerocopy_with_qd
+    tests/charm++/zerocopy/direct_api
+    tests/charm++/zerocopy/large_bcast
+    tests/charm++/zerocopy/bcast_nonzero_root
+    tests/charm++/zerocopy/dereg_and_nodereg
+    tests/charm++/zerocopy/zc_post_async
+    tests/charm++/zerocopy/pup_buffer
+
+jobs:
+  charm-linux-x86_64:
+    name: Charm++ (${{ github.event.repository.name }} PR tree), linux x86_64
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out this reconverse
+        uses: actions/checkout@v4
+        with:
+          path: reconverse
+
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y cmake libfabric-dev
+
+      - name: Clone Charm++ at CHARM_REF
+        run: |
+          git clone --depth 1 --branch "$CHARM_REF" https://github.com/charmplusplus/charm charm \
+            || { git clone https://github.com/charmplusplus/charm charm && git -C charm checkout "$CHARM_REF"; }
+          git -C charm log --oneline -1
+
+      - name: Build Charm++ against the PR's reconverse
+        working-directory: charm
+        run: |
+          ./build charm++ reconverse-linux-x86_64 -j4 -g \
+            --with-cmake-args="-DRECONVERSE_SOURCE_DIR=$GITHUB_WORKSPACE/reconverse"
+          grep -m1 'Using reconverse from' reconverse-linux-x86_64/CMakeFiles/CMakeOutput.log \
+            || grep -rm1 'Using reconverse from' reconverse-linux-x86_64/CMakeCache.txt || true
+
+      - name: Build the test tier
+        working-directory: charm
+        run: |
+          B=$PWD/reconverse-linux-x86_64
+          for d in $TEST_DIRS; do make -C $d CHARMC=$B/bin/charmc; done
+
+      - name: Test, single process
+        working-directory: charm
+        run: |
+          for d in $TEST_DIRS; do make -C $d test; done
+
+      - name: Test, two processes (lcrun)
+        working-directory: charm
+        run: |
+          for d in $TEST_DIRS; do TESTRUN_PROCS=2 make -C $d test; done
