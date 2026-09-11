@@ -494,6 +494,12 @@ void CmiFreeMulticastFn(CmiGroup grp, int size, char *msg);
 
 //network functions
 void CmiNetworkProgress();
+// Charm++'s CkNetworkProgress() / CkNetworkProgressAfter() expand to calls of
+// CmiMachineProgressImpl() only when the layer declares that it has one;
+// otherwise they compile to nothing and a long-running entry method never
+// drives the network. Reconverse's progress is CmiNetworkProgress().
+#define CMK_MACHINE_PROGRESS_DEFINED 1
+void CmiMachineProgressImpl();
 // ignore argument since it's only 0 in namd
 #define CmiNetworkProgressAfter(p) CmiNetworkProgressAfter()
 

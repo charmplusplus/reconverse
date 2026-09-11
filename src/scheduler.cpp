@@ -437,3 +437,5 @@ void CmiNetworkProgress(){
   comm_backend::progress();
 }
 
+void CmiMachineProgressImpl() { CmiNetworkProgress(); }
+
