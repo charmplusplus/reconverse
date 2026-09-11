@@ -25,6 +25,24 @@ extern bool CmiUseCopyBasedRDMA;
 
 // LCI layer definition
 #define CMK_REG_REQUIRED 1
+// Charm++ consults this to know how many acknowledgements one Direct-API
+// RDMA operation produces (ckrdma.C, zcQdIncrement): a one-sided layer
+// completes a get or put with a single ack on the initiating PE, and the
+// other side's callback is delivered by Charm++'s deregistration round trip.
+// That is what the RMA path here does (CommRgetLocalHandler and
+// CommRputLocalHandler invoke the ack once, with CMK_SRC_DEST_ACK). Left
+// undefined, Charm++ counts two acks per operation, as for classic's
+// copy-based layers (netlrts), and quiescence is never detected once a
+// program has done one cross-process Direct-API transfer.
+// The copy-based fallback (+nordma, or a backend without RMA) still uses the
+// two-ack protocol and does not match this declaration; see issue #221.
+#define CMK_ONESIDED_IMPL 1
+// Declaring a one-sided layer also switches on Charm++'s zerocopy broadcast
+// of large readonly variables in charmxi-generated code (xi-Member.C), which
+// needs CMK_ONESIDED_RO_THRESHOLD and the spanning-tree forwarding that
+// CmiForwardNodeBcastMsg still stubs out here. Keep that feature off, so
+// readonlies keep being packed inline as before, until it is supported.
+#define CMK_ONESIDED_RO_DISABLE 1
 // 8-byte for mr, 16-byte for rmr
 // TODO: better to use dynamic allocation and PUP
 #define CMK_NOCOPY_DIRECT_BYTES 32
