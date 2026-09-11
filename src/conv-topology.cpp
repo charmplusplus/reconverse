@@ -405,9 +405,26 @@ int LrtsNodeSize(int node)
   return !cpuTopo.supported ? CmiNodeSize(node) : (int)cpuTopo.bynodes[node].size();
 }
 
-// pelist points to system memory, user should not free it
+// pelist points to system memory, user should not free it.
+// Without topology information (no hwloc, or +no_topo), every other query
+// here treats each logical node as its own physical node; do the same, or
+// this dereferences the never-built bynodes table.
 void LrtsPeOnNode(int node, int** pelist, int* num)
 {
+  if (!cpuTopo.supported)
+  {
+    static std::vector<std::vector<int>> bylogicalnode;
+    if (bylogicalnode.empty())
+    {
+      bylogicalnode.resize(CmiNumNodes());
+      for (int n = 0; n < CmiNumNodes(); n++)
+        for (int pe = CmiNodeFirst(n); pe < CmiNodeFirst(n) + CmiNodeSize(n); pe++)
+          bylogicalnode[n].push_back(pe);
+    }
+    *num = bylogicalnode[node].size();
+    if (pelist != NULL && *num > 0) *pelist = bylogicalnode[node].data();
+    return;
+  }
   *num = cpuTopo.bynodes[node].size();
   if (pelist != NULL && *num > 0)
     *pelist = cpuTopo.bynodes[node].data();
