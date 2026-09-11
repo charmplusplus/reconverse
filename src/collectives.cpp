@@ -163,11 +163,30 @@ void CmiSyncBroadcastAllAndFree(int size, void *msg) {
   CmiFree(msg);
 }
 
+// Deliver msg to every PE on this node, with the classic Converse contract
+// (machine-broadcast.C, CmiWithinNodeBroadcastFn) that Charm++'s
+// CkBroadcastWithinNode relies on: a message flagged nokeep is shared by
+// pointer, one reference per receiving PE, so each PE's CmiFree drops one
+// reference; any other message is copied for each peer. The caller's buffer
+// is consumed either way: it is delivered to the calling PE itself.
+//
+// A zerocopy broadcast receive message (CMK_ZC_BCAST_RECV_MSG) goes to the
+// calling PE only. Charm++'s zerocopy protocol (ckrdma.C) forwards it to the
+// peer PEs itself, as a CMK_ZC_BCAST_RECV_DONE_MSG, after this PE's post and
+// rget have completed: the PEs on a node post their buffers in turn against
+// the one shared envelope, which the protocol rewrites in place. Handing the
+// message to every PE at once makes them run the primary post path
+// concurrently on that envelope (tests/charm++/zerocopy segfaults in
+// isUnposted with an unsized tag array).
+//
+// The previous version copied for every PE regardless of the flag and never
+// freed the original. Charm++'s [nokeep] within-node broadcast counted on the
+// shared pointer (tests/charm++/within_node_bcast fails with the copies), and
+// every non-nokeep broadcast leaked one message.
 void CmiWithinNodeBroadcast(int size, void *msg) {
-  for (int i = 0; i < CmiMyNodeSize(); i++) {
-    int destPe = CmiMyNode() * CmiMyNodeSize() + i;
-    CmiSyncSend(destPe, size, msg);
-  }
+  if (CMI_ZC_MSGTYPE(msg) != CMK_ZC_BCAST_RECV_MSG)
+    CmiForwardMsgToPeers(size, (char *)msg);
+  CmiSyncSendAndFree(CmiMyPe(), size, msg);
 }
 
 void CmiSyncNodeBroadcast(unsigned int size, void *msg) {
