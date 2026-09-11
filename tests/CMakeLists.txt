@@ -32,3 +32,9 @@ add_test(NAME standalone_project_build_and_test
     -P ${CMAKE_CURRENT_SOURCE_DIR}/run_standalone_test.cmake
 )
 add_subdirectory(queue)
+add_subdirectory(cld)
+add_subdirectory(args)
+add_subdirectory(send_variants)
+add_subdirectory(cth_listener)
+add_subdirectory(handlers)
+add_subdirectory(abort_peer)
