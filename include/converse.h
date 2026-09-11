@@ -442,6 +442,11 @@ int CmiNodeFirst(int node);
 
 // handler things
 void CmiSetHandler(void *msg, int handlerId);
+// Prepare the header of a message that was not obtained from CmiAlloc (for
+// example one on the stack) so it can be passed to a send: clears the
+// zerocopy type and the nokeep flag and records the message size. Classic
+// Converse programs call this before CmiSetHandler on such messages.
+void CmiInitMsgHeader(void *msg, int size);
 void CmiSetXHandler(void *msg, int xhandlerId);
 int CmiGetHandler(void *msg);
 int CmiGetXHandler(void *msg);
