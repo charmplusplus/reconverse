@@ -408,25 +408,30 @@ int CsdScheduler(int maxmsgs){
 
 void CqsEnqueueGeneral(Queue q, void *Message, int strategy, int priobits,
                          unsigned int *prioptr){
-          int iprio;
-          long long lprio;
-          switch (strategy){ //for now everything is FIFO
+          // FIFO strategies go to the back of their priority level, LIFO
+          // strategies to the front. Bitvector priorities (BFIFO/BLIFO) are
+          // not supported yet and are queued at priority 0.
+          switch (strategy){
             case CQS_QUEUEING_FIFO:
-            case CQS_QUEUEING_LIFO:
               QueuePush(q, Message, 0);
               break;
+            case CQS_QUEUEING_LIFO:
+              QueuePushFront(q, Message, 0);
+              break;
             case CQS_QUEUEING_IFIFO:
+              QueuePush(q, Message, (int)prioptr[0]);
+              break;
             case CQS_QUEUEING_ILIFO:
-              iprio=prioptr[0];
-              QueuePush(q, Message, iprio);
+              QueuePushFront(q, Message, (int)prioptr[0]);
               break;
             case CQS_QUEUEING_LFIFO:
+              QueuePush(q, Message, ((long long*)prioptr)[0]);
+              break;
             case CQS_QUEUEING_LLIFO:
-              lprio = ((long long*)prioptr)[0];
-              QueuePush(q, Message, lprio);
+              QueuePushFront(q, Message, ((long long*)prioptr)[0]);
               break;
             default:
-              // unknown strategy, default to FIFO
+              // unknown or unsupported strategy, default to FIFO
               QueuePush(q, Message, 0);
               break;
           }

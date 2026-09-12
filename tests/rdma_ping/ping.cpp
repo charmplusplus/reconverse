@@ -37,11 +37,12 @@ static const int numMsgSizes = sizeof(msgSizes) / sizeof(msgSizes[0]);
 
 enum Phase { PHASE_IDLE, PHASE_GET, PHASE_PUT };
 
-CpvDeclare(int, sizeIdx);    // index into msgSizes, driven by PE 0
-CpvDeclare(int, phase);      // which transfer PE 0 is waiting on
-CpvDeclare(int, putSignals); // PE 1: completion signals seen for this put
-CpvDeclare(char *, bufBase); // allocation backing localBuf, plus its guard
-CpvDeclare(size_t, bufLen);  // registered length, excluding the guard
+CpvDeclare(int, sizeIdx);       // index into msgSizes, driven by PE 0
+CpvDeclare(int, phase);         // which transfer PE 0 is waiting on
+CpvDeclare(int, putSignals);    // PE 1: completion signals seen for this put
+CpvDeclare(int, acksThisPhase); // PE 0: acks seen for the current operation
+CpvDeclare(char *, bufBase);    // allocation backing localBuf, plus its guard
+CpvDeclare(size_t, bufLen);     // registered length, excluding the guard
 CpvDeclare(CmiNcpyBuffer, localBuf);
 CpvDeclare(CmiNcpyBuffer, remoteBuf);
 
@@ -138,16 +139,25 @@ static void notePutSignal(); // PE 1
 // Completion callback for every Direct API operation in this process. It runs
 // on the communication progress path, so it posts a Converse message rather
 // than issuing the next transfer itself.
+// Contract checked here, the one CMK_ONESIDED_IMPL declares to Charm++: every
+// operation raises exactly one acknowledgement, on the PE that initiated it,
+// with both sides' callbacks enabled (CMK_SRC_DEST_ACK), on the network RDMA
+// path and on the copy-based fallback alike. PE 0 initiates both transfers,
+// so PE 1 must never see an ack.
 static void rdmaAckHandler(void *context) {
   NcpyOperationInfo *info = (NcpyOperationInfo *)context;
 
-  if (CmiMyPe() != 0) {
-    // PE 1 only cares about acks saying data landed here. While serving PE 0's
-    // get, the copy-based path also raises a source ack on this PE.
-    if (info->destPe == CmiMyPe())
-      notePutSignal();
-    return;
-  }
+  if (CmiMyPe() != 0)
+    CmiAbort("PE %d: acknowledgement raised on a PE that initiated nothing "
+             "(ackMode %d): the Direct API must ack once, on the initiator\n",
+             CmiMyPe(), (int)info->ackMode);
+  if (info->ackMode != CMK_SRC_DEST_ACK)
+    CmiAbort("PE 0: acknowledgement with ackMode %d, expected CMK_SRC_DEST_ACK "
+             "(%d)\n",
+             (int)info->ackMode, (int)CMK_SRC_DEST_ACK);
+  if (++CpvAccess(acksThisPhase) != 1)
+    CmiAbort("PE 0: %d acknowledgements for one operation\n",
+             CpvAccess(acksThisPhase));
 
   if (CpvAccess(phase) == PHASE_GET) {
     // Local completion of a get means the bytes are in localBuf.
@@ -194,6 +204,7 @@ static void bufReadyHandler(void *vmsg) {
 
   allocBuf(CpvAccess(remoteBuf).cnt, POISON_SEED);
   CpvAccess(phase) = PHASE_GET;
+  CpvAccess(acksThisPhase) = 0;
   CpvAccess(localBuf).rdmaGet(CpvAccess(remoteBuf), 0, nullptr, nullptr);
 }
 
@@ -206,16 +217,15 @@ static void getDoneHandler(void *vmsg) {
 
   fillPattern(CpvAccess(bufBase), CpvAccess(bufLen), SOURCE_SEED);
   CpvAccess(phase) = PHASE_PUT;
+  CpvAccess(acksThisPhase) = 0;
   CpvAccess(localBuf).rdmaPut(CpvAccess(remoteBuf), 0, nullptr, nullptr);
 }
 
-// PE 1: a true RDMA put raises no completion on the target, so PE 0's message
-// is the only signal; the copy-based path delivers the payload as an active
-// message and raises a destination ack here as well. Requiring every signal
-// the current mode produces makes the check independent of their order.
+// PE 1: a put raises no completion on the target on either path, so PE 0's
+// message is the only signal that the data has landed.
 static void notePutSignal() {
   CmiAssert(CmiMyPe() == 1);
-  const int expected = CmiUseCopyBasedRDMA ? 2 : 1;
+  const int expected = 1;
   if (++CpvAccess(putSignals) != expected)
     return;
 
@@ -255,6 +265,7 @@ void rdmaPingInit(int argc, char **argv) {
   CpvInitialize(int, sizeIdx);
   CpvInitialize(int, phase);
   CpvInitialize(int, putSignals);
+  CpvInitialize(int, acksThisPhase);
   CpvInitialize(char *, bufBase);
   CpvInitialize(size_t, bufLen);
   CpvInitialize(CmiNcpyBuffer, localBuf);

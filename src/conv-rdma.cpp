@@ -44,6 +44,7 @@ typedef struct _converseRdmaMsg {
 static int remote_dereg_handler_idx;
 static int get_request_handler_idx;
 static int put_data_handler_idx;
+static int put_done_handler_idx;
 
 // Invoked when this PE has to deregister the local memory
 static void remoteDeregHandler(ConverseRdmaMsg *deregMsg) {
@@ -94,13 +95,27 @@ static void getRequestHandler(ConverseRdmaMsg *getReqMsg) {
   resetNcpyOpInfoPointers(ncpyOpInfo);
 
   ncpyOpInfo->freeMe = CMK_DONT_FREE_NCPYOPINFO;
+  // Mark the operation as a get served by a put: the initiator is the
+  // destination, and the single acknowledgement belongs there (see
+  // putDataHandler). A direct put keeps CMK_SRC_DEST_ACK.
+  ncpyOpInfo->ackMode = CMK_DEST_ACK;
 
   // Get is implemented internally using a call to Put
   CmiIssueRput(ncpyOpInfo);
 }
 
 // Invoked when this PE receives a large array as the target of an Rput or the
-// initiator of an Rget
+// initiator of an Rget.
+//
+// One acknowledgement per operation, on the initiating PE, with
+// CMK_SRC_DEST_ACK: the same contract as the RMA path (CommRgetLocalHandler,
+// CommRputLocalHandler) and as classic's one-sided layers, which is what
+// CMK_ONESIDED_IMPL in conv-rdma.h promises Charm++. Charm++ invokes the
+// initiator's own callback from that ack and delivers the other side's
+// through its deregistration round trip. For a get served by this put the
+// initiator is this PE; for a direct put it is the source, which is told by a
+// put-done message once the bytes have landed here, so its ack cannot run
+// ahead of the data.
 static void putDataHandler(ConverseRdmaMsg *payloadMsg) {
   NcpyOperationInfo *ncpyOpInfo =
       (NcpyOperationInfo *)((char *)payloadMsg + sizeof(ConverseRdmaMsg));
@@ -113,12 +128,37 @@ static void putDataHandler(ConverseRdmaMsg *payloadMsg) {
              ncpyOpInfo->ncpyOpInfoSize,
          std::min(ncpyOpInfo->srcSize, ncpyOpInfo->destSize));
 
-  // Invoke the destination ack
-  ncpyOpInfo->ackMode = CMK_DEST_ACK; // Only invoke the destination ack
+  // The NcpyOperationInfo lives inside payloadMsg: nothing downstream may free
+  // it (CmiInvokeRemoteDeregAckHandler honors this).
   ncpyOpInfo->freeMe = CMK_DONT_FREE_NCPYOPINFO;
-  ncpyDirectAckHandlerFn(ncpyOpInfo);
+  if (ncpyOpInfo->ackMode == CMK_DEST_ACK) {
+    // A get served by a put: this PE initiated it, acknowledge here.
+    ncpyOpInfo->ackMode = CMK_SRC_DEST_ACK;
+    ncpyDirectAckHandlerFn(ncpyOpInfo);
+    CmiFree(payloadMsg);
+  } else {
+    // A direct put: the source initiated it; tell the source the data landed.
+    int ncpyOpInfoSize = ncpyOpInfo->ncpyOpInfoSize;
+    ConverseRdmaMsg *doneMsg =
+        (ConverseRdmaMsg *)CmiAlloc(sizeof(ConverseRdmaMsg) + ncpyOpInfoSize);
+    memcpy((char *)doneMsg + sizeof(ConverseRdmaMsg), (char *)ncpyOpInfo,
+           ncpyOpInfoSize);
+    CmiSetHandler(doneMsg, put_done_handler_idx);
+    CmiSyncSendAndFree(ncpyOpInfo->srcPe,
+                       sizeof(ConverseRdmaMsg) + ncpyOpInfoSize, doneMsg);
+    CmiFree(payloadMsg);
+  }
+}
 
-  CmiFree(payloadMsg);
+// Invoked on the source of a direct put once the destination has the data.
+static void putDoneHandler(ConverseRdmaMsg *doneMsg) {
+  NcpyOperationInfo *ncpyOpInfo =
+      (NcpyOperationInfo *)((char *)doneMsg + sizeof(ConverseRdmaMsg));
+  resetNcpyOpInfoPointers(ncpyOpInfo);
+  ncpyOpInfo->freeMe = CMK_DONT_FREE_NCPYOPINFO;
+  ncpyOpInfo->ackMode = CMK_SRC_DEST_ACK;
+  ncpyDirectAckHandlerFn(ncpyOpInfo);
+  CmiFree(doneMsg);
 }
 
 void RDMAInit(char **argv) {
@@ -166,14 +206,14 @@ void CmiIssueRputCopyBased(NcpyOperationInfo *ncpyOpInfo) {
   memcpy((char *)payloadMsg + sizeof(ConverseRdmaMsg) + ncpyOpInfoSize,
          ncpyOpInfo->srcPtr, size);
 
-  // Invoke the source ack
-  ncpyOpInfo->ackMode = CMK_SRC_ACK; // only invoke the source ack
-  // We need to ensure consistent behavior no matter what ncpyDirectAckHandlerFn actually does
-  // so we cannot rely on the charm layer to free the ncpyOpInfo
-  auto realFreeMe = ncpyOpInfo->freeMe;
-  ncpyOpInfo->freeMe = CMK_DONT_FREE_NCPYOPINFO;
-  ncpyDirectAckHandlerFn(ncpyOpInfo);
-  if (realFreeMe == CMK_FREE_NCPYOPINFO)
+  // No acknowledgement here. putDataHandler on the destination raises the
+  // one ack of this operation: on itself when it initiated a get that this
+  // put serves (ackMode == CMK_DEST_ACK, set by getRequestHandler), or back on
+  // this PE through putDoneHandler for a direct put, once the bytes landed.
+  NcpyOperationInfo *embedded =
+      (NcpyOperationInfo *)((char *)payloadMsg + sizeof(ConverseRdmaMsg));
+  if (embedded->ackMode != CMK_DEST_ACK) embedded->ackMode = CMK_SRC_DEST_ACK;
+  if (ncpyOpInfo->freeMe == CMK_FREE_NCPYOPINFO)
     CmiFree(ncpyOpInfo);
 
   CmiSetHandler(payloadMsg, put_data_handler_idx); // putDataHandler
@@ -251,6 +291,7 @@ void CmiOnesidedDirectInit(void) {
   remote_dereg_handler_idx = CmiRegisterHandler((CmiHandler)remoteDeregHandler);
   get_request_handler_idx = CmiRegisterHandler((CmiHandler)getRequestHandler);
   put_data_handler_idx = CmiRegisterHandler((CmiHandler)putDataHandler);
+  put_done_handler_idx = CmiRegisterHandler((CmiHandler)putDoneHandler);
   zc_pup_handler_idx = CmiRegisterHandler((CmiHandler)zcPupHandler);
 }
 
@@ -550,14 +591,16 @@ void CmiInvokeRemoteDeregAckHandler(int pe, NcpyOperationInfo *ncpyOpInfo) {
 // #endif
   if(ncpyOpInfo->opMode == CMK_BCAST_EM_API)
     return;
-  bool freeInfo;
-  if(ncpyOpInfo->opMode == CMK_DIRECT_API) {
-    freeInfo = true;
-  } else if(ncpyOpInfo->opMode == CMK_EM_API) {
-    freeInfo = false;
-  } else {
+  if(ncpyOpInfo->opMode != CMK_DIRECT_API && ncpyOpInfo->opMode != CMK_EM_API)
     CmiAbort("CmiInvokeRemoteDeregAckHandler: ncpyOpInfo->opMode is not valid for dereg\n");
-  }
+  // Whether the caller's NcpyOperationInfo is ours to free is what its freeMe
+  // says, not what its opMode implies. Charm++ allocates a Direct API info
+  // with CmiAlloc and leaves freeMe at CMK_FREE_NCPYOPINFO for the layer to
+  // release; the copy-based handlers above pass infos that live inside a
+  // received message, with freeMe cleared. Freeing those by opMode was an
+  // interior free of a message buffer ("LCI: mempool lower boundary
+  // violation" under +nordma, reconverse #221).
+  bool freeInfo = (ncpyOpInfo->freeMe == CMK_FREE_NCPYOPINFO);
 
   int ncpyOpInfoSize = ncpyOpInfo->ncpyOpInfoSize;
   // Send a ConverseRdmaMsg to other PE requesting it to send the array
