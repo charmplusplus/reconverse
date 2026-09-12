@@ -34,8 +34,8 @@ extern bool CmiUseCopyBasedRDMA;
 // undefined, Charm++ counts two acks per operation, as for classic's
 // copy-based layers (netlrts), and quiescence is never detected once a
 // program has done one cross-process Direct-API transfer.
-// The copy-based fallback (+nordma, or a backend without RMA) still uses the
-// two-ack protocol and does not match this declaration; see issue #221.
+// The copy-based fallback (+nordma, or a backend without RMA) follows the
+// same contract: putDataHandler raises the one ack on the initiating PE.
 #define CMK_ONESIDED_IMPL 1
 // Declaring a one-sided layer also switches on Charm++'s zerocopy broadcast
 // of large readonly variables in charmxi-generated code (xi-Member.C), which
