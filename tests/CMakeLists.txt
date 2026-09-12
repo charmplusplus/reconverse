@@ -31,3 +31,4 @@ add_test(NAME standalone_project_build_and_test
   COMMAND ${CMAKE_COMMAND}
     -P ${CMAKE_CURRENT_SOURCE_DIR}/run_standalone_test.cmake
 )
+add_subdirectory(megarecon)
