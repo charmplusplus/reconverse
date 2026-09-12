@@ -1179,6 +1179,9 @@ extern int CmiNumPesOnPhysicalNode(int node);
 extern void CmiGetPesOnPhysicalNode(int node, int **pelist, int *num);
 extern int CmiPhysicalRank(int pe);
 extern void CmiInitCPUAffinity(char **argv);
+// Warns or aborts if PEs on physical node 0 share a core; call after
+// CmiInitCPUTopology, as Charm++'s init does.
+extern void CmiCheckAffinity(void);
 extern int CmiPrintCPUAffinity(void);
 extern int CmiSetCPUAffinity(int core);
 extern int CmiSetCPUAffinityLogical(int core);
