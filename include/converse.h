@@ -442,6 +442,11 @@ int CmiNodeFirst(int node);
 
 // handler things
 void CmiSetHandler(void *msg, int handlerId);
+// Prepare the header of a message that was not obtained from CmiAlloc (for
+// example one on the stack) so it can be passed to a send: clears the
+// zerocopy type and the nokeep flag and records the message size. Classic
+// Converse programs call this before CmiSetHandler on such messages.
+void CmiInitMsgHeader(void *msg, int size);
 void CmiSetXHandler(void *msg, int xhandlerId);
 int CmiGetHandler(void *msg);
 int CmiGetXHandler(void *msg);
@@ -512,42 +517,32 @@ void CmiNodeAllBarrier();
 void CsdExitScheduler();
 int CsdScheduler(int maxmsgs);
 
-#ifdef __cplusplus
-// Message-priority pair for the queue
-struct MessagePriorityPair {
-  void* message;
-  long long priority;
-  
-  MessagePriorityPair(void* msg, long long prio) : message(msg), priority(prio) {}
-};
-
-// Comparator for increasing order of priority values
-struct MessagePriorityComparator {
-  bool operator()(const MessagePriorityPair& a, const MessagePriorityPair& b) const {
-    return a.priority > b.priority; // Note: inverted for min-heap behavior
-  }
-};
-
-#endif
-
+/* The scheduler queue: messages ordered by priority value (smaller first,
+ * negative before zero before positive), FIFO within one priority value, or
+ * LIFO for messages pushed with QueuePushFront. One deque per live priority
+ * level, as in classic Converse's Cqs; see src/queueing.cpp for the design
+ * and its tuning notes. The fields are private to queueing.cpp. */
 typedef struct QueueImpl
 {
-  void *pq_neg; // negative priorities
-  void *pq_zero; // zero priority
-  void *pq_pos; // positive priorities
+  void *levels;      /* std::map<long long, std::deque<void*>>: nonzero priorities */
+  void *zero;        /* std::deque<void*>: priority 0, the common case */
+  int emptyLevels;   /* drained levels kept allocated for reuse */
+  int size;          /* messages in the queue */
 } *Queue;
 
 void QueueInit(Queue q);
 void QueueDestroy(Queue q);
 int QueueEmpty(Queue q);
 int QueueSize(Queue q);
+/* FIFO within the priority level */
 void QueuePush(Queue q, void* message, long long priority);
+/* LIFO within the priority level: comes out before everything already
+ * queued at that priority */
+void QueuePushFront(Queue q, void* message, long long priority);
 void QueuePop(Queue q);
 void* QueueTop(Queue q);
 
-//typedef std::priority_queue<MessagePriorityPair, std::vector<MessagePriorityPair>, MessagePriorityComparator> *Queue;
 
-//#define QueueInit() new std::priority_queue<MessagePriorityPair, std::vector<MessagePriorityPair>, MessagePriorityComparator>()
 
 CpvExtern(Queue, CsdSchedQueue);
 CsvExtern(Queue, CsdNodeQueue);

@@ -26,6 +26,14 @@ add_subdirectory(cth)
 add_subdirectory(self_send)
 add_subdirectory(ctv)
 add_subdirectory(ult_bench)
+add_subdirectory(queue)
+add_subdirectory(cld)
+add_subdirectory(args)
+add_subdirectory(send_variants)
+add_subdirectory(cth_listener)
+add_subdirectory(handlers)
+add_subdirectory(abort_peer)
+add_subdirectory(megarecon)
 
 # Add a test that configures, builds, and runs standalone_project
 add_test(NAME standalone_project_build_and_test
