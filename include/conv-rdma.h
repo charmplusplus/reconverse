@@ -83,6 +83,15 @@ void CmiIssueRput(NcpyOperationInfo *ncpyOpInfo);
 void CmiDeregisterMem(const void *ptr, void *info, int pe,
                       unsigned short int mode);
 
+// Ask the PE that owns the other side's buffer to deregister it and invoke its
+// callback: Charm++ calls this from its Direct API acknowledgement handler for
+// the buffer whose deregMode is CMK_BUFFER_DEREG. If ncpyOpInfo->freeMe is
+// CMK_FREE_NCPYOPINFO the layer frees ncpyOpInfo here, so the caller must not
+// touch it afterwards. The remote PE's acknowledgement carries opMode
+// CMK_EM_API_SRC_ACK_INVOKE or CMK_EM_API_DEST_ACK_INVOKE and an info that
+// lives inside the request message (freeMe cleared).
+void CmiInvokeRemoteDeregAckHandler(int pe, NcpyOperationInfo *ncpyOpInfo);
+
 #if CMK_USE_CMA
 void CmiIssueRgetUsingCMA(const void *srcAddr, void *srcInfo, int srcPe,
                           const void *destAddr, void *destInfo, int destPe,

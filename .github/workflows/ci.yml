@@ -45,6 +45,23 @@ jobs:
             cmake --build build --target all
             ctest --test-dir build --extra-verbose --timeout 60
 
+      - name: With the LCI communication backend and CMK_USE_SHMEM=ON
+        shell: bash
+        run: |
+            cmake \
+                -Bbuild-shmem \
+                -GNinja \
+                -DCMAKE_BUILD_TYPE=Debug \
+                -DRECONVERSE_AUTOFETCH_LCI2=ON \
+                -DRECONVERSE_TEST_LAUNCHER="mpirun;--oversubscribe" \
+                -DLCT_PMI_BACKEND_ENABLE_MPI=ON \
+                -DCMK_USE_SHMEM=ON \
+                .
+            cmake --build build-shmem --target all
+            # Only runtime_modes bootstraps the IPC manager; the other tests
+            # run exactly as they do without shared memory.
+            ctest --test-dir build-shmem --extra-verbose --timeout 120 -R runtime_modes
+
       - name: With the LCW communication backend
         shell: bash
         run: |
