@@ -1246,22 +1246,6 @@ CmiAtomicFetchAndIncImpl(T& input) {
 
 #define CmiEnableUrgentSend(yn) /* intentionally left empty */
 
-typedef struct CmmTableStruct *CmmTable;
-
-#define CmmWildCard (-1)
-
-//typedef void (*CmmPupMessageFn)(pup_er p,void **msg);
-//CmmTable CmmPup(pup_er p, CmmTable t, CmmPupMessageFn msgpup);
-
-CmmTable   CmmNew(void);
-void       CmmFree(CmmTable t);
-void	   CmmFreeAll(CmmTable t);
-void       CmmPut(CmmTable t, int ntags, int *tags, void *msg);
-void      *CmmFind(CmmTable t, int ntags, int *tags, int *returntags, int del);
-int        CmmEntries(CmmTable t);
-int 	   CmmGetLastTag(CmmTable t, int ntags, int *tags);
-#define    CmmGet(t,nt,tg,rt)   (CmmFind((t),(nt),(tg),(rt),1))
-#define    CmmProbe(t,nt,tg,rt) (CmmFind((t),(nt),(tg),(rt),0))
 
 
 #ifndef CMI_CACHE_LINE_SIZE
