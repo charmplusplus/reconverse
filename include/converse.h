@@ -468,6 +468,7 @@ int CmiMyPe();
 int CmiMyNode();
 int CmiMyNodeSize();
 int CmiMyRank();
+int CmiIsPeThread(void); /* 1 on a PE thread, 0 on an external pthread */
 int CmiNumPes();
 int CmiNumNodes();
 // FIXME

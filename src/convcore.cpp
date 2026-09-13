@@ -629,6 +629,10 @@ ConverseQueue<void *> *CmiGetQueue(int rank) { return Cmi_queues[rank]; }
 ConverseSelfQueue<void *> *CmiGetSelfQueue() { return &Cmi_selfQueue; }
 
 int CmiMyRank() { return CmiGetState()->rank; }
+/* 1 on a PE (worker or rank 0 main) thread, 0 on any other pthread; the
+ * per-PE state a non-PE thread sees is zero-initialized and would read as
+ * rank 0 */
+int CmiIsPeThread(void) { return Cmi_myrank >= 0; }
 
 int CmiMyPe() { return CmiGetState()->pe; }
 
