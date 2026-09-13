@@ -147,7 +147,7 @@ void converseRunPe(int rank, int everReturn) {
   CmiTaskQueueInit();
   #endif
 
-  CmiQueueRegisterInitThread();
+  CsdSchedTableInitPE();
 
   // init things like cld module, ccs, etc
   CldModuleInit(CmiMyArgv);
@@ -367,7 +367,7 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
   CmiInitHwlocTopology();
 #endif
 
-  backend_poll_freq = 1; // default to poll every iteration
+  backend_poll_freq = 4; // relative weight of comm progress in the scheduler table
   CmiGetArgInt(argv, "+backend_poll_freq", &backend_poll_freq);
   if (backend_poll_freq < 1) backend_poll_freq = 1;
   backend_poll_thread = 1; // default to every thread
@@ -398,7 +398,6 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
   CmiNodeQueue = new ConverseNodeQueue<void *>();
 
   //register queues
-  CmiQueueRegisterInit();
 
   _smp_mutex = CmiCreateLock();
   CmiMemLock_lock = CmiCreateLock();

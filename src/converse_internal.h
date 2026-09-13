@@ -55,7 +55,7 @@ typedef struct State {
   int stopFlag = 0;
 } CmiState;
 
-extern int backend_poll_freq; // poll every backend_poll_freq iterations of the
+extern int backend_poll_freq; // relative weight of comm progress in the poll table (was: iterations)
                              // scheduler loop
 extern int backend_poll_thread; // every backend_poll_thread threads will call progress
 
@@ -74,8 +74,7 @@ void CmiPushPE(int destRank, int messageSize, void *msg);
 void CmiSyncSendAndFreeNoPersistent(int destPE, int messageSize, void *msg);
 
 //queue reg init
-void CmiQueueRegisterInit(void);
-void CmiQueueRegisterInitThread(void); 
+void CsdSchedTableInitPE(void);
 
 // node queue
 ConverseNodeQueue<void *> *CmiGetNodeQueue();

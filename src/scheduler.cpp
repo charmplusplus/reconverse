@@ -4,16 +4,16 @@
 CpvExtern(TaskQueue, CsdTaskQueue);
 #endif
 
-extern std::vector<QueuePollHandler> g_handlers; //list of handlers
-extern Groups g_groups; //groups of handlers by index
-CpvExtern(QueuePollHandlerFn *, poll_handlers);
-
 static inline void releaseIdle() {
   if (CmiGetIdle()) {
     CmiSetIdle(false);
     CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
   }
 }
+
+/* Public: a poll entry outside the runtime that found work must call this
+ * before handling it, exactly as the built-in queue pollers do. */
+void CsdReleaseIdle(void) { releaseIdle(); }
 
 static inline void setIdle() {
   if (!CmiGetIdle()) {
@@ -31,7 +31,7 @@ static inline void setIdle() {
 }
 
 //poll converse-level node queue
-bool pollConverseNodeQueue() {
+static int pollConverseNodeQueue(void *) {
   ConverseNodeQueue<void *> *nodeQueue = CmiGetNodeQueue();
   if (!nodeQueue->empty()) {
     auto result = nodeQueue->pop();
@@ -40,27 +40,27 @@ bool pollConverseNodeQueue() {
       releaseIdle();
       // process event
       CmiHandleMessage(msg);
-      return true;
+      return 1;
     }
   }
-  return false;
+  return 0;
 }
 
 //poll this PE's self queue
-bool pollSelfQueue() {
+static int pollSelfQueue(void *) {
   ConverseSelfQueue<void *> *selfQueue = CmiGetSelfQueue();
   if (!selfQueue->empty()) {
     void *msg = selfQueue->pop();
     releaseIdle();
     // process event
     CmiHandleMessage(msg);
-    return true;
+    return 1;
   }
-  return false;
+  return 0;
 }
 
 //poll converse-level thread queue
-bool pollConverseThreadQueue() {
+static int pollConverseThreadQueue(void *) {
   ConverseQueue<void *> *queue = CmiGetQueue(CmiMyRank());
   if (!queue->empty()) {
     // get next event (guaranteed to be there because only single consumer)
@@ -68,13 +68,13 @@ bool pollConverseThreadQueue() {
     releaseIdle();
     // process event
     CmiHandleMessage(msg);
-    return true;
+    return 1;
   }
-  return false;
+  return 0;
 }
 
 //poll node priority queue
-bool pollNodePrioQueue() {
+static int pollNodePrioQueue(void *) {
   // Check the queue length before reaching for the lock. CmiTryLock is a
   // CAS on a single process-wide cacheline, and an idle PE would otherwise
   // execute it on every loop iteration; with many PEs per process that one
@@ -91,71 +91,81 @@ bool pollNodePrioQueue() {
       releaseIdle();
       // process event
       CmiHandleMessage(msg);
-      return true;
+      return 1;
     } else {
       CmiUnlock(CsvAccess(CsdNodeQueueLock));
     }
   }
-  return false;
+  return 0;
 }
 
 //poll thread priority queue
-bool pollThreadPrioQueue() {
+static int pollThreadPrioQueue(void *) {
   if (!QueueEmpty(CpvAccess(CsdSchedQueue))) {
     void *msg = QueueTop(CpvAccess(CsdSchedQueue));
     QueuePop(CpvAccess(CsdSchedQueue));
     releaseIdle();
     // process event
     CmiHandleMessage(msg);
-    return true;
+    return 1;
   }
-  return false;
+  return 0;
 }
 
-bool pollProgress()
+static int pollProgress(void *)
 {
   if(CmiMyRank() % backend_poll_thread == 0) comm_backend::progress();
-  return false; //polling progress doesn't count
+  return 0; //polling progress doesn't count
 }
 
 #if CMK_TASKQUEUE
-bool pollTaskQueue() {
+static int pollTaskQueue(void *) {
   void *task_msg = TaskQueuePopLocal();
   if (task_msg != nullptr) {
     releaseIdle();
     CmiHandleMessage(task_msg);
-    return true;
+    return 1;
+  }
+  return 0;
+}
+#endif
+
+/* The runtime's own queues, always the leading entries of every table so
+ * Converse messaging keeps working whatever else a PE polls. Relative
+ * frequencies as in PR #150; the comm-progress weight is +backend_poll_freq
+ * (default 4). */
+int CsdBuiltinPollEntries(CsdPollEntry *out, int max) {
+  int n = 0;
+  auto add = [&](CsdPollFn fn, unsigned freq, const char *name) {
+    if (n < max) out[n++] = CsdPollEntry{fn, nullptr, freq, name};
+  };
+  add(pollConverseNodeQueue, 1, "node queue");
+  add(pollSelfQueue, 16, "self queue");
+  add(pollConverseThreadQueue, 16, "PE queue");
+  add(pollNodePrioQueue, 1, "node prio queue");
+  add(pollThreadPrioQueue, 16, "PE prio queue");
+  add(pollProgress, (unsigned)backend_poll_freq, "comm progress");
+#if CMK_TASKQUEUE
+  add(pollTaskQueue, 1, "task queue");
+#endif
+  return n;
+}
+
+/* one sweep: forward from the rotating base, stop at the first slot that
+ * did work; re-read the table every slot because a handler may have
+ * installed a new one (consumed at the loop top, but the pointer is what
+ * the next iteration must use) */
+static inline bool CsdSweep(uint64_t base) {
+  for (unsigned t = 0; t < CSD_TABLE_SLOTS; ++t) {
+    unsigned idx = static_cast<unsigned>((base + t) & (CSD_TABLE_SLOTS - 1));
+    CsdSchedTableStruct *tab = CpvAccess(CsdPollTable);
+    if (tab->slotFn[idx](tab->slotCtx[idx])) {
+      int o = tab->owner[idx];
+      if (o >= 0) tab->counts[o]++;
+      return true;
+    }
   }
   return false;
-}
-#endif
-
-void CmiQueueRegisterInitThread() {
-  std::vector<std::pair<QueuePollHandlerFn, unsigned int>> handlers;
-  handlers.push_back(std::make_pair(pollConverseNodeQueue, 1));
-  handlers.push_back(std::make_pair(pollSelfQueue, 16));
-  handlers.push_back(std::make_pair(pollConverseThreadQueue, 16));
-  handlers.push_back(std::make_pair(pollNodePrioQueue, 1));
-  handlers.push_back(std::make_pair(pollThreadPrioQueue, 16));
-  handlers.push_back(std::make_pair(pollProgress, 4));
-#if CMK_TASKQUEUE
-  handlers.push_back(std::make_pair(pollTaskQueue, 1));
-#endif
-  add_list_of_handlers(handlers);
-}
-
-//will add queue polling functions
-//called at node level (before threads created)
-void CmiQueueRegisterInit() {
-  add_handler(pollConverseNodeQueue, 1);
-  add_handler(pollSelfQueue, 16);
-  add_handler(pollConverseThreadQueue, 16);
-  add_handler(pollNodePrioQueue, 1);
-  add_handler(pollThreadPrioQueue, 16);
-  add_handler(pollProgress, backend_poll_freq);
-#if CMK_TASKQUEUE
-  add_handler(pollTaskQueue, 1);
-#endif
 }
 
 /**
@@ -164,9 +174,11 @@ void CmiQueueRegisterInit() {
 void CsdScheduler() {
 
   uint64_t loop_counter = 0;
+  CpvAccess(CsdSchedDepth)++;
 
   while (CmiStopFlag() == 0) {
 
+    CsdSchedTableLoopTop();
     CcdRaiseCondition(CcdSCHEDLOOP);
     //always deliver shmem messages first
     #ifdef CMK_USE_SHMEM
@@ -178,18 +190,14 @@ void CsdScheduler() {
     //poll queues: sweep forward from idx until work is found or a full
     //cycle of the table has been checked, so a message doesn't have to
     //wait for loop_counter to rotate back around to its slot
-    bool workDone = false;
-    for (unsigned t = 0; t < ARRAY_SIZE && !workDone; ++t) {
-      unsigned idx = static_cast<unsigned>((loop_counter + t) & 63ULL);
-      workDone = CpvAccess(poll_handlers)[idx]();
-    }
-    if(!workDone) {
+    if (!CsdSweep(loop_counter)) {
       setIdle();
     }
     CsdPeriodic();
     loop_counter++;
 
   }
+  CpvAccess(CsdSchedDepth)--;
 }
 
 /**
@@ -198,21 +206,19 @@ void CsdScheduler() {
  */
 void CsdSchedulePoll() {
   uint64_t loop_counter = 0;
+  CpvAccess(CsdSchedDepth)++;
 
   while(1){
 
+    CsdSchedTableLoopTop();
     CcdRaiseCondition(CcdSCHEDLOOP);
     //poll queues: sweep the full table before concluding it's empty, so
     //a message doesn't have to wait for loop_counter to rotate back
     //around to its slot
-    bool workDone = false;
-    for (unsigned t = 0; t < ARRAY_SIZE && !workDone; ++t) {
-      unsigned idx = static_cast<unsigned>((loop_counter + t) & 63ULL);
-      workDone = CpvAccess(poll_handlers)[idx]();
-    }
-    if(!workDone) {
+    if (!CsdSweep(loop_counter)) {
       //swept the whole table and every slot was empty: done
       setIdle();
+      CpvAccess(CsdSchedDepth)--;
       return;
     }
     CsdPeriodic();

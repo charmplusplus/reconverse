@@ -1,119 +1,152 @@
+/* Scheduler table construction and installation. See scheduler.h. */
 #include "scheduler.h"
+#include <algorithm>
+#include <cstring>
 
-std::vector<QueuePollHandler> g_handlers; //list of handlers
-Groups g_groups; //groups of handlers by index
-CpvDeclare(QueuePollHandlerFn *, poll_handlers);
-CpvDeclare(int*, poll_handler_assigned);
-//QueuePollHandlerFn *poll_handlers; // fixed size array
+CpvDeclare(CsdSchedTable, CsdPollTable);
+CpvDeclare(CsdSchedTable, CsdPendingTable);
+CpvDeclare(std::vector<CsdSchedTable> *, CsdRetiredTables);
+CpvDeclare(int, CsdSchedDepth);
 
-// default handler used to safely occupy any unassigned slot
-static bool pollNoWork() { return false; }
+/* same on every PE by registration order; a non-PE thread may install */
+static int CsdTableInstallIdx = -1;
 
-// Build a 64-bit mask for a period n (1..64) with optional phase (0..n-1)
-inline uint64_t make_mask_every_n(unsigned n, unsigned phase = 0) {
-    if (n == 0) return 0ULL;
-    if (n == 1) return ~0ULL;
-    if (n > 64) n = 64; // clamp to 64
-    uint64_t mask = 0ULL;
-    for (unsigned pos = 0; pos < 64; ++pos) {
-        if (((pos + phase) % n) == 0) mask |= (1ULL << pos);
+/* default entry used to safely occupy any unassigned slot */
+static int pollNoWork(void *) { return 0; }
+
+/* the runtime's own queues; defined in scheduler.cpp */
+int CsdBuiltinPollEntries(CsdPollEntry *out, int max);
+
+/* Largest-remainder apportionment of 64 slots over the entries' relative
+ * frequencies, every entry keeping at least one slot. */
+static void allocateSlots(CsdSchedTableStruct *t) {
+  const int n = (int)t->fns.size();
+  if (n > CSD_TABLE_SLOTS)
+    CmiAbort("CsdSchedTableCreate: more than 64 poll entries\n");
+  unsigned total = 0;
+  for (int i = 0; i < n; i++) total += t->baseFreq[i];
+  if (total == 0) total = 1;
+  std::vector<double> exact(n);
+  std::vector<unsigned> slots(n);
+  int assigned = 0;
+  for (int i = 0; i < n; i++) {
+    exact[i] = (double)t->baseFreq[i] * CSD_TABLE_SLOTS / total;
+    slots[i] = std::max(1u, (unsigned)exact[i]);
+    assigned += slots[i];
+  }
+  /* the >=1 floors may overshoot: take slots back from the largest holders */
+  while (assigned > CSD_TABLE_SLOTS) {
+    int k = 0;
+    for (int i = 1; i < n; i++) if (slots[i] > slots[k]) k = i;
+    if (slots[k] <= 1) CmiAbort("CsdSchedTableCreate: cannot fit entries in 64 slots\n");
+    slots[k]--; assigned--;
+  }
+  /* hand out the rest by largest fractional remainder */
+  while (assigned < CSD_TABLE_SLOTS) {
+    int k = -1; double best = -1.0;
+    for (int i = 0; i < n; i++) {
+      double rem = exact[i] - (double)slots[i];
+      if (rem > best) { best = rem; k = i; }
     }
-    return mask;
+    slots[k]++; assigned++;
+  }
+  for (int s = 0; s < CSD_TABLE_SLOTS; s++) {
+    t->slotFn[s] = pollNoWork; t->slotCtx[s] = nullptr; t->owner[s] = -1;
+  }
+  /* spread each entry's slots as evenly as possible, in entry order */
+  int cursor = 0;
+  for (int i = 0; i < n; i++) {
+    t->slotsOf[i] = slots[i];
+    unsigned remaining = slots[i];
+    unsigned step = CSD_TABLE_SLOTS / slots[i];
+    int idx = cursor;
+    while (remaining > 0) {
+      while (t->owner[idx] != -1) idx = (idx + 1) % CSD_TABLE_SLOTS;
+      t->slotFn[idx] = t->fns[i]; t->slotCtx[idx] = t->ctxs[i]; t->owner[idx] = i;
+      remaining--;
+      idx = (idx + step) % CSD_TABLE_SLOTS;
+    }
+    cursor = (cursor + 1) % CSD_TABLE_SLOTS;
+  }
 }
 
-// Rebuild groups from current handler masks (in-place).
-// Single-threaded callers may call this whenever a handler mask changes.
-inline void rebuild_groups() {
-    // Clear all groups
-    for (auto &v : g_groups) v.clear();
-
-    // Populate groups from each handler's mask
-    for (const auto &h : g_handlers) {
-        uint64_t m = h.mask;
-        if (m == 0) continue;
-        for (unsigned bit = 0; bit < 64; ++bit) {
-            if ((m >> bit) & 1ULL) {
-                g_groups[bit].push_back(h.fn);
-            }
-        }
-    }
+CsdSchedTable CsdSchedTableCreate(const CsdPollEntry *entries, int n) {
+  CsdSchedTableStruct *t = new CsdSchedTableStruct();
+  CsdPollEntry builtin[16];
+  int nb = CsdBuiltinPollEntries(builtin, 16);
+  t->numBuiltin = nb;
+  auto add = [&](const CsdPollEntry &e) {
+    if (e.fn == nullptr) CmiAbort("CsdSchedTableCreate: null poll function\n");
+    t->fns.push_back(e.fn); t->ctxs.push_back(e.ctx);
+    t->names.push_back(e.name ? e.name : "");
+    t->baseFreq.push_back(e.freq == 0 ? 1u : e.freq);
+    t->slotsOf.push_back(0); t->counts.push_back(0);
+  };
+  for (int i = 0; i < nb; i++) add(builtin[i]);
+  for (int i = 0; i < n; i++) add(entries[i]);
+  allocateSlots(t);
+  return t;
 }
 
-// Set handler period and phase (period: 1..64, 0 disables).
-// Rebuilds groups immediately (cheap relative to hot path).
-inline void set_frequency(size_t handlerIndex, unsigned period, unsigned phase = 0) {
-    if (handlerIndex >= g_handlers.size()) return;
-    QueuePollHandler &h = g_handlers[handlerIndex];
+void CsdSchedTableDestroy(CsdSchedTable t) { delete t; }
 
-    if (period == 0) {
-        h.period = 0;
-        h.phase = 0;
-        h.mask = 0ULL;
-    } else {
-        if (period > 64) period = 64;
-        h.period = period;
-        h.phase = phase % period;
-        h.mask = make_mask_every_n(h.period, h.phase);
-    }
-    rebuild_groups();
+int CsdSchedTableSlots(CsdSchedTable t, int entry) {
+  int i = t->numBuiltin + entry; /* user entries are numbered from 0 */
+  if (i < 0 || i >= (int)t->slotsOf.size()) return -1;
+  return (int)t->slotsOf[i];
 }
 
-// Add a handler that will poll a queue at given frequency.
-void add_handler(QueuePollHandlerFn fn, unsigned period, unsigned phase)
-{
-    g_handlers.push_back({fn});
-    size_t index = g_handlers.size() - 1;
-    set_frequency(index, period, phase);
+int CsdSchedTableNumBuiltin(CsdSchedTable t) { return t->numBuiltin; }
+
+struct CsdInstallMsg {
+  char hdr[CmiMsgHeaderSizeBytes];
+  CsdSchedTable table;
+};
+
+static void CsdTableInstallHandler(void *vmsg) {
+  CsdInstallMsg *m = (CsdInstallMsg *)vmsg;
+  /* never swap here: the sweep that dispatched this handler is indexing the
+   * current table. Leave it for the loop top. */
+  if (CpvAccess(CsdPendingTable) != nullptr)
+    CsdSchedTableDestroy(CpvAccess(CsdPendingTable)); /* superseded before use */
+  CpvAccess(CsdPendingTable) = m->table;
+  CmiFree(m);
 }
 
-void add_list_of_handlers(const std::vector<std::pair<QueuePollHandlerFn, unsigned int>>& handlers){
-    // total frequency
-    unsigned int total = 0;
-    for(const auto& handler : handlers){
-        total += handler.second;
-    }
-    if(total == 0) return; // nothing to add
-    // loop through handlers and add them to the table
-    // spread out based on normalized frequency
-    CpvInitialize(QueuePollHandlerFn *, poll_handlers);
-    CpvAccess(poll_handlers) = new QueuePollHandlerFn[ARRAY_SIZE];
-    CpvInitialize(int*, poll_handler_assigned);
-    CpvAccess(poll_handler_assigned) = new int[ARRAY_SIZE];
-    for(unsigned int i=0; i<ARRAY_SIZE; i++){
-        CpvAccess(poll_handler_assigned)[i] = 0;
-        CpvAccess(poll_handlers)[i] = pollNoWork; // ensure valid callable in every slot
-    }
-    //poll_handlers = new QueuePollHandlerFn[ARRAY_SIZE];
-    unsigned int current_index = 0; //earliest slot is index within handlers vector
-    unsigned int total_assigned = 0;
-    int handler_index = 0;//for debugging
-    for(const auto& handler : handlers){
-        unsigned int freq = handler.second;
-        long normalized = lround((freq * ARRAY_SIZE) / static_cast<double>(total)); //estimate of how many slots this handler should take
-        //CmiPrintf("Handler %d frequency %u normalized to %ld\n", handler_index, freq, normalized);
-        if(normalized == 0) normalized = 1; // at least once
-        // go through loop and find empty slots
-        // spread out as evenly as possible
-        unsigned int remaining = normalized;
-        unsigned int step = ARRAY_SIZE / normalized;
-        unsigned int index = current_index;
-        while(remaining > 0){
-            //find next empty slot
-            if(total_assigned >= ARRAY_SIZE){
-                break; // all slots assigned
-            }
-            while(CpvAccess(poll_handler_assigned)[index] != 0){
-                index = (index + 1) % ARRAY_SIZE;
-            }
-            CpvAccess(poll_handlers)[index] = handler.first;
-            CpvAccess(poll_handler_assigned)[index] = 1;
-            //poll_handlers[index] = handler.first;
-            total_assigned++;
-            //CmiPrintf("Adding handler %d at index %d\n", handler_index, index);
-            remaining--;
-            index = (index + step) % ARRAY_SIZE;
-        }
-        current_index = (current_index + 1) % ARRAY_SIZE;
-        handler_index++;
-    }
+void CsdSchedTableInstall(int rank, CsdSchedTable t) {
+  CsdInstallMsg *m = (CsdInstallMsg *)CmiAlloc(sizeof(CsdInstallMsg));
+  CmiInitMsgHeader(m, (int)sizeof(CsdInstallMsg));
+  CmiSetHandler(m, CsdTableInstallIdx);
+  m->table = t;
+  CmiPushPE(rank, m); /* rank == self takes the same path; consumed at loop top */
+}
+
+void CsdSchedTableLoopTop(void) {
+  CsdSchedTable pending = CpvAccess(CsdPendingTable);
+  if (pending != nullptr) {
+    CpvAccess(CsdPendingTable) = nullptr;
+    CpvAccess(CsdRetiredTables)->push_back(CpvAccess(CsdPollTable));
+    CpvAccess(CsdPollTable) = pending;
+  }
+  /* an outer scheduler loop suspended inside a handler may still be sweeping
+   * a retired table: free only when this is the only loop on the PE */
+  if (CpvAccess(CsdSchedDepth) == 1) {
+    for (CsdSchedTable r : *CpvAccess(CsdRetiredTables)) CsdSchedTableDestroy(r);
+    CpvAccess(CsdRetiredTables)->clear();
+  }
+}
+
+void CsdSchedTableInitPE(void) {
+  CpvInitialize(CsdSchedTable, CsdPollTable);
+  CpvInitialize(CsdSchedTable, CsdPendingTable);
+  CpvInitialize(std::vector<CsdSchedTable> *, CsdRetiredTables);
+  CpvInitialize(int, CsdSchedDepth);
+  CpvAccess(CsdPendingTable) = nullptr;
+  CpvAccess(CsdRetiredTables) = new std::vector<CsdSchedTable>();
+  CpvAccess(CsdSchedDepth) = 0;
+  int idx = CmiRegisterHandler((CmiHandler)CsdTableInstallHandler);
+  if (CsdTableInstallIdx < 0) CsdTableInstallIdx = idx;
+  else if (CsdTableInstallIdx != idx)
+    CmiAbort("CsdSchedTableInitPE: install handler index differs across PEs\n");
+  CpvAccess(CsdPollTable) = CsdSchedTableCreate(nullptr, 0);
 }

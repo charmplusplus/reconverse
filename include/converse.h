@@ -556,6 +556,28 @@ void CmiNodeAllBarrier();
 void CsdExitScheduler();
 int CsdScheduler(int maxmsgs);
 
+/* ---- Per-PE scheduler table (2026-09) ----
+ * Each PE polls a 64-slot table; slot count = relative frequency, slot order
+ * = weak priority, a full sweep precedes idle. CsdSchedTableCreate prepends
+ * the runtime's own queues to the given entries; CsdSchedTableInstall sends
+ * the table to a PE, which adopts it at the top of its scheduler loop and
+ * retires the old one. A poll function returns 1 if it handled one message
+ * and must call CsdReleaseIdle() before handling it. */
+typedef int (*CsdPollFn)(void *ctx);
+typedef struct CsdPollEntry {
+  CsdPollFn fn;
+  void *ctx;
+  unsigned freq;    /* relative; 0 is treated as 1 */
+  const char *name; /* for diagnostics, may be NULL */
+} CsdPollEntry;
+typedef struct CsdSchedTableStruct *CsdSchedTable;
+CsdSchedTable CsdSchedTableCreate(const CsdPollEntry *entries, int n);
+void CsdSchedTableInstall(int rank, CsdSchedTable t); /* takes ownership of t */
+void CsdSchedTableDestroy(CsdSchedTable t);           /* only for a table never installed */
+int CsdSchedTableSlots(CsdSchedTable t, int userEntry); /* slots held; -1 if out of range */
+int CsdSchedTableNumBuiltin(CsdSchedTable t);
+void CsdReleaseIdle(void);
+
 /* The scheduler queue: messages ordered by priority value (smaller first,
  * negative before zero before positive), FIFO within one priority value, or
  * LIFO for messages pushed with QueuePushFront. One deque per live priority
