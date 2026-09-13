@@ -114,6 +114,10 @@ struct CmiIdleLock {
 };
 static CmiIdleLock *Cmi_idleLocks = nullptr; /* one per rank, indexable by pushers */
 static int Cmi_sleepOnIdle = 0;              /* +CmiSleepOnIdle default for every PE */
+/* PEs with the policy on. Pushers check this first (one relaxed load) so
+ * that with the feature off the push paths touch no other PE's lock: an
+ * ungated notify-all on CmiPushNode cost 0.2 us per node-queue message. */
+static std::atomic<int> Cmi_sleepersEnabled{0};
 
 /* ---- Library mode: the process outlives the runtime. Worker threads are
  * joinable; when their scheduler stops they take part in the shutdown
@@ -130,6 +134,7 @@ int ConverseGetLibraryMode(void) { return Cmi_libraryMode; }
 #define CMI_IDLE_SLEEP_MAX_MS 10
 
 void CsdIdleNotify(int rank) {
+  if (Cmi_sleepersEnabled.load(std::memory_order_relaxed) == 0) return;
   if (Cmi_idleLocks == nullptr || rank < 0 || rank >= Cmi_mynodesize) return;
   CmiIdleLock &l = Cmi_idleLocks[rank];
   l.hasMessages.store(1, std::memory_order_seq_cst);
@@ -141,16 +146,17 @@ void CsdIdleNotify(int rank) {
 
 /* node-level queues may be taken by any PE: wake every sleeper */
 void CsdIdleNotifyAll(void) {
+  if (Cmi_sleepersEnabled.load(std::memory_order_relaxed) == 0) return;
   if (Cmi_idleLocks == nullptr) return;
   for (int r = 0; r < Cmi_mynodesize; r++)
-    if (Cmi_idleLocks[r].isSleeping.load(std::memory_order_relaxed) ||
-        !Cmi_idleLocks[r].hasMessages.load(std::memory_order_relaxed))
-      CsdIdleNotify(r);
+    if (Cmi_idleLocks[r].on) CsdIdleNotify(r);
 }
 
 void CsdSetSleepOnIdle(int on) {
   if (Cmi_myrank < 0) CmiAbort("CsdSetSleepOnIdle: not on a PE\n");
   CmiIdleLock &l = Cmi_idleLocks[Cmi_myrank];
+  if (on && !l.on) Cmi_sleepersEnabled.fetch_add(1);
+  else if (!on && l.on) Cmi_sleepersEnabled.fetch_sub(1);
   l.on = on;
   l.nIdles = 0;
   l.sleepMs = 0;
@@ -581,6 +587,7 @@ void CmiInitState(int rank) {
   CmiSetIdle(false);
   CmiSetIdleTime(0.0);
   Cmi_idleLocks[rank].on = Cmi_sleepOnIdle;
+  if (Cmi_sleepOnIdle) Cmi_sleepersEnabled.fetch_add(1);
 
   // allocate global entries
   ConverseQueue<void *> *queue = new ConverseQueue<void *>();
