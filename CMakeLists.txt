@@ -136,6 +136,10 @@ endif()
 
 add_library(reconverse $<TARGET_OBJECTS:boost-context>)
 set_target_properties(reconverse PROPERTIES CXX_STANDARD 17)
+# Consumers must compile against converse.h as C++17 too (thread_local,
+# constexpr, std::atomic in the header); without this a consumer on Apple
+# clang is compiled as gnu++98 and the header fails.
+target_compile_features(reconverse PUBLIC cxx_std_17)
 add_subdirectory(include)
 add_subdirectory(src)
 target_link_libraries(reconverse PUBLIC Threads::Threads)
@@ -170,6 +174,22 @@ if(NOT RECONVERSE_ROOT_PROJECT)
   # Define an alias to mimic find_package behavior and ensure consistent usage.
   add_library(reconverse::reconverse ALIAS reconverse)
 endif()
+
+# ##############################################################################
+# Install (library + public headers). Previously only test executables were
+# installed. Internal queue templates go to a separate subdirectory so a
+# consumer can opt into them explicitly.
+# ##############################################################################
+include(GNUInstallDirs)
+install(TARGETS reconverse
+        ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR})
+install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+        FILES_MATCHING PATTERN "*.h")
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/src/converse_config.h
+        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+install(FILES src/queue.h src/concurrentqueue.h
+        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/reconverse-internal)
 
 # ##############################################################################
 # Add Subdirectories
