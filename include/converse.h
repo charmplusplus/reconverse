@@ -433,7 +433,7 @@ int CmiNumPes();
 int CmiNumNodes();
 // FIXME
 //#define CmiPhysicalNodeID(node) (node)
-extern int CmiPhysicalNodeID(int pe);
+CLINKAGE int CmiPhysicalNodeID(int pe);
 int CmiNodeOf(int pe);
 int CmiRankOf(int pe);
 int CmiStopFlag();
@@ -605,7 +605,7 @@ void CmiAbort(const char *format, ...);
 #endif
 
 // Utility functions
-int CmiPrintf(const char *format, ...);
+CLINKAGE int CmiPrintf(const char *format, ...);
 int CmiGetArgc(char **argv);
 int CmiScanf(const char *format, ...);
 int CmiError(const char *format, ...);
@@ -705,7 +705,7 @@ typedef void (*CcdCondFn)(void *userParam);
 typedef void (*CcdVoidFn)(void *userParam, double curWallTime);
 void CcdModuleInit();
 #define CcdIGNOREPE -2
-void CcdCallFnAfter(CcdVoidFn fnp, void *arg, double msecs);
+CLINKAGE void CcdCallFnAfter(CcdVoidFn fnp, void *arg, double msecs);
 void CcdCallFnAfterOnPE(CcdVoidFn fnp, void *arg, double msecs, int pe);
 int CcdCallOnCondition(int condnum, CcdCondFn fnp, void *arg);
 int CcdCallOnConditionKeep(int condnum, CcdCondFn fnp, void *arg);
@@ -1170,9 +1170,9 @@ extern void CsdSchedulePoll(void);
 extern int CmiNumCores(void);
 extern int CmiCpuTopologyEnabled(void);
 extern int CmiPeOnSamePhysicalNode(int pe1, int pe2);
-extern int CmiNumPesOnPhysicalNode(int node);
-extern void CmiGetPesOnPhysicalNode(int node, int **pelist, int *num);
-extern int CmiPhysicalRank(int pe);
+CLINKAGE int CmiNumPesOnPhysicalNode(int node);
+CLINKAGE void CmiGetPesOnPhysicalNode(int node, int **pelist, int *num);
+CLINKAGE int CmiPhysicalRank(int pe);
 extern void CmiInitCPUAffinity(char **argv);
 // Warns or aborts if PEs on physical node 0 share a core; call after
 // CmiInitCPUTopology, as Charm++'s init does.
@@ -1182,8 +1182,8 @@ extern int CmiSetCPUAffinity(int core);
 extern int CmiSetCPUAffinityLogical(int core);
 extern int CmiOnCore(void);
 
-int CmiNumPhysicalNodes();
-int CmiGetFirstPeOnPhysicalNode(int node);
+CLINKAGE int CmiNumPhysicalNodes();
+CLINKAGE int CmiGetFirstPeOnPhysicalNode(int node);
 /* Rank of a logical node among those sharing its physical node.
  * Topology-derived; O(PEs on the physical node), so cache it. */
 int CmiNodeRankOnPhysicalNode(int node);
