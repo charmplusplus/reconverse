@@ -2,6 +2,8 @@
 #include <errno.h>
 #include <atomic>
 #include <cstring>
+#include <cstdlib>
+#include <cstdio>
 #include "uFcontext.h"
 #include "converse_internal.h"
 #include "scheduler.h"
@@ -109,10 +111,35 @@ CpvStaticDeclare(CthPostSwitch, CthPost);
 static int CthResumeNormalIdxGlobal = -1;
 static int CthResumeSchedulingIdxGlobal = -1;
 
+/* debug ring of thread events per PE, dumped by CthSetPost on conflict */
+struct CthTraceEv { int ev; const void *a; const void *b; int x; };
+CpvStaticDeclare(CthTraceEv *, CthTrace);
+CpvStaticDeclare(int, CthTraceIdx);
+#define CTH_TRACE_N 64
+static inline void CthTr(int ev, const void *a, const void *b, int x) {
+  CthTraceEv *r = CpvAccess(CthTrace);
+  if (!r) return;
+  int i = CpvAccess(CthTraceIdx)++ & (CTH_TRACE_N - 1);
+  r[i] = CthTraceEv{ev, a, b, x};
+}
+static void CthTraceDump(void) {
+  CthTraceEv *r = CpvAccess(CthTrace);
+  if (!r) return;
+  static const char *names[] = {"-", "setpost", "drain", "resume", "suspend", "finished", "resumeNormal", "resumeSched", "startThread"};
+  int n = CpvAccess(CthTraceIdx);
+  fprintf(stderr, "[%d] Cth trace (oldest first):\n", CmiMyPe());
+  for (int k = n - CTH_TRACE_N; k < n; k++) {
+    if (k < 0) continue;
+    CthTraceEv &e = r[k & (CTH_TRACE_N - 1)];
+    fprintf(stderr, "[%d]   %-12s a=%p b=%p x=%d\n", CmiMyPe(), names[e.ev], e.a, e.b, e.x);
+  }
+}
+
 static void CthRunPostSwitch(void) {
   CthPostSwitch p = CpvAccess(CthPost);
   if (p.kind == CTH_POST_NONE) return;
   CpvAccess(CthPost).kind = CTH_POST_NONE;
+  CthTr(2, (void *)p.thread, (void *)CpvAccess(CthCurrent), p.kind);
   switch (p.kind) {
   case CTH_POST_THEN:
     if (p.fn) p.fn(p.arg);
@@ -137,8 +164,15 @@ static void CthRunPostSwitch(void) {
 
 static void CthSetPost(int kind, CthThread t, CthVoidFn fn, void *arg, int keep) {
   CthPostSwitch &p = CpvAccess(CthPost);
-  if (p.kind != CTH_POST_NONE)
-    CmiAbort("Cth: a post-switch action is already pending on this PE\n");
+  CthTr(1, (void *)t, (void *)CpvAccess(CthCurrent), kind);
+  if (p.kind != CTH_POST_NONE) {
+    CthTraceDump();
+    CmiAbort("Cth: a post-switch action (kind %d, thread %p exiting=%d state=%d) is already pending on PE %d "
+             "while setting kind %d for thread %p (current %p, sched %p, main %p, standins %p)\n",
+             p.kind, (void *)p.thread, B(p.thread)->exiting, B(p.thread)->state.load(), CmiMyPe(), kind, (void *)t,
+             (void *)CpvAccess(CthCurrent), (void *)CpvAccess(CthSchedulingThread), (void *)CpvAccess(CthMainThread),
+             (void *)CpvAccess(CthSleepingStandins));
+  }
   p.kind = kind; p.thread = t; p.fn = fn; p.arg = arg; p.keep = keep;
 }
 
@@ -312,6 +346,10 @@ void CthInit(char **argv) {
   CpvAccess(doomedThreadPool) = (CthThread)NULL;
   CpvInitialize(CthPostSwitch, CthPost);
   CpvAccess(CthPost).kind = CTH_POST_NONE;
+  CpvInitialize(CthTraceEv *, CthTrace);
+  CpvInitialize(int, CthTraceIdx);
+  CpvAccess(CthTraceIdx) = 0;
+  CpvAccess(CthTrace) = getenv("CTH_TRACE") ? (CthTraceEv *)calloc(CTH_TRACE_N, sizeof(CthTraceEv)) : nullptr;
 }
 
 static void *CthAllocateStack(CthThreadBase *th, int *stackSize,
@@ -429,6 +467,7 @@ void CthResume(CthThread t) {
   tc = CpvAccess(CthCurrent);
 
   if (t != tc) { /* Actually switch threads */
+    CthTr(3, (void *)t, (void *)tc, tc->base.exiting);
     CthBaseResume(t);
     if (!tc->base.exiting) {
       if (0 != swapJcontext(&tc->context, &t->context)) {
@@ -474,6 +513,7 @@ void CthSuspend(void) {
   if (choosefn == 0)
     CthNoStrategy();
   next = choosefn(); // If this crashes, disable ASLR.
+  CthTr(4, (void *)cur, (void *)next, cur->exiting);
 
   if (cur->scheduled > 0)
     cur->scheduled--;
@@ -497,6 +537,7 @@ void CthStartThread(transfer_t arg) {
   data_t *data = (data_t *)arg.data;
   uFcontext_t *old_ucp = (uFcontext_t *)data->from;
   if (old_ucp) old_ucp->fctx = arg.fctx; /* NULL when entered via setJcontext */
+  CthTr(8, (void *)CpvAccess(CthCurrent), old_ucp, 0);
   CthRunPostSwitch();
   uFcontext_t *cur_ucp = (uFcontext_t *)data->data;
   cur_ucp->func(cur_ucp->arg);
@@ -624,10 +665,20 @@ CthThread CthSuspendSchedulingThread(void) {
  * CthResumeNormalThreadDebug is also kept updated. */
 void CthResumeNormalThread(CthThreadToken *token) {
   CthThread t = token->thread;
+  CthTr(6, (void *)t, (void *)token, t ? B(t)->state.load() : -1);
 
   if (t == NULL) {
     free(token);
     return;
+  }
+  if (B(t)->awakenArgFn) {
+    /* a custom-awaken thread's token must be popped exactly once per wake:
+     * READY is the only state it can be in here */
+    int st = B(t)->state.load(std::memory_order_acquire);
+    if (st != CTH_STATE_READY)
+      CmiAbort("CthResumeNormalThread: token of thread %p popped on PE %d in state %d "
+               "(exiting=%d) -- the token was in a queue twice or the thread was still running\n",
+               (void *)t, CmiMyPe(), st, B(t)->exiting);
   }
   B(t)->state.store(CTH_STATE_RUNNING, std::memory_order_relaxed);
   CthResume(t);
