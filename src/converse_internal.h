@@ -65,6 +65,7 @@ void CmiInitState(int pe);
 ConverseQueue<void *> *CmiGetQueue(int pe);
 // queue of messages the calling PE sent to itself
 ConverseSelfQueue<void *> *CmiGetSelfQueue();
+extern thread_local int Cmi_myrank; /* -1 on a thread that is not a PE */
 void CrnInit(void);
 void CmiPushPE(int destRank, int messageSize, void *msg);
 

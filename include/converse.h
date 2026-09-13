@@ -333,6 +333,45 @@ void CthTraceResume(CthThread t);
 void CthSetEventInfo(CthThread t, int event, int srcPE);
 
 void CthSetStrategyDefault(CthThread t);
+void CthSetStrategy(CthThread t, CthAwkFn awkfn, CthThFn chsfn);
+void CthEnqueueNormalThread(CthThreadToken *token, int s, int pb,
+                            unsigned int *prio);
+void CthResumeNormalThread(CthThreadToken *token);
+int CthIsMainThread(CthThread t);
+void CthSetSuspendable(CthThread t, int val);
+
+/* ---- Hooks for pool-style scheduling of threads (2026-09) ----
+ * A thread may be given a custom awaken function: instead of the default
+ * (push the token to the awakening PE's self queue) the runtime calls
+ * fn(t, arg), which typically pushes CthGetToken(t) into a queue polled by
+ * several PEs. Such threads keep a small state machine so that one token is
+ * in at most one queue at a time:
+ *   BLOCKED -> READY   only through CthAwakenIfBlocked (CAS) or a yield;
+ *   READY   -> RUNNING when the token is popped and the thread resumed;
+ *   RUNNING -> BLOCKED through CthSuspendBlocked, applied AFTER the switch;
+ *   RUNNING -> TERMINATED at exit, applied AFTER the switch.
+ * Post-switch actions run on the next thread's stack right after the
+ * context switch, so a waker can never resume a thread that is still
+ * running. The PE main thread is pinned: its wake is a CmiPushPE to its own
+ * PE regardless of the custom function. Default-strategy threads (Charm++)
+ * are unaffected by any of this. */
+enum {
+  CTH_STATE_READY = 0,
+  CTH_STATE_RUNNING = 1,
+  CTH_STATE_BLOCKED = 2,
+  CTH_STATE_TERMINATED = 3
+};
+typedef void (*CthAwakenArgFn)(CthThread t, void *arg);
+void CthSetAwakenFn(CthThread t, CthAwakenArgFn fn, void *arg); /* NULL = default */
+void *CthGetAwakenArg(CthThread t);
+int CthAwakenIfBlocked(CthThread t); /* 1 if it moved BLOCKED->READY and awakened */
+void CthSuspendBlocked(CthVoidFn after, void *arg); /* after() runs post-switch */
+void CthSuspendThen(CthVoidFn after, void *arg);    /* same, no state change */
+int CthGetState(CthThread t);
+void CthSetKeepOnExit(CthThread t, int keep); /* do not free at exit; CthFree later */
+void CthSetExitFn(CthThread t, CthVoidFn fn, void *arg); /* runs post-switch at exit */
+void CthSetUserData(CthThread t, void *data);
+void *CthGetUserData(CthThread t);
 
 int CthImplemented(void);
 

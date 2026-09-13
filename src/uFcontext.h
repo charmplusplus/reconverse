@@ -40,23 +40,23 @@ transfer_t ontop_fcontext(fcontext_t const to, void *vp,
                           transfer_t (*fn)(transfer_t));
 
 /* Get user context and store it in variable pointed to by UCP.  */
-extern int getJcontext(uFcontext_t *__ucp);
+static inline int getJcontext(uFcontext_t *__ucp);
 
 /* Set user context from information of variable pointed to by UCP.  */
-extern int setJcontext(uFcontext_t *__ucp);
+static inline int setJcontext(uFcontext_t *__ucp);
 
 /* Save current context in context variable pointed to by OUCP and set
    context from variable pointed to by UCP.  */
-extern int swapJcontext(uFcontext_t *__oucp, uFcontext_t *__ucp);
+static inline int swapJcontext(uFcontext_t *__oucp, uFcontext_t *__ucp);
 
-extern void makeJcontext(uFcontext_t *__ucp, uFcontext_fn_t, void (*fn)(void *),
+static inline void makeJcontext(uFcontext_t *__ucp, uFcontext_fn_t, void (*fn)(void *),
                          void *arg);
 /* To keep the interface of uFcontext the same as the ucontext and uJcontext*/
-int getJcontext(uFcontext_t *__ucp) { return 0; }
+static inline int getJcontext(uFcontext_t *__ucp) { return 0; }
 
-int setJcontext(uFcontext_t *__ucp) { return swapJcontext(NULL, __ucp); }
+static inline int setJcontext(uFcontext_t *__ucp) { return swapJcontext(NULL, __ucp); }
 
-void makeJcontext(uFcontext_t *__ucp, uFcontext_fn_t __func, void (*fn)(void *),
+static inline void makeJcontext(uFcontext_t *__ucp, uFcontext_fn_t __func, void (*fn)(void *),
                   void *arg) {
   __ucp->arg = arg;
   __ucp->uc_link = NULL;
@@ -66,7 +66,7 @@ void makeJcontext(uFcontext_t *__ucp, uFcontext_fn_t __func, void (*fn)(void *),
   __ucp->fctx = t;
 }
 
-int swapJcontext(uFcontext_t *old_ucp, uFcontext_t *new_ucp) {
+static inline int swapJcontext(uFcontext_t *old_ucp, uFcontext_t *new_ucp) {
   new_ucp->param.from = old_ucp;
   new_ucp->param.data = new_ucp;
   transfer_t t = jump_fcontext(new_ucp->fctx, &(new_ucp->param));
