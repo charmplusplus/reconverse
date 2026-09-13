@@ -143,10 +143,14 @@ int CsdBuiltinPollEntries(CsdPollEntry *out, int max) {
   auto add = [&](CsdPollFn fn, unsigned freq, const char *name) {
     if (n < max) out[n++] = CsdPollEntry{fn, nullptr, freq, name};
   };
-  /* The node queue carries nodegroup and node-level traffic. With weight 1
-   * it held 1 slot of 64 and a node message waited up to 63 empty slot
-   * visits: +0.2 us per NodeGroup message in Charm++'s pingpong (1.6x).
-   * Equal weight with the PE queues puts a node-queue slot within 4 visits. */
+  /* The node queue carries nodegroup and node-level traffic; equal weight
+   * with the PE queues (was 1 in #150). NOTE: Charm++'s pingpong shows
+   * NodeGroup messages ~0.2 us (1.5x) slower with the table sweep than with
+   * main's if/else scheduler, and that bisects to the table itself
+   * (880f57c), not to this weight -- weight 16 vs 1 measured the same, and
+   * so did polling the node queue first every iteration. Unresolved;
+   * suspected cost of the per-sweep empty() checks on the shared
+   * multi-consumer queue. See argobots-succession/charm-gate-report.md. */
   add(pollConverseNodeQueue, 16, "node queue");
   add(pollSelfQueue, 16, "self queue");
   add(pollConverseThreadQueue, 16, "PE queue");
