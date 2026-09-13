@@ -143,7 +143,11 @@ int CsdBuiltinPollEntries(CsdPollEntry *out, int max) {
   auto add = [&](CsdPollFn fn, unsigned freq, const char *name) {
     if (n < max) out[n++] = CsdPollEntry{fn, nullptr, freq, name};
   };
-  add(pollConverseNodeQueue, 1, "node queue");
+  /* The node queue carries nodegroup and node-level traffic. With weight 1
+   * it held 1 slot of 64 and a node message waited up to 63 empty slot
+   * visits: +0.2 us per NodeGroup message in Charm++'s pingpong (1.6x).
+   * Equal weight with the PE queues puts a node-queue slot within 4 visits. */
+  add(pollConverseNodeQueue, 16, "node queue");
   add(pollSelfQueue, 16, "self queue");
   add(pollConverseThreadQueue, 16, "PE queue");
   add(pollNodePrioQueue, 1, "node prio queue");
