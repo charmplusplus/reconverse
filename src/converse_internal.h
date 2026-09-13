@@ -75,6 +75,8 @@ void CmiSyncSendAndFreeNoPersistent(int destPE, int messageSize, void *msg);
 
 //queue reg init
 void CsdSchedTableInitPE(void);
+void CsdIdleReset(void);
+void CsdIdleSleepMaybe(void);
 
 // node queue
 ConverseNodeQueue<void *> *CmiGetNodeQueue();

@@ -578,6 +578,16 @@ int CsdSchedTableSlots(CsdSchedTable t, int userEntry); /* slots held; -1 if out
 int CsdSchedTableNumBuiltin(CsdSchedTable t);
 void CsdReleaseIdle(void);
 
+/* Sleep on idle (port of classic Converse's CmiIdleLock): with +CmiSleepOnIdle,
+ * or CsdSetSleepOnIdle(1) on a PE, that PE parks on a condition variable
+ * after 20 empty sweeps, 2 ms growing to 10 ms, woken by any push to a queue
+ * it polls. Default off. A queue outside the runtime that a sleeping PE
+ * polls should call CsdIdleNotify(rank) after pushing. */
+void CsdSetSleepOnIdle(int on);
+int CsdGetSleepOnIdle(void);
+void CsdIdleNotify(int rank);
+void CsdIdleNotifyAll(void);
+
 /* The scheduler queue: messages ordered by priority value (smaller first,
  * negative before zero before positive), FIFO within one priority value, or
  * LIFO for messages pushed with QueuePushFront. One deque per live priority
@@ -643,6 +653,7 @@ void CqsEnqueueGeneral(Queue q, void *Message, int strategy, int priobits,
           CqsEnqueueGeneral((Queue)CsvAccess(CsdNodeQueue),(msg),(strategy),(priobits),(prioptr)); \
           CsdNodeQueueLenAdd(1); \
           CmiUnlock(CsvAccess(CsdNodeQueueLock)); \
+          CsdIdleNotifyAll(); \
         } while(0)
 
 void CmiAssignOnce(int *variable, int value);
@@ -676,6 +687,14 @@ void ConverseExit(int status=0);
 #else
 void ConverseExit(int status);
 #endif
+/* Library mode (2026-09): call ConverseSetLibraryMode(1) before ConverseInit
+ * (or pass +CmiLibraryMode). Worker threads are then joinable and, on rank 0,
+ * ConverseFinalize() stops the other PEs, runs the shutdown protocol, joins
+ * the workers and returns instead of calling exit(). One cycle per process. */
+void ConverseSetLibraryMode(int on);
+int ConverseGetLibraryMode(void);
+void ConverseFinalize(void);
+
 #define CmiMemcpy(dest, src, size) memcpy((dest), (src), (size))
 
 #define setMemoryTypeChare(p) /* empty memory debugging method */

@@ -14,6 +14,10 @@
 #include <stdlib.h>
 #include <thread>
 #include <vector>
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
+#include <mutex>
 #include <sys/time.h>
 
 // GLOBALS
@@ -90,6 +94,99 @@ thread_local CmiState Cmi_state;
 thread_local bool idle_condition;
 thread_local double idle_time;
 
+/* ---- Sleep on idle: port of classic Converse's CmiIdleLock (machine-smp.C).
+ * A PE that has swept its whole table empty for a while parks on a per-PE
+ * condition variable with a bounded timeout; every push into a queue that
+ * PE polls notifies it. Off by default (+CmiSleepOnIdle turns it on for all
+ * PEs, CsdSetSleepOnIdle for the calling PE). Lost-wake protocol as in
+ * classic: the pusher sets hasMessages then checks isSleeping; the sleeper
+ * sets isSleeping, re-checks hasMessages, then waits with hasMessages as the
+ * predicate. The timeout bounds arrivals that no push announces (IPC
+ * blocks, comm progress driven by the sleeping PE itself). ---- */
+struct CmiIdleLock {
+  std::mutex m;
+  std::condition_variable cv;
+  std::atomic<int> hasMessages{0};
+  std::atomic<int> isSleeping{0};
+  int on = 0;       /* policy for this PE */
+  int nIdles = 0;   /* consecutive idle sweeps */
+  int sleepMs = 0;  /* current backoff, 0 = still spinning */
+};
+static CmiIdleLock *Cmi_idleLocks = nullptr; /* one per rank, indexable by pushers */
+static int Cmi_sleepOnIdle = 0;              /* +CmiSleepOnIdle default for every PE */
+
+/* ---- Library mode: the process outlives the runtime. Worker threads are
+ * joinable; when their scheduler stops they take part in the shutdown
+ * protocol and return from converseRunPe instead of calling ConverseExit;
+ * rank 0 tears the runtime down with ConverseFinalize(), which returns
+ * instead of calling exit(). One init/finalize cycle per process. ---- */
+static int Cmi_libraryMode = 0;
+static std::vector<std::thread> Cmi_workerThreads;
+void ConverseExitParticipate(void);
+void ConverseSetLibraryMode(int on) { Cmi_libraryMode = on; }
+int ConverseGetLibraryMode(void) { return Cmi_libraryMode; }
+#define CMI_IDLE_SPINS_BEFORE_SLEEP 20
+#define CMI_IDLE_SLEEP_STEP_MS 2
+#define CMI_IDLE_SLEEP_MAX_MS 10
+
+void CsdIdleNotify(int rank) {
+  if (Cmi_idleLocks == nullptr || rank < 0 || rank >= Cmi_mynodesize) return;
+  CmiIdleLock &l = Cmi_idleLocks[rank];
+  l.hasMessages.store(1, std::memory_order_seq_cst);
+  if (l.isSleeping.load(std::memory_order_seq_cst)) {
+    std::lock_guard<std::mutex> g(l.m);
+    l.cv.notify_one();
+  }
+}
+
+/* node-level queues may be taken by any PE: wake every sleeper */
+void CsdIdleNotifyAll(void) {
+  if (Cmi_idleLocks == nullptr) return;
+  for (int r = 0; r < Cmi_mynodesize; r++)
+    if (Cmi_idleLocks[r].isSleeping.load(std::memory_order_relaxed) ||
+        !Cmi_idleLocks[r].hasMessages.load(std::memory_order_relaxed))
+      CsdIdleNotify(r);
+}
+
+void CsdSetSleepOnIdle(int on) {
+  if (Cmi_myrank < 0) CmiAbort("CsdSetSleepOnIdle: not on a PE\n");
+  CmiIdleLock &l = Cmi_idleLocks[Cmi_myrank];
+  l.on = on;
+  l.nIdles = 0;
+  l.sleepMs = 0;
+}
+
+int CsdGetSleepOnIdle(void) {
+  return (Cmi_myrank >= 0 && Cmi_idleLocks) ? Cmi_idleLocks[Cmi_myrank].on : 0;
+}
+
+/* called by the scheduler on the transition busy -> idle */
+void CsdIdleReset(void) {
+  CmiIdleLock &l = Cmi_idleLocks[Cmi_myrank];
+  l.nIdles = 0;
+  l.sleepMs = 0;
+}
+
+/* called by the scheduler after each idle sweep (CcdPROCESSOR_STILL_IDLE) */
+void CsdIdleSleepMaybe(void) {
+  CmiIdleLock &l = Cmi_idleLocks[Cmi_myrank];
+  if (!l.on) return;
+  if (++l.nIdles > CMI_IDLE_SPINS_BEFORE_SLEEP) {
+    l.sleepMs += CMI_IDLE_SLEEP_STEP_MS;
+    if (l.sleepMs > CMI_IDLE_SLEEP_MAX_MS) l.sleepMs = CMI_IDLE_SLEEP_MAX_MS;
+  }
+  if (l.sleepMs == 0) return;
+  l.isSleeping.store(1, std::memory_order_seq_cst);
+  if (!l.hasMessages.load(std::memory_order_seq_cst)) {
+    std::unique_lock<std::mutex> g(l.m);
+    l.cv.wait_for(g, std::chrono::milliseconds(l.sleepMs),
+                  [&l] { return l.hasMessages.load(std::memory_order_relaxed) != 0; });
+  }
+  l.isSleeping.store(0, std::memory_order_seq_cst);
+  /* anything pushed from here on is found by the next sweep */
+  l.hasMessages.store(0, std::memory_order_seq_cst);
+}
+
 // Special operation handlers (TODO: should these be special values instead like
 // the exit handler)
 int Cmi_exitHandler;
@@ -114,7 +211,7 @@ void CommRemoteHandler(comm_backend::Status status) {
   CmiMessageHeader *header = (CmiMessageHeader *)status.local_buf;
   int destPE = header->destPE;
   if (destPE == CmiMessageDestPENode) {
-    CmiNodeQueue->push(const_cast<void *>(status.local_buf));
+    CmiPushNode(const_cast<void *>(status.local_buf));
   } else {
     CmiPushPE(CmiRankOf(destPE), status.size, const_cast<void *>(status.local_buf));
   }
@@ -200,6 +297,12 @@ void converseRunPe(int rank, int everReturn) {
       CsdScheduler();
     }
     CmiFreeArgs(CmiMyArgv);
+    if (Cmi_libraryMode) {
+      // take part in the shutdown protocol, then let the thread end so
+      // ConverseFinalize can join it
+      ConverseExitParticipate();
+      return;
+    }
     //todo: add interoperate condition
     ConverseExit();
   }
@@ -216,7 +319,18 @@ void converseRunPe(int rank, int everReturn) {
 
 //function to exit converse and terminate the program
 //waits for all threads to call, then does cleanup on rank 0
-void ConverseExit(int exitcode)
+// broadcast below overwrites it with the spanning tree root.
+struct CmiExitMsg {
+  CmiMessageHeader header;
+  int status;
+};
+
+static std::atomic<int> barrier_done{0};
+static std::atomic<int> exitThread_done{0};
+
+/* The per-PE part of shutdown: arrive, wait for every PE of the node, let
+ * rank 0 run the inter-node barrier, release this PE's comm state. */
+void ConverseExitParticipate(void)
 {
   // increment number of PEs ready for exit
   std::atomic_fetch_add_explicit(&numPEsReadyForExit, 1, std::memory_order_release);
@@ -235,9 +349,6 @@ void ConverseExit(int exitcode)
   // rank 0 waits for all threads to finish exitThread before tearing down
   // the global comm backend and exiting the process.
 
-  static std::atomic<int> barrier_done{0};
-  static std::atomic<int> exitThread_done{0};
-
   if (CmiMyRank() == 0) {
     // participate in the global barrier (blocks until other nodes arrive)
     comm_backend::barrier();
@@ -255,22 +366,55 @@ void ConverseExit(int exitcode)
 
   // signal we've finished exitThread()
   std::atomic_fetch_add_explicit(&exitThread_done, 1, std::memory_order_release);
+}
 
+/* Rank 0's tail: wait for every PE's cleanup, tear down the process-wide
+ * runtime state. Does not exit the process. */
+static void ConverseTeardown(void)
+{
+  // wait for all local threads to complete their per-thread cleanup. Use
+  // progress() to avoid deadlock if any backend progress is needed.
+  while (std::atomic_load_explicit(&exitThread_done, std::memory_order_acquire) != CmiMyNodeSize()) {
+    comm_backend::progress();
+  }
+
+  // safe to tear down global comm backend and process-wide structures now
+  comm_backend::exit();
+  delete[] Cmi_queues;
+  delete CmiNodeQueue;
+  delete[] CmiHandlerTable;
+  Cmi_queues = nullptr;
+  CmiNodeQueue = nullptr;
+  CmiHandlerTable = nullptr;
+}
+
+/* Library mode, rank 0 only: stop every other PE's scheduler, run the
+ * shutdown protocol, join the worker threads, tear down, and RETURN. */
+void ConverseFinalize(void)
+{
+  if (!Cmi_libraryMode) CmiAbort("ConverseFinalize requires library mode (ConverseSetLibraryMode or +CmiLibraryMode)\n");
+  if (CmiMyRank() != 0) CmiAbort("ConverseFinalize must be called on rank 0\n");
+  // stop the other PEs' schedulers (rank 0 is here, not in a scheduler)
+  for (int r = 1; r < Cmi_mynodesize; r++) {
+    CmiExitMsg *m = (CmiExitMsg *)CmiAlloc(sizeof(CmiExitMsg));
+    CmiInitMsgHeader(m, (int)sizeof(CmiExitMsg));
+    m->header.handlerId = Cmi_exitHandler;
+    m->status = 0;
+    CmiPushPE(r, (int)sizeof(CmiExitMsg), m);
+  }
+  ConverseExitParticipate();
+  for (std::thread &t : Cmi_workerThreads) t.join();
+  Cmi_workerThreads.clear();
+  ConverseTeardown();
+}
+
+//function to exit converse and terminate the program
+//waits for all threads to call, then does cleanup on rank 0
+void ConverseExit(int exitcode)
+{
+  ConverseExitParticipate();
   if (CmiMyRank() == 0) {
-    // wait for all local threads to complete their per-thread cleanup. Use
-    // progress() to avoid deadlock if any backend progress is needed.
-    while (std::atomic_load_explicit(&exitThread_done, std::memory_order_acquire) != CmiMyNodeSize()) {
-      comm_backend::progress();
-    }
-
-    // safe to tear down global comm backend and process-wide structures now
-    comm_backend::exit();
-    delete[] Cmi_queues;
-    delete CmiNodeQueue;
-    delete[] CmiHandlerTable;
-    Cmi_queues = nullptr;
-    CmiNodeQueue = nullptr;
-    CmiHandlerTable = nullptr;
+    ConverseTeardown();
     exit(exitcode);
   } else {
     // Non-rank-0 threads block here indefinitely; rank 0 will terminate the
@@ -286,7 +430,10 @@ void CmiStartThreads() {
   // Create threads for ranks 1 and up, run rank 0 on main thread (like original Converse)
   for (int i = 1; i < Cmi_mynodesize; i++) {
     std::thread t(converseRunPe, i, 0); // everReturn is 0 for ranks > 0, meaning these ranks will call the start function and not return from ConverseInit
-    t.detach();
+    if (Cmi_libraryMode)
+      Cmi_workerThreads.push_back(std::move(t)); // joined by ConverseFinalize
+    else
+      t.detach();
   }
 
 }
@@ -373,6 +520,11 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
   backend_poll_thread = 1; // default to every thread
   CmiGetArgInt(argv, "+backend_poll_thread", &backend_poll_thread);
   if (backend_poll_thread < 1) backend_poll_thread = 1;
+  Cmi_sleepOnIdle = CmiGetArgFlagDesc(argv, "+CmiSleepOnIdle",
+      "Idle PEs sleep on a condition variable (2-10 ms backoff) instead of spinning");
+  if (CmiGetArgFlagDesc(argv, "+CmiLibraryMode",
+      "Workers are joinable and ConverseFinalize returns instead of exiting"))
+    Cmi_libraryMode = 1;
 
   Cmi_argv = argv;
   Cmi_startfn = fn;
@@ -394,6 +546,7 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
 
   // allocate global arrays
   Cmi_queues = new ConverseQueue<void *> *[Cmi_mynodesize];
+  Cmi_idleLocks = new CmiIdleLock[Cmi_mynodesize];
   CmiHandlerTable = new std::vector<CmiHandlerInfo> *[Cmi_mynodesize];
   CmiNodeQueue = new ConverseNodeQueue<void *>();
 
@@ -427,6 +580,7 @@ void CmiInitState(int rank) {
   // initialize idle state
   CmiSetIdle(false);
   CmiSetIdleTime(0.0);
+  Cmi_idleLocks[rank].on = Cmi_sleepOnIdle;
 
   // allocate global entries
   ConverseQueue<void *> *queue = new ConverseQueue<void *>();
@@ -538,6 +692,7 @@ void CmiPushPE(int destRank, int messageSize, void *msg) {
     return;
   }
   Cmi_queues[rank]->push(msg);
+  CsdIdleNotify(rank);
 }
 
 /* Classic Converse scheduler-queue enqueue API, used by Charm++'s
@@ -560,6 +715,7 @@ void CmiPushPE(int destRank, void *msg) {
 
 void CmiPushNode(void *msg) {
   CmiNodeQueue->push(msg);
+  CsdIdleNotifyAll();
 }
 
 void *CmiAlloc(int size) {
@@ -731,11 +887,6 @@ void CmiInterFreeSendFn(int destPE, int partition, int messageSize, char *msg) {
 
 // The status travels in the payload, not in the header's collectiveMetaInfo:
 // that field belongs to whichever collective is carrying the message, and the
-// broadcast below overwrites it with the spanning tree root.
-struct CmiExitMsg {
-  CmiMessageHeader header;
-  int status;
-};
 
 void CmiExitHelper(int status) {
   CmiExitMsg *exitMsg = (CmiExitMsg *)CmiAlloc(sizeof(CmiExitMsg));
@@ -892,7 +1043,7 @@ void CmiSyncNodeSendAndFree(unsigned int destNode, unsigned int size,
   }
 
   if (CmiMyNode() == destNode) {
-    CmiNodeQueue->push(msg);
+    CmiPushNode(msg);
   } else {
     comm_backend::issueAm(CmiNodeToGlobal(destNode), msg, size, MRFIELD(msg),
                           CommLocalHandler, g_amHandler, nullptr);

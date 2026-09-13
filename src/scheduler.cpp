@@ -15,10 +15,13 @@ static inline void releaseIdle() {
  * before handling it, exactly as the built-in queue pollers do. */
 void CsdReleaseIdle(void) { releaseIdle(); }
 
-static inline void setIdle() {
+/* maySleep: only the blocking scheduler loop parks the PE; CsdSchedulePoll
+ * must return promptly */
+static inline void setIdle(bool maySleep) {
   if (!CmiGetIdle()) {
     CmiSetIdle(true);
     CmiSetIdleTime(CmiWallTimer());
+    CsdIdleReset();
     CcdRaiseCondition(CcdPROCESSOR_BEGIN_IDLE);
   }
   // if already idle, call still idle and (maybe) long idle
@@ -27,6 +30,7 @@ static inline void setIdle() {
     if (CmiWallTimer() - CmiGetIdleTime() > 10.0) {
       CcdRaiseCondition(CcdPROCESSOR_LONG_IDLE);
     }
+    if (maySleep) CsdIdleSleepMaybe();
   }
 }
 
@@ -191,7 +195,7 @@ void CsdScheduler() {
     //cycle of the table has been checked, so a message doesn't have to
     //wait for loop_counter to rotate back around to its slot
     if (!CsdSweep(loop_counter)) {
-      setIdle();
+      setIdle(true);
     }
     CsdPeriodic();
     loop_counter++;
@@ -217,7 +221,7 @@ void CsdSchedulePoll() {
     //around to its slot
     if (!CsdSweep(loop_counter)) {
       //swept the whole table and every slot was empty: done
-      setIdle();
+      setIdle(false);
       CpvAccess(CsdSchedDepth)--;
       return;
     }
