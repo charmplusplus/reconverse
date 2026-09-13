@@ -7,10 +7,21 @@
 # reconverse through RECONVERSE_SOURCE_DIR, so no submodule bump is needed
 # to test a pull request's tree.
 #
+# ADVISORY, not gating (Kale, 2026-09-12). A change that has to land in
+# reconverse and Charm++ together cannot pass this job before the Charm++
+# half is merged, and the Charm++ half cannot be tested before the
+# reconverse half is merged; making the job a merge requirement would leave
+# both stuck. So every test step continues on error, the job itself always
+# reports success, and the outcome is delivered as a warning annotation, a
+# job summary, and a pull-request comment that says plainly that Charm++
+# breaks under this change. Reviewers read that and decide.
+#
 # Which Charm++ to pair with is the repository variable CHARM_REF (a branch
-# or SHA); it defaults to the reconverse integration branch. Move it
-# deliberately: a Charm++ change that breaks the pairing turns this job red
-# on every reconverse PR, which is the point, but somebody owns the pin.
+# or SHA), defaulting to the reconverse integration branch. A pull request
+# that pairs with a specific Charm++ branch (the other half of a coupled
+# change) can say so in its description with a line
+#     CHARM_REF: <branch-or-sha>
+# and the job tests against that instead.
 #
 # The test tier mirrors charm's .github/workflows/reconverse-ci.yaml, plus
 # within_node_bcast and the zerocopy dirs that caught #217 and #222. This
@@ -29,6 +40,10 @@ on:
 concurrency:
   group: charm-ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
 
 env:
   CHARM_REF: ${{ vars.CHARM_REF || 'reviewed-with-reconverse' }}
@@ -53,7 +68,7 @@ env:
 
 jobs:
   charm-linux-x86_64:
-    name: Charm++ (${{ github.event.repository.name }} PR tree), linux x86_64
+    name: "Charm++ (${{ github.event.repository.name }} PR tree), linux x86_64 [advisory]"
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -62,16 +77,33 @@ jobs:
         with:
           path: reconverse
 
+      - name: Pick the Charm++ ref (PR description may override CHARM_REF)
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          ref=$(printf '%s\n' "$PR_BODY" | sed -nE 's/^[[:space:]]*CHARM_REF[[:space:]]*[:=][[:space:]]*([A-Za-z0-9._\/-]+).*/\1/p' | head -1)
+          if [ -n "$ref" ]; then
+            echo "CHARM_REF=$ref" >> "$GITHUB_ENV"
+            echo "Pairing with Charm++ '$ref' (from the pull request description)"
+          else
+            echo "Pairing with Charm++ '$CHARM_REF' (repository default)"
+          fi
+
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y cmake libfabric-dev
 
       - name: Clone Charm++ at CHARM_REF
+        id: clone
+        continue-on-error: true
         run: |
           git clone --depth 1 --branch "$CHARM_REF" https://github.com/charmplusplus/charm charm \
             || { git clone https://github.com/charmplusplus/charm charm && git -C charm checkout "$CHARM_REF"; }
           git -C charm log --oneline -1
 
       - name: Build Charm++ against the PR's reconverse
+        id: build
+        if: steps.clone.outcome == 'success'
+        continue-on-error: true
         working-directory: charm
         run: |
           ./build charm++ reconverse-linux-x86_64 -j4 -g \
@@ -80,17 +112,68 @@ jobs:
             || grep -rm1 'Using reconverse from' reconverse-linux-x86_64/CMakeCache.txt || true
 
       - name: Build the test tier
+        id: tier
+        if: steps.build.outcome == 'success'
+        continue-on-error: true
         working-directory: charm
         run: |
           B=$PWD/reconverse-linux-x86_64
           for d in $TEST_DIRS; do make -C $d CHARMC=$B/bin/charmc; done
 
       - name: Test, single process
+        id: test1
+        if: steps.tier.outcome == 'success'
+        continue-on-error: true
         working-directory: charm
         run: |
           for d in $TEST_DIRS; do make -C $d test; done
 
       - name: Test, two processes (lcrun)
+        id: test2
+        if: steps.tier.outcome == 'success'
+        continue-on-error: true
         working-directory: charm
         run: |
           for d in $TEST_DIRS; do TESTRUN_PROCS=2 make -C $d test; done
+
+      # Always succeeds. Turns the outcomes above into the advisory.
+      - name: Report (advisory)
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          O_CLONE: ${{ steps.clone.outcome }}
+          O_BUILD: ${{ steps.build.outcome }}
+          O_TIER: ${{ steps.tier.outcome }}
+          O_TEST1: ${{ steps.test1.outcome }}
+          O_TEST2: ${{ steps.test2.outcome }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          failed=""
+          for s in "clone Charm++:$O_CLONE" "build Charm++:$O_BUILD" "build test tier:$O_TIER" \
+                   "tests, 1 process:$O_TEST1" "tests, 2 processes:$O_TEST2"; do
+            case "${s##*:}" in failure) failed="$failed ${s%:*};";; esac
+          done
+          marker='<!-- charm-ci-advisory -->'
+          if [ -z "$failed" ]; then
+            verdict="Charm++ ($CHARM_REF) builds and its reconverse test tier passes against this tree."
+            echo "$verdict"
+            { echo "### Charm++ on this reconverse: pass"; echo; echo "$verdict"; } >> "$GITHUB_STEP_SUMMARY"
+          else
+            verdict="Charm++ ($CHARM_REF) BREAKS against this reconverse tree. Failed:${failed} Reconverse's own CI is a separate check; this job is advisory and does not block the merge. If this pull request is one half of a coupled reconverse+Charm++ change, say so in the description (CHARM_REF: <branch>) and make sure the Charm++ half is reviewed with it. Otherwise: you are about to merge something that breaks the only user of this runtime; I hope you know what you are doing. Details: $RUN_URL"
+            echo "::warning title=Charm++ breaks under this change::$verdict"
+            { echo "### Charm++ on this reconverse: FAIL (advisory)"; echo; echo "$verdict"; } >> "$GITHUB_STEP_SUMMARY"
+          fi
+          # Pull-request comment, updated in place (needs a writable token;
+          # a fork's token is read-only, so failures here are ignored).
+          if [ -n "$PR_NUMBER" ]; then
+            body=$(printf '%s\n**Charm++ on this reconverse (advisory):** %s' "$marker" "$verdict")
+            cid=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" --paginate \
+                    --jq ".[] | select(.body | startswith(\"$marker\")) | .id" 2>/dev/null | head -1 || true)
+            if [ -n "$cid" ]; then
+              gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$cid" -f body="$body" >/dev/null 2>&1 || true
+            else
+              gh api "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" -f body="$body" >/dev/null 2>&1 || true
+            fi
+          fi
+          exit 0
