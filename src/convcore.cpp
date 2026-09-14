@@ -388,7 +388,13 @@ static inline void CmiSpinBackoff(unsigned &spins) {
   ++spins;
   if (spins <= 256) return;              /* the common case: everyone is close */
   if (spins <= 4096) { sched_yield(); return; }
-  struct timespec ts = {0, 50000};       /* 50 us; a yield loop still burns the core in the kernel */
+  /* a yield loop still burns the core in the kernel; sleep, doubling from
+   * 50 us to a 2 ms cap so a long wait costs a handful of syscalls
+   * (150 Margo test processes x 32 PEs at a fixed 50 us spent 54 s of
+   * system time in these loops) */
+  unsigned k = spins - 4096; long ns = 50000;
+  while (k > 1 && ns < 2000000) { ns *= 2; k >>= 1; }
+  struct timespec ts = {0, ns};
   nanosleep(&ts, nullptr);
 }
 
