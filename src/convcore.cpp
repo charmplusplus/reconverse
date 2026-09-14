@@ -14,6 +14,7 @@
 #include <stdlib.h>
 #include <thread>
 #include <sched.h>
+#include <time.h>
 #include <vector>
 #include <atomic>
 #include <chrono>
@@ -384,7 +385,11 @@ static std::atomic<int> exitThread_done{0};
  * a 128-PE process on 32 cores spent ~1 s and ~30 CPU-s in start-up and
  * shutdown. With one core per PE the yield is a no-op. */
 static inline void CmiSpinBackoff(unsigned &spins) {
-  if (++spins > 256) sched_yield();
+  ++spins;
+  if (spins <= 256) return;              /* the common case: everyone is close */
+  if (spins <= 4096) { sched_yield(); return; }
+  struct timespec ts = {0, 50000};       /* 50 us; a yield loop still burns the core in the kernel */
+  nanosleep(&ts, nullptr);
 }
 
 /* The per-PE part of shutdown: arrive, wait for every PE of the node, let
