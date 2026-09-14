@@ -595,7 +595,8 @@ void CsdSetSleepOnIdle(int on);
 int CsdGetSleepOnIdle(void);
 void CsdIdleNotify(int rank);
 void CsdIdleNotifyAll(void);
-void CsdIdleWait(double max_sec); /* park this PE until a push to its queues, CsdIdleNotify(rank), or the timeout */
+void CsdIdleWait(double max_sec);
+void CmiInitTracePhase(int rank, const char *phase); /* CMI_INIT_TRACE=1: stderr line per PE per start-up/shutdown phase */ /* park this PE until a push to its queues, CsdIdleNotify(rank), or the timeout */
 
 /* The scheduler queue: messages ordered by priority value (smaller first,
  * negative before zero before positive), FIFO within one priority value, or

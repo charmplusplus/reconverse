@@ -204,6 +204,7 @@ void CsdIdleSleepMaybe(void) {
     if (l.sleepMs > CMI_IDLE_SLEEP_MAX_MS) l.sleepMs = CMI_IDLE_SLEEP_MAX_MS;
   }
   if (l.sleepMs == 0) return;
+  if (l.nIdles == CMI_IDLE_SPINS_BEFORE_SLEEP + 1) CmiInitTracePhase(Cmi_myrank, "first-idle-sleep");
   l.isSleeping.store(1, std::memory_order_seq_cst);
   if (!l.hasMessages.load(std::memory_order_seq_cst)) {
     std::unique_lock<std::mutex> g(l.m);
@@ -254,14 +255,25 @@ void CmiCallHandler(int handler, void *msg) {
   }
 }
 
+/* CMI_INIT_TRACE=1: one stderr line per PE per start-up / shutdown phase,
+ * with the wall time, to see where a many-PE process spends its start-up. */
+static int Cmi_initTrace = -1;
+void CmiInitTracePhase(int rank, const char *phase) {
+  if (Cmi_initTrace < 0) Cmi_initTrace = getenv("CMI_INIT_TRACE") ? 1 : 0;
+  if (!Cmi_initTrace) return;
+  fprintf(stderr, "[init-trace] rank %3d %-20s %.6f\n", rank, phase, CmiWallTimer());
+}
+
 void converseRunPe(int rank, int everReturn) {
   char **CmiMyArgv;
+  CmiInitTracePhase(rank, "runpe-enter");
   CmiMyArgv = CmiCopyArgs(Cmi_argv);
 
   // init state
   CmiInitState(rank);
   // init comm_backend
   comm_backend::initThread(rank, CmiMyNodeSize());
+  CmiInitTracePhase(rank, "state+commthread");
 
   #if CMK_TASKQUEUE
   // init per-PE task queue
@@ -284,7 +296,9 @@ void converseRunPe(int rank, int everReturn) {
   // A global barrier to ensure all global structs are initialized
   //printf("[DBG] pe %d rank %d: converseRunPe nodebarrier1 start\n", CmiMyPe(), rank); fflush(stdout);
   comm_backend::init_mempool();
+  CmiInitTracePhase(rank, "barrier1-arrive");
   CmiNodeBarrier();
+  CmiInitTracePhase(rank, "barrier1-done");
   //printf("[DBG] pe %d rank %d: converseRunPe nodebarrier1 done\n", CmiMyPe(), rank); fflush(stdout);
   if (rank == 0) {
     //printf("[DBG] pe %d: converseRunPe global barrier start\n", CmiMyPe()); fflush(stdout);
@@ -293,10 +307,12 @@ void converseRunPe(int rank, int everReturn) {
   }
   //printf("[DBG] pe %d rank %d: converseRunPe nodebarrier2 start\n", CmiMyPe(), rank); fflush(stdout);
   CmiNodeBarrier();
+  CmiInitTracePhase(rank, "barrier2-done");
   //printf("[DBG] pe %d rank %d: converseRunPe nodebarrier2 done\n", CmiMyPe(), rank); fflush(stdout);
 
   CthInit(CmiMyArgv);
   CthSchedInit();
+  CmiInitTracePhase(rank, "cth-init-done");
 
   CpvInitialize(int, isHelperOn);
   // Every worker thread is a CkLoop/OpenMP helper by default, matching Converse
@@ -318,6 +334,7 @@ void converseRunPe(int rank, int everReturn) {
   * on rank 0, still calls startfn on other ranks (used by namd)
   */
 
+  CmiInitTracePhase(rank, everReturn ? "initret" : "startfn");
   if(!everReturn)
   {
     Cmi_startfn(CmiGetArgc(CmiMyArgv), CmiMyArgv);
@@ -328,7 +345,9 @@ void converseRunPe(int rank, int everReturn) {
     if (Cmi_libraryMode) {
       // take part in the shutdown protocol, then let the thread end so
       // ConverseFinalize can join it
+      CmiInitTracePhase(rank, "sched-returned");
       ConverseExitParticipate();
+      CmiInitTracePhase(rank, "exit-participated");
       return;
     }
     //todo: add interoperate condition
@@ -362,11 +381,13 @@ void ConverseExitParticipate(void)
 {
   // increment number of PEs ready for exit
   std::atomic_fetch_add_explicit(&numPEsReadyForExit, 1, std::memory_order_release);
+  CmiInitTracePhase(CmiMyRank(), "exit-arrive");
   // we need everyone to spin unlike old converse to be able to exit threads
   while (std::atomic_load_explicit(&numPEsReadyForExit, std::memory_order_acquire) != CmiMyNodeSize()) {
     // make progress while waiting so network progress can continue
     comm_backend::progress();
   }
+  CmiInitTracePhase(CmiMyRank(), "exit-all-arrived");
 
   // At this point all threads on the node are ready to exit. We must perform
   // the inter-node barrier while per-thread communication contexts are still
@@ -389,6 +410,7 @@ void ConverseExitParticipate(void)
     }
   }
 
+  CmiInitTracePhase(CmiMyRank(), "exit-barrier-done");
   // Now every thread can clean up its thread-local comm state.
   comm_backend::exitThread();
 
@@ -430,10 +452,13 @@ void ConverseFinalize(void)
     m->status = 0;
     CmiPushPE(r, (int)sizeof(CmiExitMsg), m);
   }
+  CmiInitTracePhase(0, "finalize-exits-sent");
   ConverseExitParticipate();
   for (std::thread &t : *Cmi_workerThreads) t.join();
+  CmiInitTracePhase(0, "finalize-joined");
   Cmi_workerThreads->clear();
   ConverseTeardown();
+  CmiInitTracePhase(0, "finalize-done");
 }
 
 //function to exit converse and terminate the program
@@ -471,6 +496,7 @@ void CmiStartThreads() {
 // TODO: the input parsing, cmi_arg parsing is not done/robust
 void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
                   int initret) {
+  CmiInitTracePhase(0, "converse-init-begin");
 
 
   // Run size options. Exactly one of these may be given:
@@ -589,7 +615,9 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
   //if (Cmi_mynode == 0) { printf("[DBG] node 0: ConverseInit barrier done\n"); fflush(stdout); }
 
   //launch threads on rank 1+
+  CmiInitTracePhase(0, "threads-starting");
   CmiStartThreads();
+  CmiInitTracePhase(0, "threads-started");
   //run rank 0 on main thread
   converseRunPe(0, Cmi_initret);
 }
