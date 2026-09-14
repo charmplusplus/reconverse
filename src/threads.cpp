@@ -600,6 +600,8 @@ void CthSetAwakenFn(CthThread t, CthAwakenArgFn fn, void *arg) {
 }
 
 void *CthGetAwakenArg(CthThread t) { return B(t)->awakenArg; }
+void CthSetChooseFn(CthThread t, CthThFn chsfn) { B(t)->choosefn = chsfn; }
+CthThread CthGetSchedulingThread(void) { return CpvAccess(CthSchedulingThread); }
 int CthIsPeMainThread(CthThread t) { return B(t)->isPeMain; }
 int CthGetHomeRank(CthThread t) { return B(t)->homeRank; }
 

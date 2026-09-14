@@ -365,6 +365,11 @@ typedef void (*CthAwakenArgFn)(CthThread t, void *arg);
 void CthSetAwakenFn(CthThread t, CthAwakenArgFn fn, void *arg); /* NULL = default */
 int  CthIsPeMainThread(CthThread t);  /* a PE's original thread: its token may only be resumed on that PE */
 int  CthGetHomeRank(CthThread t);
+/* A library running its own scheduler loop on a thread U needs the ULTs it
+ * resumes to come back to U when they suspend, not to the PE's scheduler:
+ * set their choose function to one that returns U. */
+void CthSetChooseFn(CthThread t, CthThFn chsfn);
+CthThread CthGetSchedulingThread(void); /* what the default choose function returns on this PE */
 void *CthGetAwakenArg(CthThread t);
 int CthAwakenIfBlocked(CthThread t); /* 1 if it moved BLOCKED->READY and awakened */
 void CthSuspendBlocked(CthVoidFn after, void *arg); /* after() runs post-switch */
