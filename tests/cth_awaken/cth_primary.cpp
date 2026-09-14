@@ -15,13 +15,18 @@ struct SharedQueue {
   void push(void *x) { std::lock_guard<std::mutex> g(m); q.push_back(x); }
   void *pop() { std::lock_guard<std::mutex> g(m); if (q.empty()) return nullptr; void *x = q.front(); q.pop_front(); return x; }
 };
-static SharedQueue wrongQ; /* if the primary's token ever lands here, it was not pinned */
+static SharedQueue wrongQ; /* a queue nobody polls */
 static SharedQueue blockedL;
 static std::atomic<int> stopPolling{0};
 struct Msg { char hdr[CmiMsgHeaderSizeBytes]; };
 static int wakerIdx, exitIdx, checkIdx;
 
-static void pushToken(CthThread t, void *arg) { ((SharedQueue *)arg)->push(CthGetToken(t)); }
+/* the contract for a PE main thread: the custom function is called (so a
+ * library can keep queue order) but must deliver the token to the home PE */
+static void pushToken(CthThread t, void *arg) {
+  if (CthIsPeMainThread(t)) { CmiPushPE(CthGetHomeRank(t), CthGetToken(t)); return; }
+  ((SharedQueue *)arg)->push(CthGetToken(t));
+}
 static void registerBlocked(void *self) { blockedL.push(self); }
 
 static void wakerHandler(void *m) {
@@ -32,7 +37,7 @@ static void wakerHandler(void *m) {
 }
 static void checkHandler(void *m) {
   CmiFree(m);
-  if (wrongQ.pop() != nullptr) CmiAbort("primary token was pushed to the custom queue, not pinned\n");
+  if (wrongQ.pop() != nullptr) CmiAbort("a token was pushed to the unpolled queue\n");
 }
 static void exitHandler(void *m) { CmiFree(m); CsdExitScheduler(); }
 
