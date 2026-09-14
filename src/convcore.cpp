@@ -166,6 +166,25 @@ int CsdGetSleepOnIdle(void) {
   return (Cmi_myrank >= 0 && Cmi_idleLocks) ? Cmi_idleLocks[Cmi_myrank].on : 0;
 }
 
+/* Public: park the calling PE for at most max_sec seconds or until a push to
+ * one of its queues (CmiPushPE, node queue) or an explicit CsdIdleNotify.
+ * Independent of the sleep-on-idle policy: a library's idle hook uses it to
+ * block on its own queues while still being woken by runtime messages. */
+void CsdIdleWait(double max_sec) {
+  if (Cmi_myrank < 0 || Cmi_idleLocks == nullptr) return;
+  CmiIdleLock &l = Cmi_idleLocks[Cmi_myrank];
+  Cmi_sleepersEnabled.fetch_add(1);          /* make pushers look at us */
+  l.isSleeping.store(1, std::memory_order_seq_cst);
+  if (!l.hasMessages.load(std::memory_order_seq_cst)) {
+    std::unique_lock<std::mutex> g(l.m);
+    l.cv.wait_for(g, std::chrono::duration<double>(max_sec > 0 ? max_sec : 0),
+                  [&l] { return l.hasMessages.load(std::memory_order_relaxed) != 0; });
+  }
+  l.isSleeping.store(0, std::memory_order_seq_cst);
+  l.hasMessages.store(0, std::memory_order_seq_cst);
+  Cmi_sleepersEnabled.fetch_sub(1);
+}
+
 /* called by the scheduler on the transition busy -> idle */
 void CsdIdleReset(void) {
   CmiIdleLock &l = Cmi_idleLocks[Cmi_myrank];
