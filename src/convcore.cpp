@@ -526,6 +526,19 @@ void CmiStartThreads() {
 void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
                   int initret) {
   CmiInitTracePhase(0, "converse-init-begin");
+  /* A second ConverseInit in one process happens in a forked child of an
+   * initialized process (a library restarting its runtime there): the
+   * parent's worker threads do not exist in the child, so their std::thread
+   * handles must never be joined -- leak them -- and the node-wide exit
+   * counters start from zero again. */
+  static int Cmi_initCount = 0;
+  if (Cmi_initCount++ > 0) {
+    Cmi_workerThreads = new std::vector<std::thread>();
+    numPEsReadyForExit.store(0);
+    barrier_done.store(0);
+    exitThread_done.store(0);
+    Cmi_sleepersEnabled.store(0);
+  }
 
 
   // Run size options. Exactly one of these may be given:
