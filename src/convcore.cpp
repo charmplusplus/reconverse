@@ -13,6 +13,7 @@
 #include <sys/stat.h>
 #include <stdlib.h>
 #include <thread>
+#include <sched.h>
 #include <vector>
 #include <atomic>
 #include <chrono>
@@ -375,6 +376,17 @@ struct CmiExitMsg {
 static std::atomic<int> barrier_done{0};
 static std::atomic<int> exitThread_done{0};
 
+/* Spin-wait backoff for the whole-node waits (node barriers, exit protocol):
+ * after a short pure spin, yield the core on every iteration. With fewer
+ * cores than PEs (a shared node, a cgroup, a login node) pure spinning
+ * starves the PEs that still have to arrive, and each phase then lasts as
+ * long as the OS scheduler takes to run every starved PE for its turn --
+ * a 128-PE process on 32 cores spent ~1 s and ~30 CPU-s in start-up and
+ * shutdown. With one core per PE the yield is a no-op. */
+static inline void CmiSpinBackoff(unsigned &spins) {
+  if (++spins > 256) sched_yield();
+}
+
 /* The per-PE part of shutdown: arrive, wait for every PE of the node, let
  * rank 0 run the inter-node barrier, release this PE's comm state. */
 void ConverseExitParticipate(void)
@@ -383,9 +395,11 @@ void ConverseExitParticipate(void)
   std::atomic_fetch_add_explicit(&numPEsReadyForExit, 1, std::memory_order_release);
   CmiInitTracePhase(CmiMyRank(), "exit-arrive");
   // we need everyone to spin unlike old converse to be able to exit threads
+  unsigned spins = 0;
   while (std::atomic_load_explicit(&numPEsReadyForExit, std::memory_order_acquire) != CmiMyNodeSize()) {
     // make progress while waiting so network progress can continue
     comm_backend::progress();
+    CmiSpinBackoff(spins);
   }
   CmiInitTracePhase(CmiMyRank(), "exit-all-arrived");
 
@@ -405,8 +419,10 @@ void ConverseExitParticipate(void)
     barrier_done.store(1, std::memory_order_release);
   } else {
     // other threads help make progress until rank 0 finishes the barrier
+    spins = 0;
     while (std::atomic_load_explicit(&barrier_done, std::memory_order_acquire) == 0) {
       comm_backend::progress();
+      CmiSpinBackoff(spins);
     }
   }
 
@@ -424,8 +440,10 @@ static void ConverseTeardown(void)
 {
   // wait for all local threads to complete their per-thread cleanup. Use
   // progress() to avoid deadlock if any backend progress is needed.
+  unsigned spins = 0;
   while (std::atomic_load_explicit(&exitThread_done, std::memory_order_acquire) != CmiMyNodeSize()) {
     comm_backend::progress();
+    CmiSpinBackoff(spins);
   }
 
   // safe to tear down global comm backend and process-wide structures now
@@ -1057,8 +1075,10 @@ void CmiBarrier(void) {
 void CmiNodeBarrier(void) {
   static Barrier nodeBarrier(CmiMyNodeSize());
   int64_t ticket = nodeBarrier.arrive();
+  unsigned spins = 0;
   while (!nodeBarrier.test_ticket(ticket)) {
     comm_backend::progress();
+    CmiSpinBackoff(spins);
   }
 }
 
