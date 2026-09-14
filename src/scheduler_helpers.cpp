@@ -114,11 +114,20 @@ static void CsdTableInstallHandler(void *vmsg) {
 }
 
 void CsdSchedTableInstall(int rank, CsdSchedTable t) {
+  if (rank == CmiMyRank()) {
+    /* Set the pending pointer directly: the caller may free objects the
+     * current table polls right after this call, and a message through the
+     * self queue would let one more sweep of the old table run first. The
+     * swap still happens at the loop top, never inside a sweep. */
+    if (CpvAccess(CsdPendingTable) != nullptr) CsdSchedTableDestroy(CpvAccess(CsdPendingTable));
+    CpvAccess(CsdPendingTable) = t;
+    return;
+  }
   CsdInstallMsg *m = (CsdInstallMsg *)CmiAlloc(sizeof(CsdInstallMsg));
   CmiInitMsgHeader(m, (int)sizeof(CsdInstallMsg));
   CmiSetHandler(m, CsdTableInstallIdx);
   m->table = t;
-  CmiPushPE(rank, m); /* rank == self takes the same path; consumed at loop top */
+  CmiPushPE(rank, m); /* consumed at the target's loop top */
 }
 
 void CsdSchedTableLoopTop(void) {
