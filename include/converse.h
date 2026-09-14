@@ -363,6 +363,8 @@ enum {
 };
 typedef void (*CthAwakenArgFn)(CthThread t, void *arg);
 void CthSetAwakenFn(CthThread t, CthAwakenArgFn fn, void *arg); /* NULL = default */
+int  CthIsPeMainThread(CthThread t);  /* a PE's original thread: its token may only be resumed on that PE */
+int  CthGetHomeRank(CthThread t);
 void *CthGetAwakenArg(CthThread t);
 int CthAwakenIfBlocked(CthThread t); /* 1 if it moved BLOCKED->READY and awakened */
 void CthSuspendBlocked(CthVoidFn after, void *arg); /* after() runs post-switch */

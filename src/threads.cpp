@@ -235,8 +235,15 @@ static void CthEnqueueCustomThread(CthThreadToken *token, int s, int pb,
                                    unsigned int *prio) {
   CthThreadBase *th = B(token->thread);
   if (th->isPeMain) {
+    /* A PE main thread carries the scheduling-resume flavour and MUST be
+     * popped by its own PE (CthResumeSchedulingThread's bookkeeping is
+     * per-PE). The custom function is still called so the token can take
+     * its place in the caller's queue order; the contract is that the
+     * queue only lets PE homeRank resume it. Without a custom function the
+     * token goes straight to the home PE's queue. */
     CmiSetHandler(token, CthResumeSchedulingIdxGlobal);
-    CmiPushPE(th->homeRank, (int)sizeof(CthThreadToken), token);
+    if (th->awakenArgFn) th->awakenArgFn(token->thread, th->awakenArg);
+    else CmiPushPE(th->homeRank, (int)sizeof(CthThreadToken), token);
   } else {
     CmiSetHandler(token, CthResumeNormalIdxGlobal);
     th->awakenArgFn(token->thread, th->awakenArg);
@@ -593,6 +600,8 @@ void CthSetAwakenFn(CthThread t, CthAwakenArgFn fn, void *arg) {
 }
 
 void *CthGetAwakenArg(CthThread t) { return B(t)->awakenArg; }
+int CthIsPeMainThread(CthThread t) { return B(t)->isPeMain; }
+int CthGetHomeRank(CthThread t) { return B(t)->homeRank; }
 
 int CthAwakenIfBlocked(CthThread t) {
   CthThreadBase *th = B(t);
