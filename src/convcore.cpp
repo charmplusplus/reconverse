@@ -125,7 +125,10 @@ static std::atomic<int> Cmi_sleepersEnabled{0};
  * rank 0 tears the runtime down with ConverseFinalize(), which returns
  * instead of calling exit(). One init/finalize cycle per process. ---- */
 static int Cmi_libraryMode = 0;
-static std::vector<std::thread> Cmi_workerThreads;
+/* heap-allocated and never destroyed: a std::thread that is still joinable
+ * when its vector is destroyed calls std::terminate, and a process may exit
+ * (exit() from any thread) without ever reaching ConverseFinalize */
+static std::vector<std::thread> *Cmi_workerThreads = new std::vector<std::thread>();
 void ConverseExitParticipate(void);
 void ConverseSetLibraryMode(int on) { Cmi_libraryMode = on; }
 int ConverseGetLibraryMode(void) { return Cmi_libraryMode; }
@@ -428,8 +431,8 @@ void ConverseFinalize(void)
     CmiPushPE(r, (int)sizeof(CmiExitMsg), m);
   }
   ConverseExitParticipate();
-  for (std::thread &t : Cmi_workerThreads) t.join();
-  Cmi_workerThreads.clear();
+  for (std::thread &t : *Cmi_workerThreads) t.join();
+  Cmi_workerThreads->clear();
   ConverseTeardown();
 }
 
@@ -456,7 +459,7 @@ void CmiStartThreads() {
   for (int i = 1; i < Cmi_mynodesize; i++) {
     std::thread t(converseRunPe, i, 0); // everReturn is 0 for ranks > 0, meaning these ranks will call the start function and not return from ConverseInit
     if (Cmi_libraryMode)
-      Cmi_workerThreads.push_back(std::move(t)); // joined by ConverseFinalize
+      Cmi_workerThreads->push_back(std::move(t)); // joined by ConverseFinalize
     else
       t.detach();
   }
