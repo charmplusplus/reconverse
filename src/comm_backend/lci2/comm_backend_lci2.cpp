@@ -321,13 +321,19 @@ void CommBackendLCI2::issueRput(int rank, const void *local_buf, size_t size,
                                 CompHandler localComp, void *user_context) {
   auto args = new localCallbackArgs{localComp, user_context};
   lci::status_t status;
+  // Same reentrancy guard as issueAm/issueRget: when called from inside a
+  // completion callback this thread already holds m_progress_locks[dev], so the
+  // nested progress() below is a no-op. Spinning on retry would then hold that
+  // lock forever and wedge the device CQ. Push to the LCI backlog instead.
+  bool allow_retry = !detail::g_in_progress_callback;
   do {
     status = lci::post_put_x(rank, const_cast<void *>(local_buf), size,
                              m_local_comp, remote_disp, getThreadLocalRMR(rmr))
                  .mr(getThreadLocalMR(local_mr))
                  .device(getThreadLocalDevice())
-                 .user_context(args)();
-    progress();
+                 .user_context(args)
+                 .allow_retry(allow_retry)();
+    if (allow_retry) progress();
   } while (status.is_retry());
   if (status.is_done()) {
     localComp({local_buf, size, user_context});
@@ -350,9 +356,10 @@ bool CommBackendLCI2::progress(void) {
     // Mark that completion callbacks fired inside progress_x() are reentrant.
     // issueAm/issueRget check this flag to avoid spinning (which would hold
     // m_progress_locks indefinitely and deadlock the TX queue drain path).
+    bool prev_in_cb = detail::g_in_progress_callback;
     detail::g_in_progress_callback = true;
     auto ret = lci::progress_x().device(detail::g_thread_context.tls_device)();
-    detail::g_in_progress_callback = false;
+    detail::g_in_progress_callback = prev_in_cb;
     m_progress_locks[dev_idx].store(false, std::memory_order_release);
     return ret.is_done();
   } else {
@@ -364,9 +371,10 @@ bool CommBackendLCI2::progress(void) {
               std::memory_order_relaxed)) {
         continue;
       }
+      bool prev_in_cb = detail::g_in_progress_callback;
       detail::g_in_progress_callback = true;
       auto ret = lci::progress_x().device(m_devices[i])();
-      detail::g_in_progress_callback = false;
+      detail::g_in_progress_callback = prev_in_cb;
       m_progress_locks[i].store(false, std::memory_order_release);
       if (ret.is_done())
         did_progress = true;
