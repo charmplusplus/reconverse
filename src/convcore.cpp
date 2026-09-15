@@ -1360,11 +1360,42 @@ void CmiHandleMessage(void *msg) {
 
   CmiCallHandler(handler, msg);
 }
-// TODO: implement CmiPrintf
+// CHARM_PRINTF_TS: prefix every line with the wall clock (seconds within the
+// current 10000 s, microsecond resolution) so prints from every PE and process
+// on a node can be laid on one timeline. The line is formatted first and
+// written with one call, so the stamp and its text are not interleaved by
+// another thread. Off by default and free when off.
+static inline bool cmiPrintfTs() {
+  static const bool on = getenv("CHARM_PRINTF_TS") != nullptr;
+  return on;
+}
 int CmiPrintf(const char *format, ...) {
   if (quietMode) return 0;
   va_list args;
   va_start(args, format);
+
+  if (cmiPrintfTs()) {
+    static thread_local bool atLineStart = true;
+    char buf[4096];
+    va_list copy;
+    va_copy(copy, args);
+    const int len = vsnprintf(buf, sizeof buf, format, copy);
+    va_end(copy);
+    if (len >= 0 && (size_t)len < sizeof buf) {
+      if (atLineStart) {
+        // getCurrentTime() is the wall clock on every platform this builds on
+        // (CLOCK_REALTIME, or the Windows system time), so no <time.h> here.
+        const double now = getCurrentTime();
+        const double t = now - 10000.0 * (double)(long long)(now / 10000.0);
+        printf("[%.6f] %s", t, buf);
+      } else {
+        fputs(buf, stdout);
+      }
+      atLineStart = (len > 0 && buf[len - 1] == '\n');
+      va_end(args);
+      return 0;
+    }
+  }
 
   // Call the actual printf function
   vprintf(format, args);
