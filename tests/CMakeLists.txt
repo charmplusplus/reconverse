@@ -34,12 +34,7 @@ add_subdirectory(cth_listener)
 add_subdirectory(handlers)
 add_subdirectory(abort_peer)
 add_subdirectory(megarecon)
-
-# Diagnostic programs for issue #219 (fan-out message copies). They are build
-# targets only, not ctest tests: fanout_probe deliberately exercises the unsafe
-# shape (one buffer shared by sends to several destination PEs) to show that it
-# mis-delivers, and fanout_bench is a timing harness.
-add_subdirectory(fanout_probe)
+add_subdirectory(fanout_refcount)
 
 # Add a test that configures, builds, and runs standalone_project
 add_test(NAME standalone_project_build_and_test

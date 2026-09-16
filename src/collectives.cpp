@@ -1,11 +1,14 @@
 #include "converse_internal.h"
+#include <algorithm>
 #include <thread>
+#include <vector>
 
 int Cmi_bcastHandler;
 int Cmi_nodeBcastHandler;
 int Cmi_reduceHandler;
 int Cmi_nodeReduceHandler;
 int Cmi_multicastHandler;
+int Cmi_fanoutHandler;
 thread_local int CmiGroupHandlerIndex;
 thread_local GroupDef *CmiGroupTable;
 thread_local int CmiGroupCounter;
@@ -20,6 +23,9 @@ void collectiveInit(void) {
   CmiGroupHandlerIndex = CmiRegisterHandler(CmiGroupHandler);
   Cmi_reduceHandler = CmiRegisterHandler(CmiReduceHandler);
   Cmi_nodeReduceHandler = CmiRegisterHandler(CmiNodeReduceHandler);
+  // Every PE registers in the same order, so the index is the same on every PE
+  // of every process; CmiAssignOnce publishes it once per process.
+  CmiAssignOnce(&Cmi_fanoutHandler, CmiRegisterHandler(CmiFanoutHandler));
   CmiGroupTable = (GroupDef *)calloc(GROUPTAB_SIZE, sizeof(GroupDef));
   CmiGroupCounter = 0;
   CmiReductionsInit();
@@ -666,9 +672,175 @@ void CmiLookupGroup(CmiGroup grp, int *npes, int **pes) {
   *pes = 0;
 }
 
+/************* List sends ***************/
+
+/* A list send used to be a loop over CmiSyncSend, so a message going to N
+ * destinations was allocated and copied N times and put on the wire N times.
+ * It now sends ONE message per destination PROCESS. That message carries the
+ * destination ranks within the process ahead of the payload, and the receiving
+ * process hands the payload to those ranks (Cmi_fanoutHandler below).
+ *
+ * Why the ranks travel inside the message instead of one shared buffer being
+ * referenced once per destination (the first proposal in issue #219):
+ * CmiSyncSendAndFreeNoPersistent stamps header->destPE into the buffer before
+ * each issueAm (convcore.cpp), and CommRemoteHandler reads that field back out
+ * of the received bytes to choose the destination rank. A buffer shared by two
+ * destinations with different PE numbers therefore has its destination field
+ * rewritten while the first send is still outstanding: above LCI's eager
+ * threshold (~8 KB on a laptop) both messages arrive at the PE named by the
+ * last stamp and the other destination silently gets none.
+ * tests/fanout_refcount/fanout_refcount.cpp pins that case down.
+ *
+ * So the sender's copies go from one per destination PE to one per destination
+ * process, and its network sends from one per PE to one per process. Making
+ * the sender's copy count zero would need the rank list out of band (LCI
+ * immediate data or the tag, i.e. a comm_backend interface change); that is
+ * deliberately out of scope here.
+ *
+ * Ownership is exactly as before, because nothing here takes a reference on
+ * the caller's buffer: it is only read, either by CmiSyncSend (which copies)
+ * or by the memcpy into a fan-out message. CmiSyncListSend leaves the caller's
+ * buffer untouched and owned by the caller; CmiSyncListSendAndFree drops the
+ * caller's own reference at the end, as it always did.
+ *
+ * Note that destinations are now visited grouped by process rather than in
+ * list order. A list send has never ordered deliveries to distinct
+ * destinations with respect to each other.
+ */
+
+// Ahead of the payload in a fan-out message, after the message header.
+struct CmiFanoutPreamble {
+  CmiUInt4 payloadLen;
+  CmiUInt4 nranks;
+  // CmiUInt4 ranks[nranks] follows, then padding, then the payload.
+};
+
+// Offset of the payload within a fan-out message carrying nranks ranks. The
+// payload is a whole Converse message, and the handler reads its header in
+// place, so the offset is padded to keep that header aligned.
+static size_t CmiFanoutPayloadOffset(int nranks) {
+  size_t off = CmiMsgHeaderSizeBytes + sizeof(CmiFanoutPreamble) +
+               (size_t)nranks * sizeof(CmiUInt4);
+  const size_t align = 8;
+  return (off + align - 1) & ~(align - 1);
+}
+
+// Runs on one PE of the destination process and hands the payload to every
+// rank the sender listed.
+void CmiFanoutHandler(void *msg) {
+  char *fmsg = (char *)msg;
+  CmiFanoutPreamble *pre =
+      (CmiFanoutPreamble *)(fmsg + CmiMsgHeaderSizeBytes);
+  const int nranks = (int)pre->nranks;
+  const int len = (int)pre->payloadLen;
+  const CmiUInt4 *ranks =
+      (const CmiUInt4 *)(fmsg + CmiMsgHeaderSizeBytes +
+                         sizeof(CmiFanoutPreamble));
+  char *payload = fmsg + CmiFanoutPayloadOffset(nranks);
+
+  const bool share =
+      len >= (int)CmiMsgHeaderSizeBytes && CMI_MSG_NOKEEP(payload);
+  if (share) {
+    // Same contract as CmiForwardMsgToPeers' nokeep case: one buffer for the
+    // whole process, one reference per receiving rank, so each PE's CmiFree
+    // drops one and the last one releases it. Like CmiForwardMsgToPeers, a
+    // shared message keeps whatever header->destPE the sender left in it: it
+    // cannot name a per-PE destination.
+    void *shared = CmiAlloc(len);
+    memcpy(shared, payload, len);
+    for (int i = 1; i < nranks; i++)
+      CmiReference(shared); // CmiAlloc already provided the first reference
+    for (int i = 0; i < nranks; i++)
+      CmiPushPE((int)ranks[i], len, shared);
+  } else {
+    // A message that may be kept or modified by its handler gets one copy per
+    // rank, as the within-node fan-out does for non-nokeep messages.
+    for (int i = 0; i < nranks; i++) {
+      void *copy = CmiAlloc(len);
+      memcpy(copy, payload, len);
+      if (len >= (int)CmiMsgHeaderSizeBytes)
+        static_cast<CmiMessageHeader *>(copy)->destPE =
+            CmiNodeFirst(CmiMyNode()) + (int)ranks[i];
+      CmiPushPE((int)ranks[i], len, copy);
+    }
+  }
+  CmiFree(fmsg);
+}
+
+// Send the payload to nranks destinations in one other process. order[start..]
+// indexes pes[] and selects the destinations that live on destNode.
+static void CmiListSendToProcess(int destNode, const int *pes, const int *order,
+                                 int start, int nranks, int len, void *msg) {
+  // With a single destination there is nothing to amortize, so send the plain
+  // message exactly as before and skip the preamble and the extra handler hop.
+  if (nranks == 1) {
+    CmiSyncSend(pes[order[start]], len, msg);
+    return;
+  }
+
+  const size_t off = CmiFanoutPayloadOffset(nranks);
+  const int total = (int)(off + (size_t)len);
+  char *fmsg = (char *)CmiAlloc(total);
+  CmiMessageHeader *fheader = (CmiMessageHeader *)fmsg;
+  fheader->messageSize = total;
+  fheader->nokeep = false;
+  CmiSetHandler(fmsg, Cmi_fanoutHandler);
+
+  CmiFanoutPreamble *pre = (CmiFanoutPreamble *)(fmsg + CmiMsgHeaderSizeBytes);
+  pre->payloadLen = (CmiUInt4)len;
+  pre->nranks = (CmiUInt4)nranks;
+  CmiUInt4 *ranks =
+      (CmiUInt4 *)(fmsg + CmiMsgHeaderSizeBytes + sizeof(CmiFanoutPreamble));
+  for (int i = 0; i < nranks; i++)
+    ranks[i] = (CmiUInt4)CmiRankOf(pes[order[start + i]]);
+
+  memcpy(fmsg + off, msg, len);
+
+  // This buffer backs exactly one send, so the destPE stamp inside
+  // CmiSyncSendAndFree has no other send to race with.
+  CmiSyncSendAndFree(pes[order[start]], total, fmsg);
+}
+
 void CmiSyncListSend(int npes, const int *pes, int len, void *msg) {
-  for (int i = 0; i < npes; i++) {
-    CmiSyncSend(pes[i], len, msg);
+  if (npes <= 0)
+    return;
+  // Nothing to group: a single destination, a run where every destination is
+  // in this process anyway, or a persistent handle array installed by
+  // CmiUsePersistentHandle. The handles in that array are set up per
+  // destination and sized for the user's message, and CmiSendPersistentMsg
+  // aborts on anything larger, so a fan-out message must not be sent through
+  // one; leave those sends exactly as they were.
+  if (npes == 1 || CmiNumNodes() == 1 || CpvAccess(phs) != nullptr) {
+    for (int i = 0; i < npes; i++)
+      CmiSyncSend(pes[i], len, msg);
+    return;
+  }
+
+  // Visit the destinations grouped by process, keeping list order within a
+  // process. Duplicated PEs stay duplicated, so delivery counts are unchanged.
+  std::vector<int> order(npes);
+  for (int i = 0; i < npes; i++)
+    order[i] = i;
+  std::stable_sort(order.begin(), order.end(), [pes](int a, int b) {
+    return CmiNodeOf(pes[a]) < CmiNodeOf(pes[b]);
+  });
+
+  const int myNode = CmiMyNode();
+  int i = 0;
+  while (i < npes) {
+    const int node = CmiNodeOf(pes[order[i]]);
+    int j = i + 1;
+    while (j < npes && CmiNodeOf(pes[order[j]]) == node)
+      j++;
+    if (node == myNode) {
+      // Destinations in this process keep the local path: a copy per PE, as
+      // before. There is no network send to amortize here.
+      for (int k = i; k < j; k++)
+        CmiSyncSend(pes[order[k]], len, msg);
+    } else {
+      CmiListSendToProcess(node, pes, order.data(), i, j - i, len, msg);
+    }
+    i = j;
   }
 }
 
@@ -677,9 +849,7 @@ void CmiSyncListSendFn(int npes, const int *pes, int len, char *msg) {
 }
 
 void CmiSyncListSendAndFree(int npes, const int *pes, int len, void *msg) {
-  for (int i = 0; i < npes; i++) {
-    CmiSyncSend(pes[i], len, msg);
-  }
+  CmiSyncListSend(npes, pes, len, msg);
   CmiFree(msg);
 }
 

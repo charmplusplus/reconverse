@@ -1,21 +1,19 @@
-// Fan-out microbenchmark for reconverse issue #219.
+// Fan-out microbenchmark for issue #219: what sending one message to every
+// other PE costs, per destination PE (what a list send used to do) versus per
+// destination process (what CmiSyncListSendAndFree does now).
 //
-// PE 0 fans one message out to every other PE (7 destinations on a
-// lcrun -n 4 ... +pe 8 run) for a fixed number of iterations, two ways:
-//
-//   copy  : CmiSyncListSendAndFree as it is today - one CmiAlloc + memcpy +
-//           issueAm per destination.
-//   share : one buffer, one CmiReference per destination, one
-//           CmiSyncSendAndFree per destination from that same buffer, then the
-//           caller's CmiFree. This is the shape issue #219 proposes. It is
-//           MEASUREMENT ONLY: CmiSyncSendAndFree stamps header->destPE into the
-//           shared buffer before each issueAm, so with more than one destination
-//           rank per remote node the messages mis-deliver (see fanout_probe).
+// Both variants run in the same binary, so "before" and "after" come from one
+// run on one machine:
+//   per-PE      : the old loop, CmiSyncSend to each destination then CmiFree.
+//   per-process : CmiSyncListSendAndFree.
 //
 // Reported per size and variant:
-//   issue us/fanout : time PE 0 spends inside the fan-out call (the part the
-//                     per-destination alloc+memcpy pays for)
-//   wall  us/fanout : fan-out to last ack, i.e. including the network RTT
+//   issue us/fanout : time the sending PE spends inside the fan-out itself --
+//                     the allocations, the memcpys and the issueAm calls.
+//   wall  us/fanout : fan-out until the last destination has acked, so it also
+//                     carries the network round trip.
+// Plus, derived from the process layout (not instrumented): network sends per
+// fan-out, and bytes the sender copies per fan-out.
 //
 // Run: lcrun -n 4 ./reconverse_fanout_bench +pe 8 [iters]
 #include "converse.h"
@@ -37,7 +35,7 @@ CpvDeclare(int, exitIdx);
 static int iters = 1000;
 static const int sizes[] = {4096, 65536};
 static const int numSizes = 2;
-static const char *variantName[2] = {"copy ", "share"};
+static const char *variantName[2] = {"per-PE     ", "per-process"};
 
 // PE 0 state
 static int *dests = nullptr;
@@ -61,29 +59,27 @@ static void *makeMsg(int variant, int size, int iter) {
 }
 
 static void startBatch(void);
-static void nextIter(void);
 static void finish(void);
 
 static void doFanout(void) {
   int size = sizes[curSizeIdx];
   double t0 = CmiWallTimer();
+  void *m = makeMsg(curVariant, size, curIter);
   if (curVariant == 0) {
-    void *m = makeMsg(0, size, curIter);
-    CmiSyncListSendAndFree(numDests, dests, size, m);
+    // What a list send used to be: one allocation, one memcpy and one send per
+    // destination PE.
+    for (int i = 0; i < numDests; i++)
+      CmiSyncSend(dests[i], size, m);
+    CmiFree(m);
   } else {
-    void *m = makeMsg(1, size, curIter);
-    for (int i = 0; i < numDests; i++)
-      CmiReference(m); // one reference per destination
-    for (int i = 0; i < numDests; i++)
-      CmiSyncSendAndFree(dests[i], size, m);
-    CmiFree(m); // drop the caller's own reference (AndFree contract)
+    CmiSyncListSendAndFree(numDests, dests, size, m);
   }
   issueAccum += CmiWallTimer() - t0;
 }
 
 static void recv_handler(void *vmsg) {
   Msg *m = (Msg *)vmsg;
-  int variant = m->variant, iter = m->iter; // read only; never write a shared msg
+  int variant = m->variant, iter = m->iter; // read only
   CmiFree(m);
   Msg *ack = (Msg *)CmiAlloc(sizeof(Msg));
   ack->header.messageSize = sizeof(Msg);
@@ -92,6 +88,39 @@ static void recv_handler(void *vmsg) {
   ack->size = 0;
   ack->iter = iter;
   CmiSyncSendAndFree(0, sizeof(Msg), ack);
+}
+
+// Network sends and sender-side copies per fan-out, worked out from the
+// process layout the same way CmiSyncListSend groups destinations.
+static void costModel(int size, int variant, int *sends, long *bytes) {
+  if (variant == 0) {
+    int remote = 0;
+    for (int i = 0; i < numDests; i++)
+      if (CmiNodeOf(dests[i]) != CmiMyNode())
+        remote++;
+    *sends = remote;              // one active message per destination PE
+    *bytes = (long)numDests * size; // CmiSyncSend copies for every destination
+    return;
+  }
+  int nodes = CmiNumNodes();
+  int nsends = 0;
+  long nbytes = 0;
+  for (int n = 0; n < nodes; n++) {
+    int ranks = 0;
+    for (int i = 0; i < numDests; i++)
+      if (CmiNodeOf(dests[i]) == n)
+        ranks++;
+    if (ranks == 0)
+      continue;
+    if (n == CmiMyNode()) {
+      nbytes += (long)ranks * size; // local path is unchanged: a copy per PE
+    } else {
+      nsends += 1;         // one fan-out message for the whole process
+      nbytes += size;      // one memcpy of the payload into it
+    }
+  }
+  *sends = nsends;
+  *bytes = nbytes;
 }
 
 static void ack_handler(void *vmsg) {
@@ -119,15 +148,23 @@ static void ack_handler(void *vmsg) {
     startBatch();
     return;
   }
-  CmiPrintf("\n[0] fan-out to %d destinations, %d iterations, %d processes\n",
-            numDests, iters, CmiNumNodes());
-  CmiPrintf("[0] size    copy issue  share issue   ratio | copy wall  share "
-            "wall   ratio\n");
+  CmiPrintf("\n[0] fan-out to %d destination PEs over %d processes, %d "
+            "iterations\n",
+            numDests, CmiNumNodes(), iters);
+  CmiPrintf("[0] size   variant      sends  sender KB   issue us   wall us\n");
+  for (int v = 0; v < 2; v++)
+    for (int s = 0; s < numSizes; s++) {
+      int sends;
+      long bytes;
+      costModel(sizes[s], v, &sends, &bytes);
+      CmiPrintf("[0] %6d %s %6d %10.1f %10.2f %9.2f\n", sizes[s],
+                variantName[v], sends, bytes / 1024.0, results[v][s][0],
+                results[v][s][1]);
+    }
   for (int s = 0; s < numSizes; s++)
-    CmiPrintf("[0] %6d %11.2f %12.2f %7.2fx %10.2f %11.2f %7.2fx\n", sizes[s],
-              results[0][s][0], results[1][s][0],
-              results[0][s][0] / results[1][s][0], results[0][s][1],
-              results[1][s][1], results[0][s][1] / results[1][s][1]);
+    CmiPrintf("[0] %6d B issue ratio old/new %.2fx, wall ratio %.2fx\n",
+              sizes[s], results[0][s][0] / results[1][s][0],
+              results[0][s][1] / results[1][s][1]);
   finish();
 }
 
