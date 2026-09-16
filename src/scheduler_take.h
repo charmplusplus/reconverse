@@ -27,6 +27,14 @@ inline void *CmiTakeNodeQueue() {
   return nullptr;
 }
 
+// this PE's urgent queue: messages sent with CmiSyncSendAndFreeUrgent. Every
+// loop takes from it before any other source, so such a message does not wait
+// behind the thread queue's FIFO.
+inline void *CmiTakeUrgentQueue() {
+  auto r = CmiGetUrgentQueue(CmiMyRank())->pop();
+  return r ? *r : nullptr;
+}
+
 // converse-level thread queue
 inline void *CmiTakeThreadQueue() {
   ConverseQueue<void *> *queue = CmiGetQueue(CmiMyRank());
