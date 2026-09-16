@@ -63,6 +63,7 @@ extern int backend_poll_thread; // every backend_poll_thread threads will call p
 CmiState *CmiGetState(void);
 void CmiInitState(int pe);
 ConverseQueue<void *> *CmiGetQueue(int pe);
+ConverseQueue<void *> *CmiGetUrgentQueue(int pe);
 // queue of messages the calling PE sent to itself
 ConverseSelfQueue<void *> *CmiGetSelfQueue();
 void CrnInit(void);

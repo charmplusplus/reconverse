@@ -211,6 +211,12 @@ typedef struct Header {
   CmiInt2 swapHandlerId;
   bool nokeep;
   CmiUInt1 zcMsgType; // 0: normal, 1: zero-copy
+  // Set by CmiSyncSendAndFreeUrgent: the destination PE serves this message
+  // from its urgent queue, polled before every other queue. Charm++ sends its
+  // [expedited] entries this way. Without it an expedited message waited
+  // behind everything ahead of it in the PE's FIFO: ~140 ms for a migration
+  // payload mid-step on leanmd.
+  CmiUInt1 urgent;
 } CmiMessageHeader;
 
 typedef CmiMessageHeader CmiMsgHeaderBasic;
@@ -451,6 +457,8 @@ void CmiHandleMessage(void *msg);
 // message sending
 void CmiSyncSend(int destPE, int messageSize, void *msg);
 void CmiSyncSendAndFree(int destPE, int messageSize, void *msg);
+void CmiSyncSendAndFreeUrgent(int destPE, int messageSize, void *msg);
+void CmiPushPEUrgent(int destRank, void *msg);
 void CmiSyncListSend(int npes, const int *pes, int len, void *msg);
 void CmiSyncListSendAndFree(int npes, const int *pes, int len, void *msg);
 void CmiPushPE(int destRank, void *msg);

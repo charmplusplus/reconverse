@@ -5,6 +5,7 @@
 #include "taskqueue.h"
 #include <thread>
 
+
 CpvExtern(TaskQueue, CsdTaskQueue);
 
 /**
@@ -13,6 +14,7 @@ CpvExtern(TaskQueue, CsdTaskQueue);
 void CsdScheduler() {
   // get pthread level queue
   ConverseQueue<void *> *queue = CmiGetQueue(CmiMyRank());
+  ConverseQueue<void *> *urgentQueue = CmiGetUrgentQueue(CmiMyRank());
 
   // get node level queue
   ConverseNodeQueue<void *> *nodeQueue = CmiGetNodeQueue();
@@ -33,8 +35,17 @@ void CsdScheduler() {
         }
     #endif
 
+    // urgent queue first: expedited messages (see CmiSyncSendAndFreeUrgent)
+    if (!urgentQueue->empty()) {
+      void *msg = urgentQueue->pop().value();
+      if (CmiGetIdle()) {
+        CmiSetIdle(false);
+        CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
+      }
+      CmiHandleMessage(msg);
+    }
     // poll node queue
-    if (!nodeQueue->empty()) {
+    else if (!nodeQueue->empty()) {
       auto result = nodeQueue->pop();
       if (result) {
         void *msg = result.value();
@@ -221,6 +232,7 @@ void CsdScheduler() {
 void CsdSchedulePoll() {
   // get pthread level queue
   ConverseQueue<void *> *queue = CmiGetQueue(CmiMyRank());
+  ConverseQueue<void *> *urgentQueue = CmiGetUrgentQueue(CmiMyRank());
 
   // get node level queue
   ConverseNodeQueue<void *> *nodeQueue = CmiGetNodeQueue();
@@ -234,8 +246,17 @@ void CsdSchedulePoll() {
 
     CcdRaiseCondition(CcdSCHEDLOOP);
 
+    // urgent queue first: expedited messages (see CmiSyncSendAndFreeUrgent)
+    if (!urgentQueue->empty()) {
+      void *msg = urgentQueue->pop().value();
+      if (CmiGetIdle()) {
+        CmiSetIdle(false);
+        CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
+      }
+      CmiHandleMessage(msg);
+    }
     // poll node queue
-    if (!nodeQueue->empty()) {
+    else if (!nodeQueue->empty()) {
       auto result = nodeQueue->pop();
       if (result) {
         void *msg = result.value();
