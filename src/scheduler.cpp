@@ -167,17 +167,36 @@ int CsdBuiltinPollEntries(CsdPollEntry *out, int max) {
  * did work; re-read the table every slot because a handler may have
  * installed a new one (consumed at the loop top, but the pointer is what
  * the next iteration must use) */
-static inline bool CsdSweep(uint64_t base) {
+static inline int CsdSweepIdx(uint64_t base) {
   for (unsigned t = 0; t < CSD_TABLE_SLOTS; ++t) {
     unsigned idx = static_cast<unsigned>((base + t) & (CSD_TABLE_SLOTS - 1));
     CsdSchedTableStruct *tab = CpvAccess(CsdPollTable);
     if (tab->slotFn[idx](tab->slotCtx[idx])) {
       int o = tab->owner[idx];
       if (o >= 0) tab->counts[o]++;
-      return true;
+      return (int)idx;
     }
   }
-  return false;
+  return -1;
+}
+
+/* Sweep locality (see converse.h CsdSetSweepBurst): a slot that just
+ * produced work is re-polled up to Csd_sweepBurst times before the next
+ * full iteration. A busy queue -- an Argobots pool on a leased PE, a
+ * Charm++ PE draining its own queue -- then pays the loop-top checks, the
+ * CcdSCHEDLOOP raise, the periodic callbacks and the empty polls of the
+ * other entries once per K units instead of once per unit (DAOS pilot,
+ * DISPATCH-LADDER.md: 68 ns per unit before the TLS fix, ~30 ns after). */
+static unsigned Csd_sweepBurst = 16;
+void CsdSetSweepBurst(unsigned k) { Csd_sweepBurst = k == 0 ? 1 : k; }
+unsigned CsdGetSweepBurst(void) { return Csd_sweepBurst; }
+/* re-poll the last productive slot; true if it produced work again */
+static inline bool CsdRepoll(int idx) {
+  CsdSchedTableStruct *tab = CpvAccess(CsdPollTable);
+  if (!tab->slotFn[idx](tab->slotCtx[idx])) return false;
+  int o = tab->owner[idx];
+  if (o >= 0) tab->counts[o]++;
+  return true;
 }
 
 /**
@@ -186,9 +205,18 @@ static inline bool CsdSweep(uint64_t base) {
 void CsdScheduler() {
 
   uint64_t loop_counter = 0;
+  int hit = -1;        /* slot that produced the last unit, -1 = none */
+  unsigned burst = 0;  /* units taken from it since the last full iteration */
   CpvAccess(CsdSchedDepth)++;
 
   while (CmiStopFlag() == 0) {
+    /* no re-poll while a table install is pending: the installer may free
+     * what the current table's slot polls, trusting the loop-top swap */
+    if (hit >= 0 && burst < Csd_sweepBurst && CpvAccess(CsdPendingTable) == nullptr) {
+      if (CsdRepoll(hit)) { burst++; continue; }
+      hit = -1; /* went empty: full iteration below */
+    }
+    burst = 0;
 
     CsdSchedTableLoopTop();
     CcdRaiseCondition(CcdSCHEDLOOP);
@@ -202,7 +230,8 @@ void CsdScheduler() {
     //poll queues: sweep forward from idx until work is found or a full
     //cycle of the table has been checked, so a message doesn't have to
     //wait for loop_counter to rotate back around to its slot
-    if (!CsdSweep(loop_counter)) {
+    hit = CsdSweepIdx(loop_counter);
+    if (hit < 0) {
       setIdle(true);
     }
     CsdPeriodic();
@@ -218,16 +247,26 @@ void CsdScheduler() {
  */
 void CsdSchedulePoll() {
   uint64_t loop_counter = 0;
+  int hit = -1;
+  unsigned burst = 0;
   CpvAccess(CsdSchedDepth)++;
 
   while(1){
+    /* no re-poll while a table install is pending: the installer may free
+     * what the current table's slot polls, trusting the loop-top swap */
+    if (hit >= 0 && burst < Csd_sweepBurst && CpvAccess(CsdPendingTable) == nullptr) {
+      if (CsdRepoll(hit)) { burst++; continue; }
+      hit = -1;
+    }
+    burst = 0;
 
     CsdSchedTableLoopTop();
     CcdRaiseCondition(CcdSCHEDLOOP);
     //poll queues: sweep the full table before concluding it's empty, so
     //a message doesn't have to wait for loop_counter to rotate back
     //around to its slot
-    if (!CsdSweep(loop_counter)) {
+    hit = CsdSweepIdx(loop_counter);
+    if (hit < 0) {
       //swept the whole table and every slot was empty: done
       setIdle(false);
       CpvAccess(CsdSchedDepth)--;

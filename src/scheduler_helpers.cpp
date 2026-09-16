@@ -71,9 +71,18 @@ static void allocateSlots(CsdSchedTableStruct *t) {
 }
 
 CsdSchedTable CsdSchedTableCreate(const CsdPollEntry *entries, int n) {
+  return CsdSchedTableCreateEx(entries, n, CSD_BUILTIN_ALL);
+}
+
+CsdSchedTable CsdSchedTableCreateEx(const CsdPollEntry *entries, int n, unsigned builtinMask) {
   CsdSchedTableStruct *t = new CsdSchedTableStruct();
+  CsdPollEntry all[16];
   CsdPollEntry builtin[16];
-  int nb = CsdBuiltinPollEntries(builtin, 16);
+  int nall = CsdBuiltinPollEntries(all, 16);
+  int nb = 0;
+  for (int i = 0; i < nall; i++)
+    if (builtinMask & (1u << i)) builtin[nb++] = all[i];
+  if (nb == 0) CmiAbort("CsdSchedTableCreateEx: a table must poll at least one runtime queue\n");
   t->numBuiltin = nb;
   auto add = [&](const CsdPollEntry &e) {
     if (e.fn == nullptr) CmiAbort("CsdSchedTableCreate: null poll function\n");

@@ -580,6 +580,29 @@ typedef struct CsdPollEntry {
 } CsdPollEntry;
 typedef struct CsdSchedTableStruct *CsdSchedTable;
 CsdSchedTable CsdSchedTableCreate(const CsdPollEntry *entries, int n);
+/* Which of the runtime's own queues a table polls, as a bit per builtin
+ * entry in CsdBuiltinPollEntries order. CsdSchedTableCreate uses ALL. A PE
+ * that can never receive some kinds of traffic (a leased Argobots-style PE
+ * never sees prioritized awakens, and a single-process run has no comm
+ * backend) registers only what it needs, so the sweep between two units
+ * checks fewer queues and the worst-case delay of the rest shrinks. */
+#define CSD_BUILTIN_NODE_QUEUE      (1u << 0)
+#define CSD_BUILTIN_SELF_QUEUE      (1u << 1)
+#define CSD_BUILTIN_PE_QUEUE        (1u << 2)
+#define CSD_BUILTIN_NODE_PRIO_QUEUE (1u << 3)
+#define CSD_BUILTIN_PE_PRIO_QUEUE   (1u << 4)
+#define CSD_BUILTIN_COMM_PROGRESS   (1u << 5)
+#define CSD_BUILTIN_TASK_QUEUE      (1u << 6)
+#define CSD_BUILTIN_ALL             0xffffffffu
+#define CSD_BUILTIN_MESSAGING       (CSD_BUILTIN_NODE_QUEUE | CSD_BUILTIN_SELF_QUEUE | CSD_BUILTIN_PE_QUEUE)
+CsdSchedTable CsdSchedTableCreateEx(const CsdPollEntry *entries, int n, unsigned builtinMask);
+/* Sweep locality: after a slot returns work the scheduler re-polls that slot
+ * up to this many times before resuming the round-robin sweep (loop-top
+ * table swap, CcdSCHEDLOOP, periodic callbacks and idle detection happen at
+ * sweep boundaries). Bounds the delay of every other entry to K units.
+ * Default 16; 1 restores strict alternation. */
+void CsdSetSweepBurst(unsigned k);
+unsigned CsdGetSweepBurst(void);
 void CsdSchedTableInstall(int rank, CsdSchedTable t); /* takes ownership of t */
 void CsdSchedTableDestroy(CsdSchedTable t);           /* only for a table never installed */
 int CsdSchedTableSlots(CsdSchedTable t, int userEntry); /* slots held; -1 if out of range */
