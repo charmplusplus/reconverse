@@ -83,6 +83,9 @@ long long QueueTopPriority(Queue q);
 CmiState *CmiGetState(void);
 void CmiInitState(int pe);
 ConverseQueue<void *> *CmiGetQueue(int pe);
+// per-PE urgent queue (CmiSyncSendAndFreeUrgent); every scheduler loop
+// serves it before its other sources
+ConverseQueue<void *> *CmiGetUrgentQueue(int pe);
 void CrnInit(void);
 void CmiPushPE(int destRank, int messageSize, void *msg);
 

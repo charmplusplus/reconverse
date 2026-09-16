@@ -27,6 +27,15 @@ inline void *CmiTakeNodeQueue() {
   return nullptr;
 }
 
+// this PE's urgent queue: messages sent with CmiSyncSendAndFreeUrgent
+// (Charm++'s [expedited] entries). Every loop takes from it before any other
+// source, so an expedited message does not wait behind the thread queue's
+// FIFO (~140 ms for a migration payload mid-step on leanmd).
+inline void *CmiTakeUrgentQueue() {
+  auto r = CmiGetUrgentQueue(CmiMyRank())->pop();
+  return r ? *r : nullptr;
+}
+
 // converse-level thread queue
 inline void *CmiTakeThreadQueue() {
   ConverseQueue<void *> *queue = CmiGetQueue(CmiMyRank());

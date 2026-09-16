@@ -5,12 +5,14 @@
 // according to a relative frequency, and the loop sweeps that table. Adding a
 // queue means registering a handler here rather than editing the loop.
 //
-// Two ordering rules sit outside the table. First, the converse thread queue
-// is drained before the sweep. It holds every message delivered to this PE,
-// including the ones Charm++'s _skipCldHandler still has to move into the
-// prioritized CsdSchedQueue, and [expedited] entries that run straight from
-// it. Running CsdSchedQueue while it is non-empty picks the "highest
-// priority" message from an incomplete set (issue #258).
+// Three ordering rules sit outside the table. Before everything, the urgent
+// queue (CmiSyncSendAndFreeUrgent, Charm++'s [expedited] entries) gives up
+// one message per iteration. Then the converse thread queue
+// is drained before the sweep. It holds every other message delivered to
+// this PE, including the ones Charm++'s _skipCldHandler still has to move
+// into the prioritized CsdSchedQueue. Running CsdSchedQueue while it is
+// non-empty picks the "highest priority" message from an incomplete set
+// (issue #258).
 //
 // Second, node-level work comes before the PE's own queued work (issue
 // #268). The node queue holds work that any PE of the process may run, put
@@ -43,6 +45,9 @@ static inline bool runTaken(void *msg) {
   CmiHandleMessage(msg);
   return true;
 }
+
+//poll the urgent queue (see top)
+bool pollUrgentQueue() { return runTaken(CmiTakeUrgentQueue()); }
 
 //poll converse-level thread queue
 bool pollConverseThreadQueue() { return runTaken(CmiTakeThreadQueue()); }
@@ -106,7 +111,8 @@ bool pollProgress()
   //reach next
   if (t_pollsProgress) {
     if (comm_backend::progress())
-      return pollConverseThreadQueue() || pollNodeQueuesFirst();
+      return pollUrgentQueue() || pollConverseThreadQueue() ||
+             pollNodeQueuesFirst();
     t_progressFoundNothing = true;
   }
   return false; //polling progress doesn't count
@@ -160,7 +166,7 @@ void CsdSchedulerRegistered() {
     //than from a slot, as the old scheduler does: the drain only moves a
     //block onto a local queue, and the sweep below then handles it
     bool ipcDone = CmiSchedulerPollIpc();
-    bool workDone = pollConverseThreadQueue();
+    bool workDone = pollUrgentQueue() || pollConverseThreadQueue();
     //then node-level work, ahead of the PE's own (see top)
     if (!workDone) workDone = pollNodeQueuesFirst();
     for (unsigned t = 0; t < SCHED_TABLE_SIZE && !workDone; ++t) {
@@ -190,7 +196,7 @@ void CsdSchedulePollRegistered() {
     //same shmem drain as CsdSchedulerRegistered; a block handed to a
     //queue counts as work, so we don't return before it is handled
     bool ipcDone = CmiSchedulerPollIpc();
-    bool workDone = pollConverseThreadQueue();
+    bool workDone = pollUrgentQueue() || pollConverseThreadQueue();
     //then node-level work, ahead of the PE's own (see top)
     if (!workDone) workDone = pollNodeQueuesFirst();
     for (unsigned t = 0; t < SCHED_TABLE_SIZE && !workDone; ++t) {
