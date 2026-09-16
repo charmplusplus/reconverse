@@ -768,7 +768,7 @@ void CmiFanoutHandler(void *msg) {
   const CmiUInt4 *ranks = trailer + CmiFanoutTrailerFixed;
   const int firstPe = CmiNodeFirst(CmiMyNode());
 
-  if (CMI_MSG_NOKEEP(msg)) {
+  if (CmiMsgIsNokeep(msg)) {
     // Same contract as CmiForwardMsgToPeers' nokeep case, and no copy at all:
     // one buffer for the whole process, one reference per receiving rank, so
     // each PE's CmiFree drops one and the last one releases it. Like

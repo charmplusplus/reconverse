@@ -310,7 +310,7 @@ static void runStep(int step) {
   case S_C_NOKEEP: {
     beginStep(destB, numDestB);
     void *m = makePayload(step, bigSize);
-    CMI_MSG_NOKEEP(m) = 1;
+    CmiSetMsgNokeep(m, 1);
     CmiReference(m);
     CmiFreeListSendFn(numDestB, destB, bigSize, (char *)m);
     keptMsg = m;

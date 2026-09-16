@@ -931,6 +931,13 @@ void CldEnqueueGroup(CmiGroup grp, void *msg, int infofn);
 #define CmiImmIsRunning() (0)
 #define CMI_MSG_NOKEEP(msg) ((CmiMessageHeader *)msg)->nokeep
 
+/* The nokeep flag is a promise by the sender that no receiving handler will
+   retain the message past its return or modify it. In exchange the runtime may
+   hand one shared buffer to several PEs of a process instead of copying it for
+   each, every one of those PEs still calling CmiFree exactly once. */
+CLINKAGE void CmiSetMsgNokeep(void *msg, int nokeep);
+CLINKAGE int CmiMsgIsNokeep(const void *msg);
+
 // zerocopy
 
 typedef struct ncpystruct {
