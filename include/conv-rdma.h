@@ -214,7 +214,8 @@ public:
 
   CmiNcpyBuffer()
       : isRegistered(false), ptr(NULL), cnt(0), pe(-1), regMode(CMK_BUFFER_REG),
-        deregMode(CMK_BUFFER_DEREG), ref(NULL), refAckInfo(NULL) {}
+        deregMode(CMK_BUFFER_DEREG), ref(NULL), refAckInfo(NULL),
+        deviceRdmaOpInfo(nullptr) {}
 
   explicit CmiNcpyBuffer(const void *ptr_, size_t cnt_,
                          unsigned short int regMode_ = CMK_BUFFER_REG,
