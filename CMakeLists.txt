@@ -135,6 +135,17 @@ else()
 endif()
 
 add_library(reconverse $<TARGET_OBJECTS:boost-context>)
+# TLS model for the per-PE (Cpv) variables. Empty = compiler default. When
+# reconverse is linked into a shared library that is loaded at program start
+# and never dlopen'ed (the Argobots shim's libabt.so), "initial-exec" turns
+# every Cpv access from a __tls_get_addr call into one %fs-relative load:
+# 38 such calls per ULT yield were 37% of the shim's dispatch cost
+# (argobots-succession/DISPATCH-LADDER.md). Not for dlopen'ed libraries: the
+# static TLS block is sized at load time.
+set(RECONVERSE_TLS_MODEL "" CACHE STRING "TLS model for reconverse's thread-local variables (empty, initial-exec, local-exec, global-dynamic)")
+if(RECONVERSE_TLS_MODEL)
+  target_compile_options(reconverse PRIVATE -ftls-model=${RECONVERSE_TLS_MODEL})
+endif()
 set_target_properties(reconverse PROPERTIES CXX_STANDARD 17)
 # Consumers must compile against converse.h as C++17 too (thread_local,
 # constexpr, std::atomic in the header); without this a consumer on Apple
