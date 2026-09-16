@@ -64,6 +64,8 @@ struct Ack {
   int pe;
   int bad;
   int ref;
+  int alloc; // CmiSize of the delivered buffer: larger than the payload means
+             // this PE was handed the received fan-out buffer itself
   uint64_t ptr;
 };
 
@@ -80,6 +82,7 @@ static int expected[256];
 static int badCount = 0;
 static uint64_t ptrOf[256];
 static int refOf[256];
+static int allocOf[256];
 static void *keptMsg = nullptr;
 
 // destination lists
@@ -128,6 +131,7 @@ static void recv_handler(void *vmsg) {
   // this process right now.
   uint64_t ptr = (uint64_t)(uintptr_t)vmsg;
   int ref = CmiGetReference(vmsg);
+  int alloc = CmiSize(vmsg);
   CmiFree(vmsg);
 
   Ack *a = (Ack *)CmiAlloc(sizeof(Ack));
@@ -137,6 +141,7 @@ static void recv_handler(void *vmsg) {
   a->pe = CmiMyPe();
   a->bad = bad;
   a->ref = ref;
+  a->alloc = alloc;
   a->ptr = ptr;
   CmiSyncSendAndFree(0, sizeof(Ack), a);
 }
@@ -180,8 +185,35 @@ static void checkStep(void) {
       CmiAbort("fanout_refcount: %s: shared buffer reference counts %d and %d "
                "are outside 1..2",
                stepName[step], refOf[a], refOf[b]);
-    CmiPrintf("[0] %s: shared buffer %llx, references seen %d and %d\n",
-              stepName[step], (unsigned long long)ptrOf[a], refOf[a], refOf[b]);
+    // The received fan-out buffer is bigger than the payload -- it carries the
+    // rank trailer -- so an allocation of exactly bigSize would mean the
+    // receiving process copied the payload out instead of delivering it.
+    if (allocOf[a] <= bigSize)
+      CmiAbort("fanout_refcount: %s: pe %d was handed a %d-byte buffer for a "
+               "%d-byte payload, so the payload was copied on the receiver",
+               stepName[step], a, allocOf[a], bigSize);
+    CmiPrintf("[0] %s: shared buffer %llx of %d bytes for a %d-byte payload "
+              "(no receiver copy), references seen %d and %d\n",
+              stepName[step], (unsigned long long)ptrOf[a], allocOf[a], bigSize,
+              refOf[a], refOf[b]);
+  }
+
+  if (step == S_B_FREE && numSharedGroupPes == 2) {
+    // Without the nokeep flag the received buffer serves the first listed rank
+    // and the rest get copies: one of the two, and only one, must be holding
+    // the fan-out allocation.
+    int a = sharedGroupPes[0], b = sharedGroupPes[1];
+    int big = (allocOf[a] > bigSize) + (allocOf[b] > bigSize);
+    if (big != 1)
+      CmiAbort("fanout_refcount: %s: %d of 2 ranks got the received buffer "
+               "(%d and %d bytes for a %d-byte payload), expected exactly 1",
+               stepName[step], big, allocOf[a], allocOf[b], bigSize);
+    if (ptrOf[a] == ptrOf[b])
+      CmiAbort("fanout_refcount: %s: a non-nokeep payload was shared between "
+               "pe %d and pe %d",
+               stepName[step], a, b);
+    CmiPrintf("[0] %s: one rank received the buffer itself, the other a copy\n",
+              stepName[step]);
   }
 
   if (keptMsg != nullptr) {
@@ -210,6 +242,7 @@ static void ack_handler(void *vmsg) {
     arrivals[a->pe]++;
     ptrOf[a->pe] = a->ptr;
     refOf[a->pe] = a->ref;
+    allocOf[a->pe] = a->alloc;
   }
   if (a->bad)
     badCount++;

@@ -92,7 +92,9 @@ static void recv_handler(void *vmsg) {
 
 // Network sends and sender-side copies per fan-out, worked out from the
 // process layout the same way CmiSyncListSend groups destinations.
-static void costModel(int size, int variant, int *sends, long *bytes) {
+static void costModel(int size, int variant, int *sends, long *bytes,
+                      int *recvCopies) {
+  *recvCopies = 0;
   if (variant == 0) {
     int remote = 0;
     for (int i = 0; i < numDests; i++)
@@ -115,8 +117,12 @@ static void costModel(int size, int variant, int *sends, long *bytes) {
     if (n == CmiMyNode()) {
       nbytes += (long)ranks * size; // local path is unchanged: a copy per PE
     } else {
-      nsends += 1;         // one fan-out message for the whole process
-      nbytes += size;      // one memcpy of the payload into it
+      nsends += 1;    // one fan-out message for the whole process
+      nbytes += size; // one memcpy of the payload into it
+      // The receiving process delivers the buffer it received to the first
+      // listed rank and copies for the rest; a nokeep payload is shared and
+      // costs no copy at all there.
+      *recvCopies += ranks - 1;
     }
   }
   *sends = nsends;
@@ -151,16 +157,19 @@ static void ack_handler(void *vmsg) {
   CmiPrintf("\n[0] fan-out to %d destination PEs over %d processes, %d "
             "iterations\n",
             numDests, CmiNumNodes(), iters);
-  CmiPrintf("[0] size   variant      sends  sender KB   issue us   wall us\n");
+  CmiPrintf("[0] size   variant      sends  sender KB  recv copies   issue us "
+            "  wall us\n");
   for (int v = 0; v < 2; v++)
     for (int s = 0; s < numSizes; s++) {
-      int sends;
+      int sends, recvCopies;
       long bytes;
-      costModel(sizes[s], v, &sends, &bytes);
-      CmiPrintf("[0] %6d %s %6d %10.1f %10.2f %9.2f\n", sizes[s],
-                variantName[v], sends, bytes / 1024.0, results[v][s][0],
-                results[v][s][1]);
+      costModel(sizes[s], v, &sends, &bytes, &recvCopies);
+      CmiPrintf("[0] %6d %s %6d %10.1f %12d %10.2f %9.2f\n", sizes[s],
+                variantName[v], sends, bytes / 1024.0, recvCopies,
+                results[v][s][0], results[v][s][1]);
     }
+  CmiPrintf("[0] (receiver copies shown for a payload without the nokeep flag; "
+            "a nokeep payload costs none)\n");
   for (int s = 0; s < numSizes; s++)
     CmiPrintf("[0] %6d B issue ratio old/new %.2fx, wall ratio %.2fx\n",
               sizes[s], results[0][s][0] / results[1][s][0],
