@@ -375,6 +375,11 @@ int CthAwakenIfBlocked(CthThread t); /* 1 if it moved BLOCKED->READY and awakene
 void CthSuspendBlocked(CthVoidFn after, void *arg); /* after() runs post-switch */
 void CthSuspendThen(CthVoidFn after, void *arg);    /* same, no state change */
 int CthGetState(CthThread t);
+/* READY -> RUNNING for a pool-style thread that something other than the
+ * scheduler loop is about to resume (a direct ULT-to-ULT switch chosen by
+ * the suspending thread's choose function). Same double-pop protection as
+ * the token handler; returns 1 on success, 0 if the thread was not READY. */
+int CthClaimReady(CthThread t);
 void CthSetKeepOnExit(CthThread t, int keep); /* do not free at exit; CthFree later */
 void CthSetExitFn(CthThread t, CthVoidFn fn, void *arg); /* runs post-switch at exit */
 void CthSetUserData(CthThread t, void *data);
@@ -571,7 +576,7 @@ int CsdScheduler(int maxmsgs);
  * the table to a PE, which adopts it at the top of its scheduler loop and
  * retires the old one. A poll function returns 1 if it handled one message
  * and must call CsdReleaseIdle() before handling it. */
-typedef int (*CsdPollFn)(void *ctx);
+typedef int (*CsdPollFn)(void *ctx); /* returns the number of units it ran (0 = none); a poll that ran a chain of units reports the chain length so the sweep burst counts them */
 typedef struct CsdPollEntry {
   CsdPollFn fn;
   void *ctx;

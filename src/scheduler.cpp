@@ -167,13 +167,16 @@ int CsdBuiltinPollEntries(CsdPollEntry *out, int max) {
  * did work; re-read the table every slot because a handler may have
  * installed a new one (consumed at the loop top, but the pointer is what
  * the next iteration must use) */
+static unsigned Csd_lastUnits = 0; /* units the last productive poll reported */
 static inline int CsdSweepIdx(uint64_t base) {
   for (unsigned t = 0; t < CSD_TABLE_SLOTS; ++t) {
     unsigned idx = static_cast<unsigned>((base + t) & (CSD_TABLE_SLOTS - 1));
     CsdSchedTableStruct *tab = CpvAccess(CsdPollTable);
-    if (tab->slotFn[idx](tab->slotCtx[idx])) {
+    int r = tab->slotFn[idx](tab->slotCtx[idx]);
+    if (r > 0) {
       int o = tab->owner[idx];
-      if (o >= 0) tab->counts[o]++;
+      if (o >= 0) tab->counts[o] += (uint64_t)r;
+      Csd_lastUnits = (unsigned)r;
       return (int)idx;
     }
   }
@@ -193,9 +196,11 @@ unsigned CsdGetSweepBurst(void) { return Csd_sweepBurst; }
 /* re-poll the last productive slot; true if it produced work again */
 static inline bool CsdRepoll(int idx) {
   CsdSchedTableStruct *tab = CpvAccess(CsdPollTable);
-  if (!tab->slotFn[idx](tab->slotCtx[idx])) return false;
+  int r = tab->slotFn[idx](tab->slotCtx[idx]);
+  if (r <= 0) return false;
   int o = tab->owner[idx];
-  if (o >= 0) tab->counts[o]++;
+  if (o >= 0) tab->counts[o] += (uint64_t)r;
+  Csd_lastUnits = (unsigned)r;
   return true;
 }
 
@@ -213,7 +218,7 @@ void CsdScheduler() {
     /* no re-poll while a table install is pending: the installer may free
      * what the current table's slot polls, trusting the loop-top swap */
     if (hit >= 0 && burst < Csd_sweepBurst && CpvAccess(CsdPendingTable) == nullptr) {
-      if (CsdRepoll(hit)) { burst++; continue; }
+      if (CsdRepoll(hit)) { burst += Csd_lastUnits; continue; }
       hit = -1; /* went empty: full iteration below */
     }
     burst = 0;
@@ -231,6 +236,7 @@ void CsdScheduler() {
     //cycle of the table has been checked, so a message doesn't have to
     //wait for loop_counter to rotate back around to its slot
     hit = CsdSweepIdx(loop_counter);
+    if (hit >= 0) burst = Csd_lastUnits; /* a chain run inside the poll counts toward K */
     if (hit < 0) {
       setIdle(true);
     }
@@ -255,7 +261,7 @@ void CsdSchedulePoll() {
     /* no re-poll while a table install is pending: the installer may free
      * what the current table's slot polls, trusting the loop-top swap */
     if (hit >= 0 && burst < Csd_sweepBurst && CpvAccess(CsdPendingTable) == nullptr) {
-      if (CsdRepoll(hit)) { burst++; continue; }
+      if (CsdRepoll(hit)) { burst += Csd_lastUnits; continue; }
       hit = -1;
     }
     burst = 0;
@@ -266,6 +272,7 @@ void CsdSchedulePoll() {
     //a message doesn't have to wait for loop_counter to rotate back
     //around to its slot
     hit = CsdSweepIdx(loop_counter);
+    if (hit >= 0) burst = Csd_lastUnits; /* a chain run inside the poll counts toward K */
     if (hit < 0) {
       //swept the whole table and every slot was empty: done
       setIdle(false);

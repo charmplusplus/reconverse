@@ -826,6 +826,10 @@ void CthResumeNormalThread(CthThreadToken *token) {
 }
 
 int CthIsMainThread(CthThread t) { return t == CpvAccess(CthMainThread); }
+int CthClaimReady(CthThread t) {
+  int st = CTH_STATE_READY;
+  return B(t)->state.compare_exchange_strong(st, CTH_STATE_RUNNING, std::memory_order_acq_rel) ? 1 : 0;
+}
 
 void CthResumeSchedulingThread(CthThreadToken *token) {
   CthThread t = token->thread;
