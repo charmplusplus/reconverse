@@ -1,6 +1,7 @@
 #include <signal.h>
 #include <errno.h>
 #include <atomic>
+#include <cstdint>
 #include <cstring>
 #include <cstdlib>
 #include <cstdio>
@@ -107,9 +108,21 @@ CpvStaticDeclare(CthThread, CthSleepingStandins);
 CpvStaticDeclare(CthPostSwitch, CthPost);
 
 /* Handler indices are identical on every PE (same registration order), so a
- * process-wide copy lets a non-PE thread (no Cpv storage) awaken a thread. */
-static int CthResumeNormalIdxGlobal = -1;
-static int CthResumeSchedulingIdxGlobal = -1;
+ * process-wide copy lets a non-PE thread (no Cpv storage) awaken a thread.
+ * Both indices are published in ONE atomic word: with two plain ints, a PE
+ * could read the first index already set and the second still unset while
+ * another PE was between its two stores, and abort on a false mismatch
+ * (seen in ~2% of launches under the Argobots shim, 2026-09-15). */
+static std::atomic<uint64_t> CthResumeIdxGlobal{0}; /* 0 = not yet published */
+static inline uint64_t CthPackIdx(int normal, int sched) {
+  return ((uint64_t)(uint32_t)(normal + 1) << 32) | (uint32_t)(sched + 1);
+}
+static inline int CthResumeNormalIdxGlobalGet() {
+  return (int)(uint32_t)(CthResumeIdxGlobal.load(std::memory_order_acquire) >> 32) - 1;
+}
+static inline int CthResumeSchedulingIdxGlobalGet() {
+  return (int)(uint32_t)(CthResumeIdxGlobal.load(std::memory_order_acquire) & 0xffffffffu) - 1;
+}
 
 /* debug ring of thread events per PE, dumped by CthSetPost on conflict */
 struct CthTraceEv { int ev; const void *a; const void *b; int x; };
@@ -241,11 +254,11 @@ static void CthEnqueueCustomThread(CthThreadToken *token, int s, int pb,
      * its place in the caller's queue order; the contract is that the
      * queue only lets PE homeRank resume it. Without a custom function the
      * token goes straight to the home PE's queue. */
-    CmiSetHandler(token, CthResumeSchedulingIdxGlobal);
+    CmiSetHandler(token, CthResumeSchedulingIdxGlobalGet());
     if (th->awakenArgFn) th->awakenArgFn(token->thread, th->awakenArg);
     else CmiPushPE(th->homeRank, (int)sizeof(CthThreadToken), token);
   } else {
-    CmiSetHandler(token, CthResumeNormalIdxGlobal);
+    CmiSetHandler(token, CthResumeNormalIdxGlobalGet());
     th->awakenArgFn(token->thread, th->awakenArg);
   }
 }
@@ -747,13 +760,15 @@ void CthSchedInit() {
       CmiRegisterHandler((CmiHandler)CthResumeNormalThread);
   CpvAccess(CthResumeSchedulingThreadIdx) =
       CmiRegisterHandler((CmiHandler)CthResumeSchedulingThread);
-  /* same on every PE by construction (identical registration order) */
-  if (CthResumeNormalIdxGlobal < 0) {
-    CthResumeNormalIdxGlobal = CpvAccess(CthResumeNormalThreadIdx);
-    CthResumeSchedulingIdxGlobal = CpvAccess(CthResumeSchedulingThreadIdx);
-  } else if (CthResumeNormalIdxGlobal != CpvAccess(CthResumeNormalThreadIdx) ||
-             CthResumeSchedulingIdxGlobal != CpvAccess(CthResumeSchedulingThreadIdx)) {
-    CmiAbort("CthSchedInit: thread-resume handler indices differ across PEs\n");
+  /* same on every PE by construction (identical registration order); the
+   * first PE publishes both indices in one word, every other PE compares */
+  {
+    uint64_t mine = CthPackIdx(CpvAccess(CthResumeNormalThreadIdx),
+                               CpvAccess(CthResumeSchedulingThreadIdx));
+    uint64_t seen = 0;
+    if (!CthResumeIdxGlobal.compare_exchange_strong(seen, mine, std::memory_order_acq_rel) &&
+        seen != mine)
+      CmiAbort("CthSchedInit: thread-resume handler indices differ across PEs\n");
   }
   CthSetStrategy(CthSelf(), CthEnqueueSchedulingThread,
                  CthSuspendSchedulingThread);
