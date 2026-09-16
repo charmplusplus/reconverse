@@ -599,7 +599,10 @@ CsdSchedTable CsdSchedTableCreateEx(const CsdPollEntry *entries, int n, unsigned
 /* Sweep locality: after a slot returns work the scheduler re-polls that slot
  * up to this many times before resuming the round-robin sweep (loop-top
  * table swap, CcdSCHEDLOOP, periodic callbacks and idle detection happen at
- * sweep boundaries). Bounds the delay of every other entry to K units.
+ * sweep boundaries). Bounds the delay of every other entry to K units --
+ * units, not time: an entry whose unit can block for long (a Mercury
+ * progress call) should apply its own policy across its queues inside one
+ * poll function rather than register one entry per queue.
  * Default 16; 1 restores strict alternation. */
 void CsdSetSweepBurst(unsigned k);
 unsigned CsdGetSweepBurst(void);
