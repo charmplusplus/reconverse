@@ -42,10 +42,9 @@ struct affMsg {
 CmiHwlocTopology CmiHwlocTopologyLocal;
 static int cpuPhyNodeAffinityRecvHandlerIdx;
 
-// topology is the set of resources available to this process
-// legacy_topology includes resources disallowed by the system, to implement
-// CmiNumCores
-static hwloc_topology_t topology, legacy_topology;
+// topology is the set of resources available to this process; its root's
+// complete cpuset also counts the PUs disallowed by the system (CmiNumCores)
+static hwloc_topology_t topology;
 
 int CmiNumCores(void)
 {
@@ -243,27 +242,16 @@ void CmiInitHwlocTopology(void) {
           ? hwloc_get_nbobjs_by_depth(topology, depth)
           : 1;
 
-  // Legacy: Determine the system's total PU count
-
-  hwloc_topology_init(&legacy_topology);
-#if HWLOC_API_VERSION >= 0x00020000
-  // HWLOC 2.0+ supports HWLOC_TOPOLOGY_FLAG_INCLUDE_DISALLOWED
-  hwloc_topology_set_flags(legacy_topology,
-                           hwloc_topology_get_flags(legacy_topology) |
-                               HWLOC_TOPOLOGY_FLAG_INCLUDE_DISALLOWED);
-#else
-  // For HWLOC 1.x, use HWLOC_TOPOLOGY_FLAG_WHOLE_SYSTEM to include all PUs
-  hwloc_topology_set_flags(legacy_topology,
-                           hwloc_topology_get_flags(legacy_topology) |
-                               HWLOC_TOPOLOGY_FLAG_WHOLE_SYSTEM);
-#endif
-  hwloc_topology_load(legacy_topology);
-
-  depth = hwloc_get_type_depth(legacy_topology, HWLOC_OBJ_PU);
-  CmiHwlocTopologyLocal.total_num_pus =
-      depth != HWLOC_TYPE_DEPTH_UNKNOWN
-          ? hwloc_get_nbobjs_by_depth(legacy_topology, depth)
-          : 1;
+  // Total PU count including PUs disallowed by the system (cgroup/cpuset):
+  // the root's complete cpuset keeps them even though their objects are not
+  // in the tree, so no second, whole-system topology load is needed. Each
+  // hwloc_topology_load costs 50-70 ms on a 128-core node and this function
+  // used to make two of them (DAOS pilot step 6, 2026-09-16).
+  {
+    hwloc_const_cpuset_t complete = hwloc_topology_get_complete_cpuset(topology);
+    int w = complete ? hwloc_bitmap_weight(complete) : -1;
+    CmiHwlocTopologyLocal.total_num_pus = w > 0 ? w : CmiHwlocTopologyLocal.num_pus;
+  }
 }
 
 static int set_process_affinity(hwloc_cpuset_t cpuset)
