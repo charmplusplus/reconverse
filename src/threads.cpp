@@ -64,6 +64,7 @@ typedef struct CthThreadBase {
   CthVoidFn exitFn;           /* run post-switch when the thread exits */
   void *exitArg;
   void *userData;
+  struct CthThreadStruct *freeNext; /* per-PE free-list link (stack kept) */
 } CthThreadBase;
 
 /* Action deferred until after the next context switch on this PE. It is
@@ -96,6 +97,16 @@ CpvDeclare(char *,
 CpvStaticDeclare(size_t, CthDatasize);
 /* Threads waiting to be destroyed */
 CpvStaticDeclare(CthThread, doomedThreadPool);
+/* Per-PE cache of freed thread structs WITH their stack (and token, when it
+ * is not still queued). A ULT-per-request workload (Margo, DAOS) creates and
+ * frees threads at millions per second; Argobots serves those from per-ES
+ * pools, and malloc/free of stack + struct + token was 2.5x of an 8x gap in
+ * DAOS pilot step 4. Reuse requires an exact stack-size match at the head. */
+#define CTH_CACHE_MAX_COUNT 1024
+#define CTH_CACHE_MAX_BYTES (16u << 20)
+CpvStaticDeclare(CthThread, CthCacheHead);
+CpvStaticDeclare(int, CthCacheCount);
+CpvStaticDeclare(size_t, CthCacheBytes);
 CpvStaticDeclare(int, Cth_serialNo);
 CpvStaticDeclare(int, _defaultStackSize);
 CpvDeclare(int, CthResumeNormalThreadIdx);
@@ -299,9 +310,11 @@ static void CthThreadInit(CthThread t) {
   CthThreadBase *th = &t->base;
 
   static std::atomic<int> serialno{1};
-  th->token = (CthThreadToken *)malloc(sizeof(CthThreadToken));
-  memset(th->token, 0, sizeof(CthThreadToken));
-  CmiInitMsgHeader(th->token, (int)sizeof(CthThreadToken));
+  if (th->token == NULL) { /* a cached struct keeps its token */
+    th->token = (CthThreadToken *)malloc(sizeof(CthThreadToken));
+    memset(th->token, 0, sizeof(CthThreadToken));
+    CmiInitMsgHeader(th->token, (int)sizeof(CthThreadToken));
+  }
   th->token->thread = S(th);
   th->token->serialNo = CpvAccess(Cth_serialNo)++;
   th->scheduled = 0;
@@ -315,6 +328,7 @@ static void CthThreadInit(CthThread t) {
   th->exitFn = NULL;
   th->exitArg = NULL;
   th->userData = NULL;
+  th->freeNext = NULL;
   th->eventID = 0;
   th->srcPE = -1;
 
@@ -348,6 +362,8 @@ void CthInit(char **argv) {
   CthBaseInit(argv);
   t = (CthThread)malloc(sizeof(struct CthThreadStruct));
   //_MEMCHECK(t);
+  t->base.token = NULL;
+  t->base.stack = NULL;
   CpvAccess(CthCurrent) = t;
 #ifdef __GNUC__
 #pragma GCC diagnostic push
@@ -364,6 +380,12 @@ void CthInit(char **argv) {
   t->base.state.store(CTH_STATE_RUNNING);
   CpvInitialize(CthThread, doomedThreadPool);
   CpvAccess(doomedThreadPool) = (CthThread)NULL;
+  CpvInitialize(CthThread, CthCacheHead);
+  CpvInitialize(int, CthCacheCount);
+  CpvInitialize(size_t, CthCacheBytes);
+  CpvAccess(CthCacheHead) = (CthThread)NULL;
+  CpvAccess(CthCacheCount) = 0;
+  CpvAccess(CthCacheBytes) = 0;
   CpvInitialize(CthPostSwitch, CthPost);
   CpvAccess(CthPost).kind = CTH_POST_NONE;
   CpvInitialize(CthTraceEv *, CthTrace);
@@ -387,15 +409,54 @@ static void *CthAllocateStack(CthThreadBase *th, int *stackSize,
   return ret;
 }
 
+/* free-list: put back a struct whose stack is still attached */
+static int CthCachePut(CthThread t) {
+  if (!CmiIsPeThread() || t->base.stack == NULL) return 0;
+  if (CpvAccess(CthCacheCount) >= CTH_CACHE_MAX_COUNT ||
+      CpvAccess(CthCacheBytes) + (size_t)t->base.stacksize > CTH_CACHE_MAX_BYTES)
+    return 0;
+  t->base.freeNext = CpvAccess(CthCacheHead);
+  CpvAccess(CthCacheHead) = t;
+  CpvAccess(CthCacheCount)++;
+  CpvAccess(CthCacheBytes) += (size_t)t->base.stacksize;
+  return 1;
+}
+/* free-list: take a struct whose stack has exactly the requested size */
+static CthThread CthCachePop(int size) {
+  if (!CmiIsPeThread()) return NULL;
+  CthThread t = CpvAccess(CthCacheHead);
+  if (t == NULL || t->base.stacksize != size) return NULL;
+  CpvAccess(CthCacheHead) = t->base.freeNext;
+  t->base.freeNext = NULL;
+  CpvAccess(CthCacheCount)--;
+  CpvAccess(CthCacheBytes) -= (size_t)size;
+  return t;
+}
+
 static CthThread CthCreateInner(CthVoidFn fn, void *arg, int size,
                                 int migratable) {
   CthThread result;
   char *stack, *ss_sp, *ss_end;
 
-  result = (CthThread)malloc(sizeof(struct CthThreadStruct));
-  //_MEMCHECK(result);
-  CthThreadInit(result);
-  CthAllocateStack(&result->base, &size, migratable);
+  if (size == 0)
+    size = CpvAccess(_defaultStackSize);
+  result = CthCachePop(size);
+  if (result != NULL) {
+    /* stack and (unless queued) token are reused; CthThreadInit resets the
+     * stack fields, so carry them across */
+    void *stk = result->base.stack;
+    int stksz = result->base.stacksize;
+    CthThreadInit(result);
+    result->base.stack = stk;
+    result->base.stacksize = stksz;
+  } else {
+    result = (CthThread)malloc(sizeof(struct CthThreadStruct));
+    //_MEMCHECK(result);
+    result->base.token = NULL;
+    result->base.stack = NULL;
+    CthThreadInit(result);
+    CthAllocateStack(&result->base, &size, migratable);
+  }
   stack = (char *)result->base.stack;
   ss_end = stack + size;
 
@@ -438,9 +499,11 @@ static void CthThreadBaseFree(CthThreadBase *th) {
    * remove the token if it is not queued in the converse scheduler
    */
   if (th->scheduled == 0) {
-    free(th->token);
+    /* the token stays with the struct: reused from the cache, or freed in
+     * CthThreadFree */
   } else {
     th->token->thread = NULL;
+    th->token = NULL;
   }
   /* Call the free function pointer on all the listeners on
      this thread and also delete the thread listener objects
@@ -454,10 +517,7 @@ static void CthThreadBaseFree(CthThreadBase *th) {
   th->listener = NULL;
   free(th->data);
   th->data = NULL;
-
-  if (th->stack != NULL)
-    free(th->stack);
-  th->stack = NULL;
+  /* the stack stays attached for the cache; CthThreadFree frees it otherwise */
 }
 
 static void CthThreadFree(CthThread t) {
@@ -467,6 +527,9 @@ static void CthThreadFree(CthThread t) {
   CpvAccess(doomedThreadPool) = t;
   if (doomed != NULL) {
     CthThreadBaseFree(&doomed->base);
+    if (CthCachePut(doomed)) return;
+    if (doomed->base.token != NULL) free(doomed->base.token);
+    if (doomed->base.stack != NULL) free(doomed->base.stack);
     free(doomed);
   }
 }
