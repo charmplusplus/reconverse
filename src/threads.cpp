@@ -64,7 +64,8 @@ typedef struct CthThreadBase {
   CthVoidFn exitFn;           /* run post-switch when the thread exits */
   void *exitArg;
   void *userData;
-  struct CthThreadStruct *freeNext; /* per-PE free-list link (stack kept) */
+  struct CthThreadStruct *freeNext; /* free-list link (stack kept) */
+  int allocRank;              /* PE whose free list this struct returns to */
 } CthThreadBase;
 
 /* Action deferred until after the next context switch on this PE. It is
@@ -102,11 +103,30 @@ CpvStaticDeclare(CthThread, doomedThreadPool);
  * frees threads at millions per second; Argobots serves those from per-ES
  * pools, and malloc/free of stack + struct + token was 2.5x of an 8x gap in
  * DAOS pilot step 4. Reuse requires an exact stack-size match at the head. */
-#define CTH_CACHE_MAX_COUNT 1024
-#define CTH_CACHE_MAX_BYTES (16u << 20)
+#define CTH_CACHE_MAX_COUNT 256
+#define CTH_CACHE_MAX_BYTES (4u << 20)
 CpvStaticDeclare(CthThread, CthCacheHead);
 CpvStaticDeclare(int, CthCacheCount);
 CpvStaticDeclare(size_t, CthCacheBytes);
+/* A struct freed on another PE than the one that malloc'd it goes back to
+ * its allocating PE through a lock-free stack (one per rank, pushed by any
+ * PE, drained by the owner). Otherwise a producer PE that creates ULTs run
+ * and freed elsewhere would malloc every struct while the consumers' caches
+ * overflow into free(): exactly the cross-xstream pattern of Margo and DAOS,
+ * and glibc's arena locks then show up as futex calls. */
+struct CthRemoteCache {
+  std::atomic<CthThread> head{nullptr};
+  std::atomic<int> count{0};
+};
+static std::atomic<CthRemoteCache *> CthRemote{nullptr};
+static CthRemoteCache *CthRemoteCaches() {
+  CthRemoteCache *r = CthRemote.load(std::memory_order_acquire);
+  if (r) return r;
+  CthRemoteCache *mine = new CthRemoteCache[CmiMyNodeSize()];
+  if (CthRemote.compare_exchange_strong(r, mine, std::memory_order_acq_rel)) return mine;
+  delete[] mine;
+  return r;
+}
 CpvStaticDeclare(int, Cth_serialNo);
 CpvStaticDeclare(int, _defaultStackSize);
 CpvDeclare(int, CthResumeNormalThreadIdx);
@@ -364,6 +384,7 @@ void CthInit(char **argv) {
   //_MEMCHECK(t);
   t->base.token = NULL;
   t->base.stack = NULL;
+  t->base.allocRank = -1;
   CpvAccess(CthCurrent) = t;
 #ifdef __GNUC__
 #pragma GCC diagnostic push
@@ -409,9 +430,7 @@ static void *CthAllocateStack(CthThreadBase *th, int *stackSize,
   return ret;
 }
 
-/* free-list: put back a struct whose stack is still attached */
-static int CthCachePut(CthThread t) {
-  if (!CmiIsPeThread() || t->base.stack == NULL) return 0;
+static int CthCachePutLocal(CthThread t) {
   if (CpvAccess(CthCacheCount) >= CTH_CACHE_MAX_COUNT ||
       CpvAccess(CthCacheBytes) + (size_t)t->base.stacksize > CTH_CACHE_MAX_BYTES)
     return 0;
@@ -421,9 +440,43 @@ static int CthCachePut(CthThread t) {
   CpvAccess(CthCacheBytes) += (size_t)t->base.stacksize;
   return 1;
 }
+/* free-list: put back a struct whose stack is still attached */
+static int CthCachePut(CthThread t) {
+  if (!CmiIsPeThread() || t->base.stack == NULL) return 0;
+  int home = t->base.allocRank;
+  if (home == CmiMyRank()) return CthCachePutLocal(t);
+  if (home < 0 || home >= CmiMyNodeSize()) return 0;
+  CthRemoteCache &rc = CthRemoteCaches()[home];
+  if (rc.count.load(std::memory_order_relaxed) >= CTH_CACHE_MAX_COUNT) return 0;
+  rc.count.fetch_add(1, std::memory_order_relaxed);
+  CthThread old = rc.head.load(std::memory_order_relaxed);
+  do {
+    t->base.freeNext = old;
+  } while (!rc.head.compare_exchange_weak(old, t, std::memory_order_release, std::memory_order_relaxed));
+  return 1;
+}
+/* owner side: move everything other PEs returned into the local list */
+static void CthCacheDrainRemote() {
+  CthRemoteCache &rc = CthRemoteCaches()[CmiMyRank()];
+  if (rc.head.load(std::memory_order_relaxed) == NULL) return;
+  CthThread t = rc.head.exchange(NULL, std::memory_order_acq_rel);
+  int n = 0;
+  while (t != NULL) {
+    CthThread next = t->base.freeNext;
+    n++;
+    if (!CthCachePutLocal(t)) {
+      if (t->base.token != NULL) free(t->base.token);
+      free(t->base.stack);
+      free(t);
+    }
+    t = next;
+  }
+  rc.count.fetch_sub(n, std::memory_order_relaxed);
+}
 /* free-list: take a struct whose stack has exactly the requested size */
 static CthThread CthCachePop(int size) {
   if (!CmiIsPeThread()) return NULL;
+  if (CpvAccess(CthCacheHead) == NULL) CthCacheDrainRemote();
   CthThread t = CpvAccess(CthCacheHead);
   if (t == NULL || t->base.stacksize != size) return NULL;
   CpvAccess(CthCacheHead) = t->base.freeNext;
@@ -454,6 +507,7 @@ static CthThread CthCreateInner(CthVoidFn fn, void *arg, int size,
     //_MEMCHECK(result);
     result->base.token = NULL;
     result->base.stack = NULL;
+    result->base.allocRank = CmiIsPeThread() ? CmiMyRank() : -1;
     CthThreadInit(result);
     CthAllocateStack(&result->base, &size, migratable);
   }
