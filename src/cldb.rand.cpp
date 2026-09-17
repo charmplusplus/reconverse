@@ -55,7 +55,7 @@ void CldEnqueueWithinNode(void *msg, int infofn) {
 
   // If message is NOKEEP, do not pack it since its pointer is just going to
   // be shared with the other PEs on this node.
-  if (pfn && !CMI_MSG_NOKEEP(msg)) {
+  if (pfn && !CmiMsgIsNokeep(msg)) {
     pfn(&msg);
     ifn(msg, &pfn, &len, &queueing, &priobits, &prioptr);
   }

@@ -573,7 +573,7 @@ void *CmiAlloc(int size) {
   if (size >= CmiMsgHeaderSizeBytes) {
     // Set zcMsgType in the converse message header to CMK_REG_NO_ZC_MSG
     CMI_ZC_MSGTYPE((void *)ptr) = CMK_REG_NO_ZC_MSG;
-    CMI_MSG_NOKEEP((void *)ptr) = 0;
+    CmiSetMsgNokeep((void *)ptr, 0);
   }
 
   REFFIELDSET(ptr, 1);
@@ -964,12 +964,20 @@ void CmiInitMsgHeader(void *msg, int size) {
   CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
   header->messageSize = size;
   header->zcMsgType = CMK_REG_NO_ZC_MSG;
-  header->nokeep = false;
+  CmiSetMsgNokeep(msg, 0);
 }
 
 void CmiSetHandler(void *msg, int handlerId) {
   CmiMessageHeader *header = (CmiMessageHeader *)msg;
   header->handlerId = handlerId;
+}
+
+CLINKAGE void CmiSetMsgNokeep(void *msg, int nokeep) {
+  ((CmiMessageHeader *)msg)->nokeep = (nokeep != 0);
+}
+
+CLINKAGE int CmiMsgIsNokeep(const void *msg) {
+  return ((const CmiMessageHeader *)msg)->nokeep ? 1 : 0;
 }
 
 void CmiSetXHandler(void *msg, int xhandlerId) {
@@ -1527,7 +1535,7 @@ void CmiForwardMsgToPeers(int size, char *msg) {
    */
 
   int exceptRank = CmiMyRank();
-  if (CMI_MSG_NOKEEP(msg)) {
+  if (CmiMsgIsNokeep(msg)) {
     for (int i = 0; i < exceptRank; i++) {
       CmiReference(msg);
       CmiPushPE(i, msg);

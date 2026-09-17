@@ -34,6 +34,7 @@ add_subdirectory(cth_listener)
 add_subdirectory(handlers)
 add_subdirectory(abort_peer)
 add_subdirectory(megarecon)
+add_subdirectory(fanout_refcount)
 
 # Add a test that configures, builds, and runs standalone_project
 add_test(NAME standalone_project_build_and_test

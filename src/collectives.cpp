@@ -1,11 +1,14 @@
 #include "converse_internal.h"
+#include <algorithm>
 #include <thread>
+#include <vector>
 
 int Cmi_bcastHandler;
 int Cmi_nodeBcastHandler;
 int Cmi_reduceHandler;
 int Cmi_nodeReduceHandler;
 int Cmi_multicastHandler;
+int Cmi_fanoutHandler;
 thread_local int CmiGroupHandlerIndex;
 thread_local GroupDef *CmiGroupTable;
 thread_local int CmiGroupCounter;
@@ -20,6 +23,9 @@ void collectiveInit(void) {
   CmiGroupHandlerIndex = CmiRegisterHandler(CmiGroupHandler);
   Cmi_reduceHandler = CmiRegisterHandler(CmiReduceHandler);
   Cmi_nodeReduceHandler = CmiRegisterHandler(CmiNodeReduceHandler);
+  // Every PE registers in the same order, so the index is the same on every PE
+  // of every process; CmiAssignOnce publishes it once per process.
+  CmiAssignOnce(&Cmi_fanoutHandler, CmiRegisterHandler(CmiFanoutHandler));
   CmiGroupTable = (GroupDef *)calloc(GROUPTAB_SIZE, sizeof(GroupDef));
   CmiGroupCounter = 0;
   CmiReductionsInit();
@@ -666,9 +672,207 @@ void CmiLookupGroup(CmiGroup grp, int *npes, int **pes) {
   *pes = 0;
 }
 
+/************* List sends ***************/
+
+/* A list send used to be a loop over CmiSyncSend, so a message going to N
+ * destinations was allocated and copied N times and put on the wire N times.
+ * It now sends ONE message per destination PROCESS: the payload itself,
+ * byte for byte, with the destination ranks within that process appended
+ * behind it, and the receiving process hands that very buffer to those ranks
+ * (Cmi_fanoutHandler below).
+ *
+ * Layout of a fan-out message:
+ *
+ *   [payload, exactly the user's len bytes][padding to 8]
+ *   [nranks][the payload's handler][ranks...]
+ *
+ * Only two header fields of the payload are touched on the wire: handlerId,
+ * which becomes Cmi_fanoutHandler so the receiving process dispatches to the
+ * fan-out handler, and messageSize, set to len, which is what locates the
+ * trailer on arrival. The payload's own handler rides in the TRAILER rather
+ * than in swapHandlerId, because swapHandlerId is CmiSetXHandler: the seed
+ * balancer parks the user's handler there (CldSwitchHandler in cldb.cpp) on
+ * exactly the messages CldEnqueueMulti then list-sends, and borrowing it hangs
+ * tests/cld. collectiveMetaInfo is left alone for the same kind of reason.
+ * The fan-out handler restores handlerId before anyone sees the message.
+ *
+ * Because the payload starts at the front of the buffer, the receiving process
+ * delivers the received buffer itself and copies nothing for a nokeep message,
+ * and copies only for the ranks after the first otherwise. The trailer is then
+ * slack past messageSize inside the delivered allocation. Nothing on the
+ * receive path treats messageSize as the allocation length: CmiPushPE ignores
+ * the size it is handed, the scheduler passes only the pointer, and CmiFree
+ * goes by the allocator's own SIZEFIELD. The one visible consequence is that
+ * CmiSize of such a message is larger than its messageSize, so a handler must
+ * take the payload length from the header, not from the allocation. (Charm++
+ * reads CmiSize only for CCS requests and liveViz, neither of which is ever
+ * list-sent.)
+ *
+ * Why the ranks travel inside the message instead of one shared buffer being
+ * referenced once per destination (the first proposal in issue #219):
+ * CmiSyncSendAndFreeNoPersistent stamps header->destPE into the buffer before
+ * each issueAm (convcore.cpp), and CommRemoteHandler reads that field back out
+ * of the received bytes to choose the destination rank. A buffer shared by two
+ * destinations with different PE numbers therefore has its destination field
+ * rewritten while the first send is still outstanding: above LCI's eager
+ * threshold (~8 KB on a laptop) both messages arrive at the PE named by the
+ * last stamp and the other destination silently gets none.
+ * tests/fanout_refcount/fanout_refcount.cpp pins that case down.
+ *
+ * Copy accounting, for a list send to k ranks of one other process: the sender
+ * copies the payload once for that process (it used to copy k times, once per
+ * rank), and the receiving process copies it zero times for a nokeep payload
+ * and k-1 times otherwise. Network sends go from k to 1. Removing the sender's
+ * remaining copy would need the rank list out of band (LCI immediate data or
+ * the tag, i.e. a comm_backend interface change); that is deliberately out of
+ * scope here.
+ *
+ * Ownership is exactly as before, because nothing here takes a reference on
+ * the caller's buffer: it is only read, either by CmiSyncSend (which copies)
+ * or by the memcpy into a fan-out message. CmiSyncListSend leaves the caller's
+ * buffer untouched and owned by the caller; CmiSyncListSendAndFree drops the
+ * caller's own reference at the end, as it always did.
+ *
+ * Note that destinations are now visited grouped by process rather than in
+ * list order. A list send has never ordered deliveries to distinct
+ * destinations with respect to each other.
+ */
+
+// Offset of the trailer (the rank count and the ranks) behind a payload of
+// len bytes. Padded so the CmiUInt4s behind it stay aligned.
+static size_t CmiFanoutTrailerOffset(int len) {
+  const size_t align = 8;
+  return ((size_t)len + align - 1) & ~(align - 1);
+}
+
+// Trailer: [nranks][the payload's own handler id][ranks...].
+static const int CmiFanoutTrailerFixed = 2;
+
+static size_t CmiFanoutTotalSize(int len, int nranks) {
+  return CmiFanoutTrailerOffset(len) +
+         (size_t)(CmiFanoutTrailerFixed + nranks) * sizeof(CmiUInt4);
+}
+
+// Runs on the first listed rank of the destination process and hands the
+// payload to every rank the sender listed. The received buffer IS the payload
+// message, so it can be delivered as it stands.
+void CmiFanoutHandler(void *msg) {
+  CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
+  const int len = header->messageSize;
+
+  const CmiUInt4 *trailer =
+      (const CmiUInt4 *)((char *)msg + CmiFanoutTrailerOffset(len));
+  const int nranks = (int)trailer[0];
+  // Put the payload's own handler back before anyone sees the message.
+  header->handlerId = (CmiInt2)trailer[1];
+  const CmiUInt4 *ranks = trailer + CmiFanoutTrailerFixed;
+  const int firstPe = CmiNodeFirst(CmiMyNode());
+
+  if (CmiMsgIsNokeep(msg)) {
+    // Same contract as CmiForwardMsgToPeers' nokeep case, and no copy at all:
+    // one buffer for the whole process, one reference per receiving rank, so
+    // each PE's CmiFree drops one and the last one releases it. Like
+    // CmiForwardMsgToPeers, a shared message keeps whatever header->destPE the
+    // sender left in it: one buffer cannot name a per-PE destination.
+    // Every reference is taken before the first push, or the first receiver
+    // could free the buffer while this loop is still running.
+    for (int i = 1; i < nranks; i++)
+      CmiReference(msg); // the received buffer already holds the first
+    for (int i = 0; i < nranks; i++)
+      CmiPushPE((int)ranks[i], len, msg);
+  } else {
+    // A message its handler may keep or modify needs one buffer per rank, as
+    // the within-node fan-out does for non-nokeep messages -- but the received
+    // buffer serves the first rank, so this is k-1 copies, not k. The copies
+    // are made before that buffer is handed over: once pushed, another PE may
+    // free it.
+    for (int i = 1; i < nranks; i++) {
+      void *copy = CmiAlloc(len);
+      memcpy(copy, msg, len);
+      static_cast<CmiMessageHeader *>(copy)->destPE =
+          firstPe + (int)ranks[i];
+      CmiPushPE((int)ranks[i], len, copy);
+    }
+    header->destPE = firstPe + (int)ranks[0];
+    CmiPushPE((int)ranks[0], len, msg);
+  }
+}
+
+// Send the payload to nranks destinations in one other process. order[start..]
+// indexes pes[] and selects the destinations that live on destNode.
+static void CmiListSendToProcess(int destNode, const int *pes, const int *order,
+                                 int start, int nranks, int len, void *msg) {
+  // With a single destination there is nothing to amortize, so send the plain
+  // message exactly as before and skip the trailer and the extra handler hop.
+  // A message too short to hold a header cannot carry the handler swap either,
+  // so it takes the same path.
+  if (nranks == 1 || len < (int)CmiMsgHeaderSizeBytes) {
+    for (int i = 0; i < nranks; i++)
+      CmiSyncSend(pes[order[start + i]], len, msg);
+    return;
+  }
+
+  const int total = (int)CmiFanoutTotalSize(len, nranks);
+  char *fmsg = (char *)CmiAlloc(total);
+  memcpy(fmsg, msg, len); // the one copy this process costs the sender
+
+  CmiMessageHeader *fheader = (CmiMessageHeader *)fmsg;
+  fheader->messageSize = len; // the payload's length, and where the trailer is
+
+  CmiUInt4 *trailer = (CmiUInt4 *)(fmsg + CmiFanoutTrailerOffset(len));
+  trailer[0] = (CmiUInt4)nranks;
+  trailer[1] = (CmiUInt4)fheader->handlerId; // restored by the fan-out handler
+  for (int i = 0; i < nranks; i++)
+    trailer[CmiFanoutTrailerFixed + i] =
+        (CmiUInt4)CmiRankOf(pes[order[start + i]]);
+  fheader->handlerId = Cmi_fanoutHandler;
+
+  // This buffer backs exactly one send, so the destPE stamp inside
+  // CmiSyncSendAndFree has no other send to race with. It names the first
+  // listed rank, which is where the fan-out handler runs.
+  CmiSyncSendAndFree(pes[order[start]], total, fmsg);
+}
+
 void CmiSyncListSend(int npes, const int *pes, int len, void *msg) {
-  for (int i = 0; i < npes; i++) {
-    CmiSyncSend(pes[i], len, msg);
+  if (npes <= 0)
+    return;
+  // Nothing to group: a single destination, a run where every destination is
+  // in this process anyway, or a persistent handle array installed by
+  // CmiUsePersistentHandle. The handles in that array are set up per
+  // destination and sized for the user's message, and CmiSendPersistentMsg
+  // aborts on anything larger, so a fan-out message must not be sent through
+  // one; leave those sends exactly as they were.
+  if (npes == 1 || CmiNumNodes() == 1 || CpvAccess(phs) != nullptr) {
+    for (int i = 0; i < npes; i++)
+      CmiSyncSend(pes[i], len, msg);
+    return;
+  }
+
+  // Visit the destinations grouped by process, keeping list order within a
+  // process. Duplicated PEs stay duplicated, so delivery counts are unchanged.
+  std::vector<int> order(npes);
+  for (int i = 0; i < npes; i++)
+    order[i] = i;
+  std::stable_sort(order.begin(), order.end(), [pes](int a, int b) {
+    return CmiNodeOf(pes[a]) < CmiNodeOf(pes[b]);
+  });
+
+  const int myNode = CmiMyNode();
+  int i = 0;
+  while (i < npes) {
+    const int node = CmiNodeOf(pes[order[i]]);
+    int j = i + 1;
+    while (j < npes && CmiNodeOf(pes[order[j]]) == node)
+      j++;
+    if (node == myNode) {
+      // Destinations in this process keep the local path: a copy per PE, as
+      // before. There is no network send to amortize here.
+      for (int k = i; k < j; k++)
+        CmiSyncSend(pes[order[k]], len, msg);
+    } else {
+      CmiListSendToProcess(node, pes, order.data(), i, j - i, len, msg);
+    }
+    i = j;
   }
 }
 
@@ -677,9 +881,7 @@ void CmiSyncListSendFn(int npes, const int *pes, int len, char *msg) {
 }
 
 void CmiSyncListSendAndFree(int npes, const int *pes, int len, void *msg) {
-  for (int i = 0; i < npes; i++) {
-    CmiSyncSend(pes[i], len, msg);
-  }
+  CmiSyncListSend(npes, pes, len, msg);
   CmiFree(msg);
 }
 
