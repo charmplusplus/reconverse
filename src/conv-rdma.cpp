@@ -520,13 +520,18 @@ void CmiIssueRget(NcpyOperationInfo *ncpyOpInfo) {
 //   CmiIssueRgetCopyBased(ncpyOpInfo);
 // #endif
   int target_node = CmiNodeOf(ncpyOpInfo->srcPe);
+  // A posted destination buffer may be smaller than the source: the zerocopy
+  // post API lets the receiver choose its own length. The transfer is bounded
+  // by both sides, so use the minimum for every length here. The copy-based
+  // path (putDataHandler) and memcpyGet/memcpyPut already do this, as does
+  // classic charm's ofi layer (src/arch/ofi/machine-onesided.C:280,340).
+  size_t len = std::min(ncpyOpInfo->srcSize, ncpyOpInfo->destSize);
   if (target_node == CmiMyNode()) {
     // loopback: use GPU-aware copy if either pointer is a device allocation
-    memcpyAnyPtr((void *)ncpyOpInfo->destPtr, ncpyOpInfo->srcPtr,
-                 ncpyOpInfo->srcSize);
+    memcpyAnyPtr((void *)ncpyOpInfo->destPtr, ncpyOpInfo->srcPtr, len);
     comm_backend::Status status;
     status.local_buf = ncpyOpInfo->destPtr;
-    status.size = ncpyOpInfo->srcSize;
+    status.size = len;
     status.user_context = ncpyOpInfo;
     CommRgetLocalHandler(status);
   } else if (!CmiUseCopyBasedRDMA) {
@@ -534,7 +539,7 @@ void CmiIssueRget(NcpyOperationInfo *ncpyOpInfo) {
     void *rmr = ncpyOpInfo->srcLayerInfo + sizeof(comm_backend::mr_t);
     comm_backend::issueRget(CmiNodeToGlobal(CmiNodeOf(ncpyOpInfo->srcPe)),
                             ncpyOpInfo->destPtr,
-                            ncpyOpInfo->srcSize, mr, (void*)ncpyOpInfo->srcPtr, rmr,
+                            len, mr, (void*)ncpyOpInfo->srcPtr, rmr,
                             CommRgetLocalHandler, ncpyOpInfo);
     // printf("reconverse rgets from src pe %d to dest pe %d, baseptr %p, srcptr %p, dstptr %p, size %zu\n", ncpyOpInfo->srcPe, ncpyOpInfo->destPe, comm_backend::getRMRBase(rmr), ncpyOpInfo->srcPtr, ncpyOpInfo->destPtr, ncpyOpInfo->srcSize);
   } else {
@@ -552,13 +557,15 @@ void CmiIssueRput(NcpyOperationInfo *ncpyOpInfo) {
 //   CmiIssueRputCopyBased(ncpyOpInfo);
 // #endif
 int target_node = CmiNodeOf(ncpyOpInfo->destPe);
+// See CmiIssueRget: a posted destination may be smaller than the source, so
+// the transfer length is bounded by both sides.
+size_t len = std::min(ncpyOpInfo->srcSize, ncpyOpInfo->destSize);
 if (target_node == CmiMyNode()) {
   // loopback: use GPU-aware copy if either pointer is a device allocation
-  memcpyAnyPtr((void *)ncpyOpInfo->destPtr, ncpyOpInfo->srcPtr,
-               ncpyOpInfo->srcSize);
+  memcpyAnyPtr((void *)ncpyOpInfo->destPtr, ncpyOpInfo->srcPtr, len);
   comm_backend::Status status;
   status.local_buf = ncpyOpInfo->srcPtr;
-  status.size = ncpyOpInfo->srcSize;
+  status.size = len;
   status.user_context = ncpyOpInfo;
   CommRputLocalHandler(status);
 } else if (!CmiUseCopyBasedRDMA) {
@@ -566,7 +573,7 @@ if (target_node == CmiMyNode()) {
   void *rmr = ncpyOpInfo->destLayerInfo + sizeof(comm_backend::mr_t);
   comm_backend::issueRput(CmiNodeToGlobal(CmiNodeOf(ncpyOpInfo->destPe)),
                           ncpyOpInfo->srcPtr,
-                          ncpyOpInfo->srcSize, mr, 0, rmr,
+                          len, mr, 0, rmr,
                           CommRputLocalHandler, ncpyOpInfo);
 } else {
   CmiIssueRputCopyBased(ncpyOpInfo);
