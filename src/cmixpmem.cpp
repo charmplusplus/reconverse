@@ -1,4 +1,19 @@
-#include "cmi-shmem-common.h"
+// XPMEM backend for the IPC pool.
+//
+// Included by cmishmem.cpp (not compiled on its own), and only when the build
+// found xpmem. Where the POSIX shm backend puts the pool in a file both
+// processes map, this one keeps the pool in ordinary heap memory and lets
+// peers attach to it directly: each process exports its address space with
+// xpmem_make and broadcasts the resulting segment id, and each peer turns
+// that id plus the pool's address into a local mapping with xpmem_get and
+// xpmem_attach.
+//
+// Whether that works at run time depends on the xpmem kernel module being
+// loaded, which the library cannot tell us before /dev/xpmem is opened. See
+// ipcXpmemUsable_() -- cmishmem.cpp falls back to POSIX shm when it says no.
+#include <fcntl.h>
+#include <unistd.h>
+
 #include <map>
 #include <memory>
 #include <vector>
@@ -25,20 +40,37 @@ struct init_msg_ {
   int from;
   xpmem_segid_t segid;
   ipc_shared_* shared;
+  // Size of the exporter's pool. The importer has to attach the whole pool,
+  // not just its header: a block handed back by the allocator can sit
+  // anywhere in it, and an attachment that only covers sizeof(ipc_shared_)
+  // faults the moment a peer writes past the header.
+  std::size_t span;
 };
+
+// Reports whether xpmem can actually be used in this run. The library links
+// fine on any Cray system, but xpmem_make fails with ENOENT unless the kernel
+// module is loaded and /dev/xpmem exists, which is a per-host property that
+// only shows up at run time.
+static bool ipcXpmemUsable_(void) {
+  int fd = open("/dev/xpmem", O_RDWR);
+  if (fd < 0) return false;
+  close(fd);
+  return true;
+}
 
 // NOTE ( we should eventually detach xpmem segments at close )
 //      ( it's not urgently needed since xpmem does it for us )
-struct CmiIpcManager : public ipc_metadata_ {
+struct ipcManagerXpmem_ : public CmiIpcManager {
   // maps ranks to segments
   std::map<int, xpmem_segid_t> segments;
   // maps segments to xpmem apids
   std::map<xpmem_segid_t, xpmem_apid_t> instances;
-  // number of physical peers
-  int nPeers;
+  // size of this process's own pool, sent to peers so they attach all of it
+  std::size_t span;
   // create our local shared data
-  CmiIpcManager(std::size_t key) : ipc_metadata_(key) {
-    this->shared[this->mine] = makeIpcShared_();
+  ipcManagerXpmem_(std::size_t key) : CmiIpcManager(key) {
+    this->span = sizeof(ipc_shared_) + CpvAccess(kSegmentSize);
+    this->shared[this->mine].store(makeIpcShared_(), std::memory_order_release);
   }
 
   void put_segment(int proc, const xpmem_segid_t& segid) {
@@ -52,6 +84,9 @@ struct CmiIpcManager : public ipc_metadata_ {
       if (mine == proc) {
         auto segid =
             xpmem_make(0, XPMEM_MAXADDR_SIZE, XPMEM_PERMIT_MODE, (void*)0666);
+        CmiEnforceMsg(segid >= 0,
+                      "xpmem_make failed -- is the xpmem kernel module "
+                      "loaded on this host?");
         this->put_segment(mine, segid);
         return segid;
       } else {
@@ -80,8 +115,8 @@ struct CmiIpcManager : public ipc_metadata_ {
   }
 };
 
-void* translateAddr_(ipc_manager_ptr_& meta, int proc, void* remote_ptr,
-                     const std::size_t& size) {
+static void* translateAddr_(ipcManagerXpmem_* meta, int proc, void* remote_ptr,
+                            const std::size_t& size) {
   if (proc == meta->mine) {
     return remote_ptr;
   } else {
@@ -91,12 +126,13 @@ void* translateAddr_(ipc_manager_ptr_& meta, int proc, void* remote_ptr,
     uintptr_t attach_align = 1 << 23;
     auto base = OPAL_DOWN_ALIGN_PTR(remote_ptr, attach_align, uintptr_t);
     auto bound =
-        OPAL_ALIGN_PTR(remote_ptr + size - 1, attach_align, uintptr_t) + 1;
+        OPAL_ALIGN_PTR((char*)remote_ptr + size - 1, attach_align, uintptr_t) +
+        1;
 
     using offset_type = decltype(xpmem_addr::offset);
     xpmem_addr addr{.apid = apid, .offset = (offset_type)base};
     auto* ctx = xpmem_attach(addr, bound - base, NULL);
-    CmiAssert(ctx != (void*)-1);
+    CmiEnforceMsg(ctx != (void*)-1, "xpmem_attach failed!");
 
     return (void*)((uintptr_t)ctx +
                    (ptrdiff_t)((uintptr_t)remote_ptr - (uintptr_t)base));
@@ -105,12 +141,14 @@ void* translateAddr_(ipc_manager_ptr_& meta, int proc, void* remote_ptr,
 
 static void handleInitialize_(void* msg) {
   auto* imsg = (init_msg_*)msg;
-  auto& meta = (CsvAccess(managers_))[(imsg->key - 1)];
+  auto* meta =
+      static_cast<ipcManagerXpmem_*>((CsvAccess(managers_))[(imsg->key - 1)].get());
   // extract the segment id and shared region
   // from the msg (registering it in our metadata)
   meta->put_segment(imsg->from, imsg->segid);
-  meta->shared[imsg->from] = (ipc_shared_*)translateAddr_(
-      meta, imsg->from, imsg->shared, sizeof(ipc_shared_));
+  auto* peer = (ipc_shared_*)translateAddr_(meta, imsg->from, imsg->shared,
+                                            imsg->span);
+  meta->shared[imsg->from].store(peer, std::memory_order_release);
   // then free the message
   CmiFree(imsg);
   // count the segments attached so far (the vector is pre-sized, so
@@ -121,82 +159,73 @@ static void handleInitialize_(void* msg) {
   }
   // if we received messages from all our peers:
   if (meta->nPeers == nAttached) {
-    // resume the sleeping thread
     if (CmiMyPe() == 0) {
       printIpcStartupMessage_("xpmem");
     }
-
+    finishSetup_(meta);
     awakenSleepers_();
   }
 }
 
-void CmiIpcInit(char** argv) {
-  CsvInitialize(ipc_manager_map_, managers_);
-
-  initSleepers_();
-  initSegmentSize_(argv);
-
+static void ipcInitXpmem_(char** argv) {
   CpvInitialize(int, handle_init);
   CpvAccess(handle_init) = CmiRegisterHandler(handleInitialize_);
 }
 
-CmiIpcManager* CmiMakeIpcManager(CthThread th) {
-  putSleeper_(th);
+// Runs on rank 0 only, with every other rank of this process waiting on the
+// node barrier in CmiMakeIpcManager.
+static CmiIpcManager* ipcMakeManagerXpmem_(std::size_t key) {
+  auto* meta = new ipcManagerXpmem_(key);
+  int* pes;
+  int nPes;
+  CmiGetPesOnPhysicalNode(CmiPhysicalNodeID(CmiMyPe()), &pes, &nPes);
+  meta->nPeers = nPes / CmiMyNodeSize();
+  return meta;
+}
 
-  // ensure all sleepers are reg'd
-  CmiNodeAllBarrier();
-
-  CmiIpcManager* meta;
-  if (CmiMyRank() == 0) {
-    auto key = CsvAccess(managers_).size() + 1;
-    meta = new CmiIpcManager(key);
-    CsvAccess(managers_).emplace_back(meta);
-  } else {
-    // pause until the metadata is ready
-    CmiNodeAllBarrier();
-    return CsvAccess(managers_).back().get();
-  }
-
+// Publishes this process's segment id to its peers on this host. Split from
+// the constructor so the manager is in the registry before any reply can be
+// handled: handleInitialize_ finds it there by key.
+static void ipcBootstrapXpmem_(CmiIpcManager* base) {
+  auto* meta = static_cast<ipcManagerXpmem_*>(base);
   int* pes;
   int nPes;
   auto thisPe = CmiMyPe();
-  auto thisNode = CmiPhysicalNodeID(CmiMyPe());
-  CmiGetPesOnPhysicalNode(thisNode, &pes, &nPes);
+  CmiGetPesOnPhysicalNode(CmiPhysicalNodeID(thisPe), &pes, &nPes);
   auto nSize = CmiMyNodeSize();
-  auto nProcs = nPes / nSize;
-  meta->nPeers = nProcs;
+  auto nProcs = meta->nPeers;
 
-  if (nProcs > 1) {
-    auto* imsg = (init_msg_*)CmiAlloc(sizeof(init_msg_));
-    CmiSetHandler(imsg, CpvAccess(handle_init));
-    imsg->key = meta->key;
-    imsg->from = meta->mine;
-    imsg->segid = meta->get_segment(meta->mine);
-    imsg->shared = meta->shared[meta->mine];
-    // send messages to all the pes on this node
-    for (auto i = 0; i < nProcs; i++) {
-      auto& pe = pes[i * nSize];
-      auto last = i == (nProcs - 1);
-      if (pe == thisPe) {
-        if (last) {
-          CmiFree(imsg);
-        }
-        continue;
-      } else if (last) {
-        // free'ing with the last send
-        CmiSyncSendAndFree(pe, sizeof(init_msg_), (char*)imsg);
-      } else {
-        // then sending (without free) otherwise
-        CmiSyncSend(pe, sizeof(init_msg_), (char*)imsg);
-      }
-    }
-  } else {
-    // single process -- wake up sleeping thread(s)
+  if (nProcs <= 1) {
+    // sole process on this host: nothing to attach, so the pool is as ready
+    // as it will ever be
+    if (CmiMyPe() == 0) printIpcStartupMessage_("xpmem");
+    finishSetup_(meta);
     awakenSleepers_();
+    return;
   }
 
-  // signal that the metadata is ready
-  CmiNodeAllBarrier();
-
-  return meta;
+  auto* imsg = (init_msg_*)CmiAlloc(sizeof(init_msg_));
+  CmiSetHandler(imsg, CpvAccess(handle_init));
+  imsg->key = meta->key;
+  imsg->from = meta->mine;
+  imsg->segid = meta->get_segment(meta->mine);
+  imsg->shared = meta->shared[meta->mine].load(std::memory_order_relaxed);
+  imsg->span = meta->span;
+  // send messages to all the pes on this node
+  for (auto i = 0; i < nProcs; i++) {
+    auto& pe = pes[i * nSize];
+    auto last = i == (nProcs - 1);
+    if (pe == thisPe) {
+      if (last) {
+        CmiFree(imsg);
+      }
+      continue;
+    } else if (last) {
+      // free'ing with the last send
+      CmiSyncSendAndFree(pe, sizeof(init_msg_), (char*)imsg);
+    } else {
+      // then sending (without free) otherwise
+      CmiSyncSend(pe, sizeof(init_msg_), (char*)imsg);
+    }
+  }
 }

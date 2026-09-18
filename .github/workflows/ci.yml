@@ -49,6 +49,10 @@ jobs:
             cmake --build build --target all
             ctest --test-dir build --extra-verbose --timeout 60
 
+      # The shared-memory IPC pool is built unconditionally and turned on at
+      # run time with +ipc, so the tests above already cover it. This build
+      # only checks that CMK_USE_SHMEM -- which Charm++'s buildcmake passes
+      # for --enable-shmem -- still configures and still works.
       - name: With the LCI communication backend and CMK_USE_SHMEM=ON
         shell: bash
         run: |
@@ -62,9 +66,7 @@ jobs:
                 -DCMK_USE_SHMEM=ON \
                 .
             cmake --build build-shmem --target all
-            # Only runtime_modes bootstraps the IPC manager; the other tests
-            # run exactly as they do without shared memory.
-            ctest --test-dir build-shmem --extra-verbose --timeout 120 -R runtime_modes
+            ctest --test-dir build-shmem --extra-verbose --timeout 120 -R 'runtime_modes|ipc'
 
       - name: With the LCW communication backend
         shell: bash

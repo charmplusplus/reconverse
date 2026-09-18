@@ -28,6 +28,12 @@ Some general options include:
 * **`RECONVERSE_ENABLE_CPU_AFFINITY`** (`ON` by default if HWLOC is found)
   Enables CPU affinity support via [hwloc](https://www.open-mpi.org/projects/hwloc/). Requires HWLOC to be installed.
 
+* **`RECONVERSE_ENABLE_XPMEM`** (`OFF` by default)
+  Builds the XPMEM backend for shared-memory IPC in addition to the POSIX
+  shared memory one, so that `+ipcmode xpmem` (and `+ipcmode auto` on a host
+  with the kernel module loaded) can use it. Requires an XPMEM installation;
+  point CMake at it with `-DXPMEM_ROOT=<prefix>` if it is not in `/opt/xpmem`.
+
 * **`CMAKE_BUILD_TYPE`** (not set by default)
   Selects the build type and corresponding compiler flags. For example:
 
@@ -80,6 +86,65 @@ The example executables are located in the build/test/<program_name> folders. Yo
 ### Runtime Options
 - **`+pe <num>`**: specify the total number of PEs across all processes.
 - **`+backend <lci|lcw>`**: select the communication backend at runtime. If not specified, Reconverse will use the first available backend in the order of LCI, LCW.
+- **`+ipc`** / **`+noipc`**: send messages between processes that share a host through shared memory instead of the communication backend. Off by default; see [Shared-memory IPC](#shared-memory-ipc-ipc).
+- **`+ipcmode <auto|shm|xpmem>`**: pick the mechanism backing the shared-memory pool. Implies `+ipc`.
+- **`++ipcpoolsize <bytes>`**: size of each process's shared-memory pool (8 MiB by default).
+- **`++ipccutoff <bytes>`**: largest message the pool will carry. Messages above it go over the communication backend. Defaults to a bin below `poolsize / 25`.
+
+## Shared-memory IPC (`+ipc`)
+
+Two processes on the same host do not need the network to talk to each other.
+With `+ipc`, every process maps a pool of shared memory into each of its
+peers' address spaces, and `CmiSyncSend*`/`CmiSyncNodeSend*` to a peer process
+on the same host copy the message straight into that peer's pool instead of
+handing it to LCI or MPI. Nothing about the messaging API changes: a message
+that arrives through the pool is indistinguishable from one off the network,
+down to the destination field in its header, and the same handler runs.
+
+This is off by default, so a run that does not ask for it behaves exactly as
+before. Turn it on with `+ipc`:
+
+```
+$ srun -n 4 ./reconverse_ping_ack +pe 8 +ipc
+```
+
+Messages fall back to the communication backend, silently and per message,
+whenever the pool cannot carry them: the destination is on another host, the
+message is larger than `++ipccutoff`, or the pool is momentarily full. A
+program therefore never has to know whether IPC is on.
+
+### Mechanisms
+
+* **`shm`** — POSIX shared memory (`shm_open`/`mmap`). Needs nothing beyond a
+  working `/dev/shm`, so it is the fallback everywhere.
+* **`xpmem`** — [XPMEM](https://github.com/hpc/xpmem), which maps one process's
+  ordinary heap into another's, avoiding the shm file entirely. Must be built
+  in with `-DRECONVERSE_ENABLE_XPMEM=ON` (point CMake at a non-standard
+  install with `-DXPMEM_ROOT=<prefix>`), and needs the `xpmem` kernel module
+  loaded at run time.
+* **`auto`** (the default) — xpmem if it was built in *and* `/dev/xpmem` is
+  present, otherwise POSIX shared memory. Asking for `+ipcmode xpmem`
+  explicitly on a host without it is an error rather than a silent fallback.
+
+### Querying it from a program
+
+```c
+int CmiIpcEnabled(void);          /* is the pool up? */
+const char *CmiIpcImplName(void); /* "posixshm", "xpmem", or "none" */
+int CmiIpcNumPeers(void);         /* processes on this host, this one included */
+long CmiIpcMessagesSent(void);    /* messages this PE put into the pool */
+long CmiIpcMessagesReceived(void);/* messages this PE took out of it */
+```
+
+`tests/ipc` uses these to check that traffic really took the pool.
+
+### Caveats
+
+* `+ipc` makes Reconverse call `CmiInitCPUTopology` during startup, because
+  the pool has to know which processes share a host. That adds a small
+  collective to startup and prints the usual topology line.
+* Cross-partition sends (`CmiInterSyncSend` and friends) always use the
+  communication backend.
 
 ## Example Steps to Build and Run Reconverse
 

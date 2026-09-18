@@ -3,6 +3,7 @@
 
 #include "converse_internal.h"
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <limits>
@@ -27,7 +28,8 @@ const std::array<std::size_t, kNumCutOffPoints> kCutOffPoints = {
     1048576,   2097152,   4194304,   8388608,   16777216, 33554432, 67108864,
     134217728, 268435456, 536870912, 1073741824};
 
-struct ipc_metadata_;
+CpvExtern(int, CthResumeNormalThreadIdx);
+
 CsvStaticDeclare(CmiNodeLock, sleeper_lock);
 
 using sleeper_map_t = std::vector<CthThread>;
@@ -53,8 +55,12 @@ struct ipc_shared_ {
   }
 };
 
-// shared data for each pe
-struct ipc_metadata_ {
+// Shared state for one IPC pool, common to every backend. Backends derive
+// from this and add whatever they need to map a peer's segment (file
+// descriptors for POSIX shared memory, segment/access ids for xpmem); the
+// block allocator in cmishmem.cpp only ever touches the fields here, so it
+// is the same code whichever backend mapped the segments.
+struct CmiIpcManager {
   // maps procs to shared segments; pre-sized so lookups never mutate the
   // container (PE threads poll this concurrently with segment attachment)
   std::vector<std::atomic<ipc_shared_*>> shared;
@@ -62,14 +68,39 @@ struct ipc_metadata_ {
   int mine;
   // key of this instance
   std::size_t key;
+  // set once every peer segment on this host has been mapped; until then
+  // allocation reports CMI_IPC_TIMEOUT and senders fall back to the network
+  std::atomic<bool> ready;
+  // peers[node] is nonzero for every *other* process sharing this host, so
+  // the send path can rule out a network destination with one load
+  std::vector<char> peers;
+  // number of processes (including this one) on this host
+  int nPeers;
   // base constructor
-  ipc_metadata_(std::size_t key_)
-      : shared(CmiNumNodes()), mine(CmiMyNode()), key(key_) {}
+  CmiIpcManager(std::size_t key_)
+      : shared(CmiNumNodes()),
+        mine(CmiMyNode()),
+        key(key_),
+        ready(false),
+        peers(CmiNumNodes(), 0),
+        nPeers(1) {}
   // virtual destructor may be needed
-  virtual ~ipc_metadata_() {}
+  virtual ~CmiIpcManager() {}
 };
 
-inline std::size_t whichBin_(std::size_t size);
+// Which mechanism maps one process's pool into its peers' address spaces.
+enum CmiIpcMode {
+  CMI_IPC_MODE_OFF = 0,
+  CMI_IPC_MODE_POSIX_SHM,
+  CMI_IPC_MODE_XPMEM
+};
+
+inline std::size_t whichBin_(std::size_t size) {
+  const auto* begin = kCutOffPoints.data();
+  const auto* end = kCutOffPoints.data() + kNumCutOffPoints;
+  const auto* it = std::lower_bound(begin, end, size);
+  return static_cast<std::size_t>(it - begin);  // kNumCutOffPoints if none
+}
 
 inline static void initIpcShared_(ipc_shared_* shared) {
   auto begin = (std::uintptr_t)(sizeof(ipc_shared_) +
@@ -130,6 +161,8 @@ inline static void putSleeper_(CthThread th) {
 }
 
 static void awakenSleepers_(void);
+// records which peer processes share this host, and marks the pool usable
+static void finishSetup_(CmiIpcManager* meta);
 
 using ipc_manager_ptr_ = std::unique_ptr<CmiIpcManager>;
 using ipc_manager_map_ = std::vector<ipc_manager_ptr_>;

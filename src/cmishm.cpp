@@ -1,3 +1,14 @@
+// POSIX shared memory backend for the IPC pool.
+//
+// Included by cmishmem.cpp (not compiled on its own) so that the pool's
+// block allocator, the sleeper list and the manager registry are shared with
+// the other backends in one translation unit.
+//
+// Each process creates one shm segment named after the pid of its host's
+// leader process and its own logical node number, and maps the segment of
+// every other process on the host. The leader's pid is the only thing that
+// cannot be derived locally, so it is broadcast over ordinary Converse
+// messages before any segment is opened.
 #include <cerrno>
 #include <dlfcn.h>
 #include <fcntl.h>
@@ -10,7 +21,6 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-#include "cmi-shmem-common.h"
 #include <memory>
 
 CpvStaticDeclare(int, num_cbs_recvd);
@@ -18,10 +28,10 @@ CpvStaticDeclare(int, num_cbs_exptd);
 CpvStaticDeclare(int, handle_callback);
 CpvStaticDeclare(int, handle_node_pid);
 CsvStaticDeclare(pid_t, node_pid);
-CpvExtern(int, CthResumeNormalThreadIdx);
 
-static int sendPid_(CmiIpcManager*);
-static void openAllShared_(CmiIpcManager*);
+struct ipcManagerShm_;
+static int sendPid_(ipcManagerShm_*);
+static void openAllShared_(ipcManagerShm_*);
 
 struct pid_message_ {
   char core[CmiMsgHeaderSizeBytes];
@@ -90,29 +100,21 @@ static std::pair<int, ipc_shared_*> openShared_(int node) {
   return std::make_pair(fd, res);
 }
 
-struct CmiIpcManager : public ipc_metadata_ {
+struct ipcManagerShm_ : public CmiIpcManager {
   std::map<int, int> fds;
   // cached values to avoid touching Cpv/Csv at static teardown
   std::size_t mapped_size;
   std::size_t node_pid_val;
 
-  CmiIpcManager(std::size_t key) : ipc_metadata_(key) {
-    auto firstPe = CmiNodeFirst(CmiMyNode());
-    auto thisRank = CmiPhysicalRank(firstPe);
+  ipcManagerShm_(std::size_t key) : CmiIpcManager(key) {
     // cache map size while CPV/CSV systems are valid; node_pid_val is
     // captured in openAllShared_ once the node pid is actually known
     this->mapped_size = CpvAccess(kSegmentSize) + sizeof(ipc_shared_);
     CsvInitialize(pid_t, node_pid);
     this->node_pid_val = 0;
-    if (thisRank == 0) {
-      if (sendPid_(this) == 1) {
-        openAllShared_(this);
-        awakenSleepers_();
-      }
-    }
   }
 
-  virtual ~CmiIpcManager() {
+  virtual ~ipcManagerShm_() {
     // use cached mapped size (set at construction) to avoid touching CPV/CSV
     // during static teardown
     std::size_t map_size = this->mapped_size;
@@ -142,7 +144,7 @@ struct CmiIpcManager : public ipc_metadata_ {
   }
 };
 
-static void openAllShared_(CmiIpcManager* meta) {
+static void openAllShared_(ipcManagerShm_* meta) {
   int* pes;
   int nPes;
   int thisNode = CmiPhysicalNodeID(CmiMyPe());
@@ -167,31 +169,11 @@ static void openAllShared_(CmiIpcManager* meta) {
     meta->shared[proc].store(res.second, std::memory_order_release);
   }
   DEBUGF(("%d> finished opening all shared\n", meta->mine));
-}
-
-inline std::size_t whichBin_(std::size_t size) {
-   const auto* begin = kCutOffPoints.data();
-   const auto* end   = kCutOffPoints.data() + kNumCutOffPoints;
-   const auto* it = std::lower_bound(begin, end, size);
-   return static_cast<std::size_t>(it - begin);  // returns kNumCutOffPoints if none
-}
-
-static void awakenSleepers_(void) {
-  auto& current_sleepers = CsvAccess(sleepers);
-  for (auto i = 0; i < current_sleepers.size(); i++) {
-    auto& th = current_sleepers[i];
-    if (i == CmiMyRank()) {
-      CthAwaken(th);
-    } else {
-      auto* token = CthGetToken(th);
-      CmiSetHandler(token, CpvAccess(CthResumeNormalThreadIdx));
-      CmiPushPE(i, token);
-    }
-  }
+  finishSetup_(meta);
 }
 
 // returns number of processes in node
-int procBroadcastAndFree_(char* msg, std::size_t size) {
+static int procBroadcastAndFree_(char* msg, std::size_t size) {
   int* pes;
   int nPes;
   int thisPe = CmiMyPe();
@@ -219,7 +201,7 @@ int procBroadcastAndFree_(char* msg, std::size_t size) {
   return nProcs;
 }
 
-static int sendPid_(CmiIpcManager* manager) {
+static int sendPid_(ipcManagerShm_* manager) {
   CsvInitialize(pid_t, node_pid);
   CsvAccess(node_pid) = getpid();
 
@@ -247,7 +229,7 @@ static void callbackHandler_(void* msg) {
       return;
     } else {
       // otherwise -- tell everyone we're ready!
-      printIpcStartupMessage_("pxshm");
+      if (CmiMyPe() == 0) printIpcStartupMessage_("pxshm");
       procBroadcastAndFree_((char*)msg, sizeof(pid_message_));
     }
   } else {
@@ -255,7 +237,7 @@ static void callbackHandler_(void* msg) {
   }
 
   auto& meta = (CsvAccess(managers_))[(key - 1)];
-  openAllShared_(meta.get());
+  openAllShared_(static_cast<ipcManagerShm_*>(meta.get()));
   awakenSleepers_();
 }
 
@@ -270,12 +252,7 @@ static void nodePidHandler_(void* msg) {
   CmiSyncSendAndFree(root, sizeof(pid_message_), (char*)msg);
 }
 
-void CmiIpcInit(char** argv) {
-  CsvInitialize(ipc_manager_map_, managers_);
-
-  initSleepers_();
-  initSegmentSize_(argv);
-
+static void ipcInitShm_(char** argv) {
   CpvInitialize(int, num_cbs_recvd);
   CpvInitialize(int, num_cbs_exptd);
   CpvInitialize(int, handle_callback);
@@ -284,24 +261,23 @@ void CmiIpcInit(char** argv) {
   CpvAccess(handle_node_pid) = CmiRegisterHandler(nodePidHandler_);
 }
 
-CmiIpcManager* CmiMakeIpcManager(CthThread th) {
+// Runs on rank 0 only, with every other rank of this process waiting on the
+// node barrier in CmiMakeIpcManager.
+static CmiIpcManager* ipcMakeManagerShm_(std::size_t key) {
   CpvAccess(num_cbs_recvd) = CpvAccess(num_cbs_exptd) = 0;
+  return new ipcManagerShm_(key);
+}
 
-  putSleeper_(th);
-
-  // ensure all sleepers are reg'd
-  CmiNodeAllBarrier();
-
-  if (CmiMyRank() == 0) {
-    auto key = CsvAccess(managers_).size() + 1;
-    auto* manager = new CmiIpcManager(key);
-    CsvAccess(managers_).emplace_back(manager);
-    // signal the metadata is ready
-    CmiNodeAllBarrier();
-    return manager;
-  } else {
-    // pause until the metadata is ready
-    CmiNodeAllBarrier();
-    return CsvAccess(managers_).back().get();
+// Starts the pid exchange. Split from the constructor so the manager is in
+// the registry before any reply can be handled: callbackHandler_ finds it
+// there by key.
+static void ipcBootstrapShm_(CmiIpcManager* base) {
+  auto* meta = static_cast<ipcManagerShm_*>(base);
+  auto firstPe = CmiNodeFirst(CmiMyNode());
+  if (CmiPhysicalRank(firstPe) != 0) return;  // not this host's leader process
+  if (sendPid_(meta) == 1) {
+    // sole process on this host: nobody to hear from, so finish here
+    openAllShared_(meta);
+    awakenSleepers_();
   }
 }
