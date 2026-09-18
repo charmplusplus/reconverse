@@ -145,6 +145,14 @@ long CmiIpcMessagesReceived(void);/* messages this PE took out of it */
   collective to startup and prints the usual topology line.
 * Cross-partition sends (`CmiInterSyncSend` and friends) always use the
   communication backend.
+* Messages to one destination can be reordered relative to each other, because
+  a message under the cutoff and one over it travel by different routes.
+  Converse has never ordered messages between PEs, so this breaks no
+  guarantee, but a program that happened to rely on the ordering the network
+  backend gave it will notice.
+* A process killed outright (not `CmiExit`) leaves its POSIX shared memory
+  segment behind in `/dev/shm`; a clean exit unlinks it. `xpmem` has nothing
+  to leave behind.
 
 ## Example Steps to Build and Run Reconverse
 
