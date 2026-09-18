@@ -32,6 +32,7 @@ void collectiveInit(void);
 
 void CmiCallHandler(int handlerId, void *msg);
 void CmiBcastHandler(void *msg);
+void CmiFanoutHandler(void *msg);
 void CmiNodeBcastHandler(void *msg);
 void CmiExitHandler(void *msg);
 void CmiGroupHandler(void *msg);

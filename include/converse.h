@@ -433,7 +433,7 @@ int CmiNumPes();
 int CmiNumNodes();
 // FIXME
 //#define CmiPhysicalNodeID(node) (node)
-extern int CmiPhysicalNodeID(int pe);
+CLINKAGE int CmiPhysicalNodeID(int pe);
 int CmiNodeOf(int pe);
 int CmiRankOf(int pe);
 int CmiStopFlag();
@@ -442,6 +442,11 @@ int CmiNodeFirst(int node);
 
 // handler things
 void CmiSetHandler(void *msg, int handlerId);
+// Prepare the header of a message that was not obtained from CmiAlloc (for
+// example one on the stack) so it can be passed to a send: clears the
+// zerocopy type and the nokeep flag and records the message size. Classic
+// Converse programs call this before CmiSetHandler on such messages.
+void CmiInitMsgHeader(void *msg, int size);
 void CmiSetXHandler(void *msg, int xhandlerId);
 int CmiGetHandler(void *msg);
 int CmiGetXHandler(void *msg);
@@ -494,6 +499,12 @@ void CmiFreeMulticastFn(CmiGroup grp, int size, char *msg);
 
 //network functions
 void CmiNetworkProgress();
+// Charm++'s CkNetworkProgress() / CkNetworkProgressAfter() expand to calls of
+// CmiMachineProgressImpl() only when the layer declares that it has one;
+// otherwise they compile to nothing and a long-running entry method never
+// drives the network. Reconverse's progress is CmiNetworkProgress().
+#define CMK_MACHINE_PROGRESS_DEFINED 1
+void CmiMachineProgressImpl();
 // ignore argument since it's only 0 in namd
 #define CmiNetworkProgressAfter(p) CmiNetworkProgressAfter()
 
@@ -506,42 +517,32 @@ void CmiNodeAllBarrier();
 void CsdExitScheduler();
 int CsdScheduler(int maxmsgs);
 
-#ifdef __cplusplus
-// Message-priority pair for the queue
-struct MessagePriorityPair {
-  void* message;
-  long long priority;
-  
-  MessagePriorityPair(void* msg, long long prio) : message(msg), priority(prio) {}
-};
-
-// Comparator for increasing order of priority values
-struct MessagePriorityComparator {
-  bool operator()(const MessagePriorityPair& a, const MessagePriorityPair& b) const {
-    return a.priority > b.priority; // Note: inverted for min-heap behavior
-  }
-};
-
-#endif
-
+/* The scheduler queue: messages ordered by priority value (smaller first,
+ * negative before zero before positive), FIFO within one priority value, or
+ * LIFO for messages pushed with QueuePushFront. One deque per live priority
+ * level, as in classic Converse's Cqs; see src/queueing.cpp for the design
+ * and its tuning notes. The fields are private to queueing.cpp. */
 typedef struct QueueImpl
 {
-  void *pq_neg; // negative priorities
-  void *pq_zero; // zero priority
-  void *pq_pos; // positive priorities
+  void *levels;      /* std::map<long long, std::deque<void*>>: nonzero priorities */
+  void *zero;        /* std::deque<void*>: priority 0, the common case */
+  int emptyLevels;   /* drained levels kept allocated for reuse */
+  int size;          /* messages in the queue */
 } *Queue;
 
 void QueueInit(Queue q);
 void QueueDestroy(Queue q);
 int QueueEmpty(Queue q);
 int QueueSize(Queue q);
+/* FIFO within the priority level */
 void QueuePush(Queue q, void* message, long long priority);
+/* LIFO within the priority level: comes out before everything already
+ * queued at that priority */
+void QueuePushFront(Queue q, void* message, long long priority);
 void QueuePop(Queue q);
 void* QueueTop(Queue q);
 
-//typedef std::priority_queue<MessagePriorityPair, std::vector<MessagePriorityPair>, MessagePriorityComparator> *Queue;
 
-//#define QueueInit() new std::priority_queue<MessagePriorityPair, std::vector<MessagePriorityPair>, MessagePriorityComparator>()
 
 CpvExtern(Queue, CsdSchedQueue);
 CsvExtern(Queue, CsdNodeQueue);
@@ -604,7 +605,7 @@ void CmiAbort(const char *format, ...);
 #endif
 
 // Utility functions
-int CmiPrintf(const char *format, ...);
+CLINKAGE int CmiPrintf(const char *format, ...);
 int CmiGetArgc(char **argv);
 int CmiScanf(const char *format, ...);
 int CmiError(const char *format, ...);
@@ -704,7 +705,7 @@ typedef void (*CcdCondFn)(void *userParam);
 typedef void (*CcdVoidFn)(void *userParam, double curWallTime);
 void CcdModuleInit();
 #define CcdIGNOREPE -2
-void CcdCallFnAfter(CcdVoidFn fnp, void *arg, double msecs);
+CLINKAGE void CcdCallFnAfter(CcdVoidFn fnp, void *arg, double msecs);
 void CcdCallFnAfterOnPE(CcdVoidFn fnp, void *arg, double msecs, int pe);
 int CcdCallOnCondition(int condnum, CcdCondFn fnp, void *arg);
 int CcdCallOnConditionKeep(int condnum, CcdCondFn fnp, void *arg);
@@ -929,6 +930,13 @@ void CldEnqueueGroup(CmiGroup grp, void *msg, int infofn);
 
 #define CmiImmIsRunning() (0)
 #define CMI_MSG_NOKEEP(msg) ((CmiMessageHeader *)msg)->nokeep
+
+/* The nokeep flag is a promise by the sender that no receiving handler will
+   retain the message past its return or modify it. In exchange the runtime may
+   hand one shared buffer to several PEs of a process instead of copying it for
+   each, every one of those PEs still calling CmiFree exactly once. */
+CLINKAGE void CmiSetMsgNokeep(void *msg, int nokeep);
+CLINKAGE int CmiMsgIsNokeep(const void *msg);
 
 // zerocopy
 
@@ -1169,17 +1177,20 @@ extern void CsdSchedulePoll(void);
 extern int CmiNumCores(void);
 extern int CmiCpuTopologyEnabled(void);
 extern int CmiPeOnSamePhysicalNode(int pe1, int pe2);
-extern int CmiNumPesOnPhysicalNode(int node);
-extern void CmiGetPesOnPhysicalNode(int node, int **pelist, int *num);
-extern int CmiPhysicalRank(int pe);
+CLINKAGE int CmiNumPesOnPhysicalNode(int node);
+CLINKAGE void CmiGetPesOnPhysicalNode(int node, int **pelist, int *num);
+CLINKAGE int CmiPhysicalRank(int pe);
 extern void CmiInitCPUAffinity(char **argv);
+// Warns or aborts if PEs on physical node 0 share a core; call after
+// CmiInitCPUTopology, as Charm++'s init does.
+extern void CmiCheckAffinity(void);
 extern int CmiPrintCPUAffinity(void);
 extern int CmiSetCPUAffinity(int core);
 extern int CmiSetCPUAffinityLogical(int core);
 extern int CmiOnCore(void);
 
-int CmiNumPhysicalNodes();
-int CmiGetFirstPeOnPhysicalNode(int node);
+CLINKAGE int CmiNumPhysicalNodes();
+CLINKAGE int CmiGetFirstPeOnPhysicalNode(int node);
 /* Rank of a logical node among those sharing its physical node.
  * Topology-derived; O(PEs on the physical node), so cache it. */
 int CmiNodeRankOnPhysicalNode(int node);

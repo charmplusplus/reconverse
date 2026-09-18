@@ -24,7 +24,7 @@ void* CmiIpcBlockToMsg(CmiIpcBlock* block, bool init) {
     // NOTE ( this is identical to code in CmiAlloc )
     CmiAssert(((uintptr_t)msg % ALIGN_BYTES) == 0);
     CMI_ZC_MSGTYPE((void*) msg) = CMK_REG_NO_ZC_MSG;
-    CMI_MSG_NOKEEP((void*) msg) = 0;
+    CmiSetMsgNokeep((void *)msg, 0);
     SIZEFIELD(msg) = block->size;
     REFFIELDSET(msg, 1);
   }
