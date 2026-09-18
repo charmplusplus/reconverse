@@ -26,12 +26,15 @@ void CsdScheduler() {
 
     CcdRaiseCondition(CcdSCHEDLOOP);
 
-    #ifdef CMK_USE_SHMEM
-        CmiIpcBlock* block = CmiPopIpcBlock(CsvAccess(coreIpcManager_));
-        if (block != nullptr) {
-          CmiDeliverIpcBlockMsg(block);
-        }
-    #endif
+    // Messages from peer processes on this host arrive in the shared-memory
+    // pool rather than through the network backend, so drain it here. Null
+    // unless the run was given +ipc (or Charm++ set a pool up).
+    if (CsvAccess(coreIpcManager_) != nullptr) {
+      CmiIpcBlock *block = CmiPopIpcBlock(CsvAccess(coreIpcManager_));
+      if (block != nullptr) {
+        CmiDeliverIpcBlockMsg(block);
+      }
+    }
 
     // poll node queue
     if (!nodeQueue->empty()) {
@@ -233,6 +236,16 @@ void CsdSchedulePoll() {
     CsdPeriodic();
 
     CcdRaiseCondition(CcdSCHEDLOOP);
+
+    // Same shared-memory pool drain as CsdScheduler: a program that waits
+    // inside CsdSchedulePoll would otherwise never see a message a peer
+    // process on this host put in the pool.
+    if (CsvAccess(coreIpcManager_) != nullptr) {
+      CmiIpcBlock *block = CmiPopIpcBlock(CsvAccess(coreIpcManager_));
+      if (block != nullptr) {
+        CmiDeliverIpcBlockMsg(block);
+      }
+    }
 
     // poll node queue
     if (!nodeQueue->empty()) {

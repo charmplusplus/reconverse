@@ -181,6 +181,18 @@ void converseRunPe(int rank, int everReturn) {
   CpvAccess(isHelperOn) = 1;
   CmiMemoryWriteFence();
 
+  // Shared-memory IPC between processes that share a host. The flags are
+  // always consumed; the pool is only built when the program asked for it
+  // with +ipc, because it costs a segment per process and a startup
+  // exchange. It needs to know which processes share a host, which is what
+  // CmiInitCPUTopology works out -- without it every process looks like its
+  // own host and the pool would never be used.
+  CmiIpcCliInit(CmiMyArgv);
+  if (CmiIpcRequested()) {
+    CmiInitCPUTopology(CmiMyArgv);
+    CmiIpcStartup();
+  }
+
   if (CmiTraceFn)
     CmiTraceFn(CmiMyArgv);
 
@@ -489,10 +501,8 @@ void CmiInitState(int rank) {
   CpvInitialize(int, interopExitFlag);
   CpvAccess(interopExitFlag) = 0;
   if(rank == 0) CmiMemoryIs_flag |= CMI_MEMORY_IS_OS;
-  #ifdef CMK_USE_SHMEM
   CsvInitialize(CmiIpcManager*, coreIpcManager_);
   CsvAccess(coreIpcManager_) = nullptr;
-  #endif
   CmiOnesidedDirectInit();
   CmiPersistentInit();
   CcdModuleInit();
@@ -670,7 +680,6 @@ void CmiFree(void *msg) {
   //   CmiAbort("CmiFree reference count was zero-- is this a duplicate free?");
 
   if (refCount == 1) {
-  #ifdef CMK_USE_SHMEM
     // we should only free _our_ IPC blocks -- so calling CmiFree on
     // an IPC block issued by another process will cause a bad free!
     // (note -- this would only occur if you alloc an ipc block then
@@ -680,11 +689,11 @@ void CmiFree(void *msg) {
     // references remain lets two senders allocate the same block.
     CmiIpcBlock* ipc;
     auto* manager = CsvAccess(coreIpcManager_);
-    if (msg && (ipc = CmiIsIpcBlock(manager, BLKSTART(msg), CmiMyNode()))) {
+    if (manager && msg &&
+        (ipc = CmiIsIpcBlock(manager, BLKSTART(msg), CmiMyNode()))) {
       CmiFreeIpcBlock(manager, ipc);
       return;
     }
-  #endif
 
     //free(BLKSTART(parentBlk));
     comm_backend::free(parentBlk);
@@ -728,7 +737,10 @@ void CmiSyncSendAndFreeNoPersistent(int destPE, int messageSize, void *msg) {
 
   if (CmiMyNode() == destNode) {
     CmiPushPE(CmiRankOf(destPE), messageSize, msg);
-  } else {
+  } else if (!CmiIpcTrySendAndFree(destNode, CmiRankOf(destPE), messageSize,
+                                   msg)) {
+    // Not a peer process on this host, or too big for the pool: over the
+    // network it goes.
     comm_backend::issueAm(CmiNodeToGlobal(destNode), msg, messageSize,
                           MRFIELD(msg), CommLocalHandler, g_amHandler,
                           nullptr); // Commlocalhandler will free msg
@@ -940,7 +952,8 @@ void CmiSyncNodeSendAndFree(unsigned int destNode, unsigned int size,
 
   if (CmiMyNode() == destNode) {
     CmiNodeQueue->push(msg);
-  } else {
+  } else if (!CmiIpcTrySendAndFree(destNode, cmi::ipc::nodeDatagram, size,
+                                   msg)) {
     comm_backend::issueAm(CmiNodeToGlobal(destNode), msg, size, MRFIELD(msg),
                           CommLocalHandler, g_amHandler, nullptr);
   }

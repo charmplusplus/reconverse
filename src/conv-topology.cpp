@@ -613,6 +613,28 @@ extern "C" void LrtsInitCpuTopo(char** argv)
 
 #endif
 
+/* Idempotent, because there are now two callers: reconverse runs the gather
+ * itself when +ipc needs to know which processes share a host, and Charm++
+ * runs it from its own init. A second gather would post a reduction whose
+ * partners never arrive, so a repeat call only re-raises the availability
+ * condition -- which is what a caller between the two calls is waiting on.
+ *
+ * Every PE sets the flag at the end of its own first call, and reads it at
+ * the start of its next one, so no PE can skip a gather its peers are still
+ * running: LrtsInitCpuTopo has a node barrier every PE must reach. */
+static std::atomic<int> cpuTopoInitDone{0};
+
+void CmiInitCPUTopology(char** argv)
+{
+  if (cpuTopoInitDone.load(std::memory_order_acquire))
+  {
+    CcdRaiseCondition(CcdTOPOLOGY_AVAIL);
+    return;
+  }
+  LrtsInitCpuTopo(argv);
+  cpuTopoInitDone.store(1, std::memory_order_release);
+}
+
 int CmiCpuTopologyEnabled() { return LrtsCpuTopoEnabled(); }
 int CmiPeOnSamePhysicalNode(int pe1, int pe2) { return LrtsPeOnSameNode(pe1, pe2); }
 int CmiNumPhysicalNodes() { return LrtsNumNodes(); }
@@ -659,4 +681,3 @@ int CmiNodeRankOnPhysicalNode(int node)
   if (it == nodes.end() || *it != node) return 0;
   return (int)(it - nodes.begin());
 }
-void CmiInitCPUTopology(char** argv) { LrtsInitCpuTopo(argv); }

@@ -55,7 +55,21 @@ option(SPANTREE "whether to enable spanning tree collectives" OFF) #should turn 
 # Reconverse uses SMP always, but turn on this option for backwards compatibility (see pingpong_multipairs for example)
 option(CMK_SMP "whether to enable SMP support" ON)
 option(CMK_CPV_IS_SMP "whether to enable SMP support for cpvs" ON)
-option(CMK_USE_SHMEM "whether to use POSIX shared memory for IPC" OFF)
+# Charm++ sets this (buildcmake --enable-shmem) to say that *it* drives the
+# shared-memory pool. Reconverse always builds the pool now and turns it on
+# with the +ipc runtime flag instead, so this only exists so that a Charm++
+# build that passes it still configures.
+option(CMK_USE_SHMEM "whether Charm++ drives the shared-memory IPC pool" OFF)
+
+# The xpmem backend for the IPC pool. Off by default because it needs an
+# xpmem installation to build against and its kernel module loaded to run;
+# with it off, the pool uses POSIX shared memory, which needs neither.
+# Charm++'s buildcmake --enable-xpmem passes CMK_HAS_XPMEM through, so honour
+# that spelling too.
+option(RECONVERSE_ENABLE_XPMEM "build the xpmem backend for shared-memory IPC" OFF)
+if(CMK_HAS_XPMEM)
+  set(RECONVERSE_ENABLE_XPMEM ON)
+endif()
 option(CMK_TASKQUEUE "use the task queue for work stealing" OFF)
 
 option(RECONVERSE_ATOMIC_QUEUE "whether to use atomic queue" ON)
@@ -138,6 +152,30 @@ endif()
 
 find_package(Threads REQUIRED)
 
+if(RECONVERSE_ENABLE_XPMEM)
+  find_package(PkgConfig QUIET)
+  if(PKG_CONFIG_FOUND)
+    pkg_check_modules(PC_XPMEM QUIET xpmem)
+  endif()
+  find_path(XPMEM_INCLUDE_DIR NAMES xpmem.h
+            HINTS ${PC_XPMEM_INCLUDE_DIRS} ${XPMEM_ROOT}/include
+                  /opt/xpmem/include)
+  find_library(XPMEM_LIBRARY NAMES xpmem
+               HINTS ${PC_XPMEM_LIBRARY_DIRS} ${XPMEM_ROOT}/lib64
+                     ${XPMEM_ROOT}/lib /opt/xpmem/lib64)
+  if(NOT XPMEM_INCLUDE_DIR OR NOT XPMEM_LIBRARY)
+    message(FATAL_ERROR
+      "RECONVERSE_ENABLE_XPMEM=ON was requested but xpmem was not found. "
+      "Point CMake at it with -DXPMEM_ROOT=<prefix> (the Cray systems that "
+      "ship it install it in /opt/xpmem), or leave the option off to use "
+      "POSIX shared memory for IPC instead.")
+  endif()
+  set(CMK_HAS_XPMEM 1)
+  message(STATUS "xpmem IPC backend enabled: ${XPMEM_LIBRARY}")
+else()
+  set(CMK_HAS_XPMEM 0)
+endif()
+
 if(RECONVERSE_ENABLE_CUDA)
   find_package(CUDAToolkit REQUIRED)
   set(CMK_CUDA ON)
@@ -160,6 +198,11 @@ set_target_properties(reconverse PROPERTIES CXX_STANDARD 17)
 add_subdirectory(include)
 add_subdirectory(src)
 target_link_libraries(reconverse PUBLIC Threads::Threads)
+
+if(RECONVERSE_ENABLE_XPMEM)
+  target_include_directories(reconverse PRIVATE ${XPMEM_INCLUDE_DIR})
+  target_link_libraries(reconverse PUBLIC ${XPMEM_LIBRARY})
+endif()
 
 if(RECONVERSE_ENABLE_CUDA)
   target_link_libraries(reconverse PUBLIC CUDA::cudart)
