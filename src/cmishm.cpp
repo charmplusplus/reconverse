@@ -1,3 +1,4 @@
+#include <cerrno>
 #include <dlfcn.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -46,8 +47,11 @@ static std::pair<int, ipc_shared_*> openShared_(int node) {
   if (fd >= 0) {
     // truncate it to the correct size
     auto status = ftruncate(fd, size);
-    CmiAssert(status >= 0);
+    CmiEnforceMsg(status >= 0, "could not size shm segment %s to %zu bytes: "
+                  "%s (is /dev/shm large enough for %d processes?)",
+                  name, size, strerror(errno), (int)CmiNumNodes());
   } else {
+    const int createErrno = errno;
     // otherwise just open it -- but the segment becomes visible to
     // shm_open the instant its creator's O_CREAT succeeds, before that
     // creator has called ftruncate. Every rank races to open every
@@ -56,23 +60,32 @@ static std::pair<int, ipc_shared_*> openShared_(int node) {
     // while it's still 0 bytes is a SIGBUS. Poll fstat until the size
     // lands.
     fd = shm_open(name, O_RDWR, 0666);
-    CmiAssert(fd >= 0);
+    CmiEnforceMsg(fd >= 0, "could not open shm segment %s: %s (creating it "
+                  "failed with: %s)", name, strerror(errno),
+                  strerror(createErrno));
     struct stat st;
     const int kMaxAttempts = 10000;  // ~1s at 100us/attempt
     for (auto attempt = 0;; attempt++) {
-      CmiAssert(fstat(fd, &st) == 0);
+      // NOTE: this has to stay outside CmiAssert -- an optimized build drops
+      // the whole expression, so the call never happens and the loop spins on
+      // an uninitialized st until it times out.
+      CmiEnforceMsg(fstat(fd, &st) == 0, "could not stat shm segment %s: %s",
+                    name, strerror(errno));
       if ((std::size_t)st.st_size >= size) break;
       CmiEnforceMsg(attempt < kMaxAttempts,
-                    "timed out waiting for shm segment to be sized!");
+                    "timed out waiting for shm segment %s to be sized: it is "
+                    "%zu bytes, %zu were expected",
+                    name, (std::size_t)st.st_size, size);
       usleep(100);
     }
   }
-  // then delete the name
-  delete[] name;
   // map the segment to an address:
   auto* res = (ipc_shared_*)mmap(nullptr, size, PROT_READ | PROT_WRITE,
                                  MAP_SHARED, fd, 0);
-  CmiAssert(res != MAP_FAILED);
+  CmiEnforceMsg(res != MAP_FAILED, "could not map shm segment %s (%zu bytes): "
+                "%s", name, size, strerror(errno));
+  // then delete the name
+  delete[] name;
   // return the file descriptor/shared
   return std::make_pair(fd, res);
 }
