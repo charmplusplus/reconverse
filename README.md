@@ -126,6 +126,32 @@ program therefore never has to know whether IPC is on.
   present, otherwise POSIX shared memory. Asking for `+ipcmode xpmem`
   explicitly on a host without it is an error rather than a silent fallback.
 
+### What it buys
+
+`tests/orig-converse/pingpong`, two processes with one PE each on one NCSA
+Delta CPU node, LCI over Slingshot-11 as the backend, 1000 round trips per
+size (one-way microseconds):
+
+| message | backend | `+ipc` | speedup |
+| ------: | ------: | -----: | ------: |
+|     8 B |    3.42 |   0.76 |    4.5x |
+|    32 B |    3.21 |   0.77 |    4.2x |
+|   128 B |    3.72 |   0.75 |    4.9x |
+|   512 B |    3.86 |   0.76 |    5.1x |
+|    2 KiB |   4.38 |   1.01 |    4.4x |
+|    8 KiB |  14.86 |   2.26 |    6.6x |
+|   32 KiB |  15.39 |   6.53 |    2.4x |
+|  128 KiB |  21.07 |  24.65 |    0.85x |
+
+The pool wins by a wide margin up to tens of kilobytes and loses past that:
+it copies the message into the destination's pool, while LCI's own on-host
+path is already shared memory and does not. On this machine the crossover is
+somewhere between 32 and 128 KiB, which is *below* the cutoff the pool picks
+by default (256 KiB for the default 8 MiB pool), so a program that sends
+large messages between processes on a host should measure and lower
+`++ipccutoff` -- e.g. `++ipccutoff 65536`. Where the crossover falls depends
+on the backend and the machine, so measure rather than copying this number.
+
 ### Querying it from a program
 
 ```c
