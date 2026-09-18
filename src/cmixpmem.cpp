@@ -11,6 +11,8 @@
 // Whether that works at run time depends on the xpmem kernel module being
 // loaded, which the library cannot tell us before /dev/xpmem is opened. See
 // ipcXpmemUsable_() -- cmishmem.cpp falls back to POSIX shm when it says no.
+#include <cerrno>
+#include <cstring>
 #include <fcntl.h>
 #include <unistd.h>
 
@@ -103,7 +105,11 @@ struct ipcManagerXpmem_ : public CmiIpcManager {
       auto search = this->instances.find(segid);
       if (search == std::end(this->instances)) {
         auto apid = xpmem_get(segid, XPMEM_RDWR, XPMEM_PERMIT_MODE, NULL);
-        CmiAssertMsg(apid >= 0, "invalid segid?");
+        // not CmiAssert: an optimized build drops it, and a negative apid
+        // then surfaces much later as an xpmem_attach that returns -1
+        CmiEnforceMsg(apid >= 0,
+                      "xpmem_get failed for process %d's segment: %s", proc,
+                      strerror(errno));
         auto ins = this->instances.emplace(segid, apid);
         CmiAssert(ins.second);
         search = ins.first;
@@ -121,7 +127,7 @@ static void* translateAddr_(ipcManagerXpmem_* meta, int proc, void* remote_ptr,
     return remote_ptr;
   } else {
     auto apid = meta->get_instance(proc);
-    CmiAssert(apid >= 0);
+    CmiEnforceMsg(apid >= 0, "no xpmem access id for process %d", proc);
     // this magic was borrowed from VADER
     uintptr_t attach_align = 1 << 23;
     auto base = OPAL_DOWN_ALIGN_PTR(remote_ptr, attach_align, uintptr_t);
@@ -132,7 +138,9 @@ static void* translateAddr_(ipcManagerXpmem_* meta, int proc, void* remote_ptr,
     using offset_type = decltype(xpmem_addr::offset);
     xpmem_addr addr{.apid = apid, .offset = (offset_type)base};
     auto* ctx = xpmem_attach(addr, bound - base, NULL);
-    CmiEnforceMsg(ctx != (void*)-1, "xpmem_attach failed!");
+    CmiEnforceMsg(ctx != (void*)-1,
+                  "xpmem_attach of %zu bytes of process %d's pool failed: %s",
+                  (std::size_t)(bound - base), proc, strerror(errno));
 
     return (void*)((uintptr_t)ctx +
                    (ptrdiff_t)((uintptr_t)remote_ptr - (uintptr_t)base));
