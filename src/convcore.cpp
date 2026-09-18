@@ -418,14 +418,14 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
   CmiInitHwlocTopology();
 #endif
 
-  backend_poll_freq = 1; // default to poll every iteration
+  backend_poll_freq = BACKEND_POLL_FREQ_DEFAULT;
   CmiGetArgInt(argv, "+backend_poll_freq", &backend_poll_freq);
   if (backend_poll_freq < 1) backend_poll_freq = 1;
   backend_poll_thread = 1; // default to every thread
   CmiGetArgInt(argv, "+backend_poll_thread", &backend_poll_thread);
   if (backend_poll_thread < 1) backend_poll_thread = 1;
 
-  // must precede CmiQueueRegisterInit() below, and CmiStartThreads()
+  // must precede CmiQueueRegisterInitThread(), and so CmiStartThreads()
   CmiSchedulerInitArgs(argv);
   if (Cmi_mynode == 0 && CmiSchedulerIsOld())
     printf("Reconverse> Using the original scheduler (+old-scheduler); queue "
@@ -455,7 +455,10 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
   CmiNodeQueue = new ConverseNodeQueue<void *>();
 
   //register queues
-  CmiQueueRegisterInit();
+  //Node-level registration: an alternative to the per-PE registration done by
+  //CmiQueueRegisterInitThread(). It builds g_handlers/g_groups, which the
+  //scheduler loop does not read today, so it is left off rather than deleted.
+  //CmiQueueRegisterInit();
 
   _smp_mutex = CmiCreateLock();
   CmiMemLock_lock = CmiCreateLock();

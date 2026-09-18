@@ -1,11 +1,12 @@
 // The original Reconverse scheduler: a hardcoded if/else chain over a fixed
 // set of queues, selected at runtime with the +old-scheduler flag.
 //
-// The body below is a verbatim copy of the loops that lived in scheduler.cpp
-// before the queue-registration work, with only the two function names
-// changed. Keeping it byte-identical is the point: this is the known-good
-// fallback to compare the registered scheduler against, so please resist
-// tidying it. The default implementation is scheduler_registered.cpp.
+// The body below is a copy of the loops that lived in scheduler.cpp before the
+// queue-registration work. Apart from the two function names, the only change
+// is the +backend_poll_freq rate handling below; everything else is untouched
+// on purpose. This is the known-good fallback to compare the registered
+// scheduler against, so please resist tidying it. The default implementation
+// is scheduler_registered.cpp.
 
 #include "scheduler.h"
 #include "converse.h"
@@ -30,6 +31,13 @@ void CsdSchedulerOld() {
   ConverseSelfQueue<void *> *selfQueue = CmiGetSelfQueue();
 
   int loop_counter = 0;
+
+  // +backend_poll_freq is a rate: larger means progress is polled more often.
+  // This loop cannot poll more often than once per iteration, so the scale
+  // saturates there. At the default the period is 1, i.e. every iteration,
+  // which is what this scheduler has always done.
+  int poll_period = BACKEND_POLL_FREQ_DEFAULT / backend_poll_freq;
+  if (poll_period < 1) poll_period = 1;
 
   while (CmiStopFlag() == 0) {
 
@@ -212,7 +220,7 @@ void CsdSchedulerOld() {
         }
       }
     }
-    if((CmiMyRank() % backend_poll_thread == 0) && (loop_counter++ == (backend_poll_freq - 1)))
+    if((CmiMyRank() % backend_poll_thread == 0) && (loop_counter++ == (poll_period - 1)))
     {
       loop_counter = 0;
       comm_backend::progress();
