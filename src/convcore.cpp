@@ -425,6 +425,12 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
   CmiGetArgInt(argv, "+backend_poll_thread", &backend_poll_thread);
   if (backend_poll_thread < 1) backend_poll_thread = 1;
 
+  // must precede CmiQueueRegisterInit() below, and CmiStartThreads()
+  CmiSchedulerInitArgs(argv);
+  if (Cmi_mynode == 0 && CmiSchedulerIsOld())
+    printf("Reconverse> Using the original scheduler (+old-scheduler); queue "
+           "registration is disabled\n");
+
   Cmi_argv = argv;
   Cmi_startfn = fn;
   CharmLibInterOperate = 0;

@@ -8,6 +8,40 @@
 #include <vector>
 #include <cmath>
 
+// ---------------------------------------------------------------------------
+// Scheduler selection
+//
+// Two scheduler implementations live side by side:
+//
+//   scheduler_registered.cpp  the default. Queues register poll handlers into
+//                             a slot table (see scheduler_registry.cpp) and the
+//                             loop sweeps that table, so adding a queue no
+//                             longer means editing the loop.
+//
+//   scheduler_old.cpp         the original hardcoded if/else chain over a fixed
+//                             set of queues, kept reachable with the
+//                             +old-scheduler runtime flag.
+//
+// The public CsdScheduler()/CsdSchedulePoll() in scheduler.cpp dispatch to one
+// of the two. Queue registration is the default; +old-scheduler opts out.
+// ---------------------------------------------------------------------------
+
+// Set once by CmiSchedulerInitArgs(), before any PE thread starts, and only
+// read afterwards. Prefer CmiSchedulerIsOld() over touching it directly.
+extern bool _Cmi_useOldScheduler;
+inline bool CmiSchedulerIsOld() { return _Cmi_useOldScheduler; }
+
+// Consumes +old-scheduler from argv. Must run before CmiQueueRegisterInit().
+void CmiSchedulerInitArgs(char **argv);
+
+// Idle bookkeeping shared by both implementations.
+void CmiSchedulerReleaseIdle();
+void CmiSchedulerSetIdle();
+
+// ---------------------------------------------------------------------------
+// Registration-based scheduler (default)
+// ---------------------------------------------------------------------------
+
 #define ARRAY_SIZE 64
 using QueuePollHandlerFn = bool(*)(void); //we need a return value to indicate if work was done
 
@@ -28,6 +62,16 @@ void add_handler(QueuePollHandlerFn fn, unsigned period, unsigned phase = 0);
 // example: if the frequencies are 8, 1, 16, 1, 4, then they are added up to 30, then normalized to 17, 2, 34, 2, 9
 // then assign to slots based on these normalized values
 void add_list_of_handlers(const std::vector<std::pair<QueuePollHandlerFn, unsigned int>>& handlers);
+
+void CsdSchedulerRegistered();
+void CsdSchedulePollRegistered();
+
+// ---------------------------------------------------------------------------
+// Original scheduler (+old-scheduler)
+// ---------------------------------------------------------------------------
+
+void CsdSchedulerOld();
+void CsdSchedulePollOld();
 
 void CsdScheduler();
 #endif
