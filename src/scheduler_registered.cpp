@@ -169,8 +169,8 @@ void CsdSchedulerRegistered() {
     //cycle of the table has been checked, so a message doesn't have to
     //wait for loop_counter to rotate back around to its slot
     bool workDone = false;
-    for (unsigned t = 0; t < ARRAY_SIZE && !workDone; ++t) {
-      unsigned idx = static_cast<unsigned>((loop_counter + t) & 63ULL);
+    for (unsigned t = 0; t < SCHED_TABLE_SIZE && !workDone; ++t) {
+      unsigned idx = static_cast<unsigned>((loop_counter + t) & SCHED_TABLE_MASK);
       workDone = CpvAccess(poll_handlers)[idx]();
     }
     if(!workDone) {
@@ -196,8 +196,8 @@ void CsdSchedulePollRegistered() {
     //a message doesn't have to wait for loop_counter to rotate back
     //around to its slot
     bool workDone = false;
-    for (unsigned t = 0; t < ARRAY_SIZE && !workDone; ++t) {
-      unsigned idx = static_cast<unsigned>((loop_counter + t) & 63ULL);
+    for (unsigned t = 0; t < SCHED_TABLE_SIZE && !workDone; ++t) {
+      unsigned idx = static_cast<unsigned>((loop_counter + t) & SCHED_TABLE_MASK);
       workDone = CpvAccess(poll_handlers)[idx]();
     }
     if(!workDone) {
