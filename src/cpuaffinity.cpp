@@ -658,6 +658,34 @@ void CmiInitCPUAffinity(char **argv) {
         CmiPrintf("Charm++> set PE %d on node %d to PU L#%d\n", CmiMyPe(), CmiMyNode(), pu);
       }
     }
+    #else
+    // hwloc is present, so this is the affinity-enabled build, but the binding
+    // above needs cpu_set_t and the CPU_* macros, which are glibc's; on macOS
+    // and other platforms without them the whole body compiles away. Consume
+    // the flags anyway. Every one of them is removed from argv by a build that
+    // can bind, and a caller that sees them survive reports them as
+    // unrecognized -- Charm++'s init.C warns "+setcpuaffinity is a command line
+    // argument beginning with a '+' but was not parsed by the RTS", which says
+    // nothing about the real cause. Same contract as the no-hwloc
+    // CmiInitCPUAffinity at the bottom of this file, different reason.
+    char *pemap = NULL;
+    int affinity_flag =
+        CmiGetArgFlagDesc(argv, "+setcpuaffinity", "set cpu affinity");
+    CmiGetArgStringDesc(argv, "+pemap", &pemap, "define pe to core mapping");
+    int show_affinity_flag =
+        CmiGetArgFlagDesc(argv, "+showcpuaffinity", "print cpu affinity");
+
+    if (CmiMyPe() == 0) {
+      if (affinity_flag)
+        CmiPrintf("Reconverse> +setcpuaffinity disabled: this platform has no "
+                  "cpu_set_t/CPU_* affinity macros.\n");
+      if (pemap != NULL)
+        CmiPrintf("Reconverse> +pemap disabled: this platform has no "
+                  "cpu_set_t/CPU_* affinity macros.\n");
+      if (show_affinity_flag)
+        CmiPrintf("Reconverse> +showcpuaffinity disabled: this platform has no "
+                  "cpu_set_t/CPU_* affinity macros.\n");
+    }
     #endif
     CmiNodeAllBarrier();
 }
