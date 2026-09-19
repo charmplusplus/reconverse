@@ -148,6 +148,8 @@ void converseRunPe(int rank, int everReturn) {
   CmiTaskQueueInit();
   #endif
 
+  CmiQueueRegisterInitThread();
+
   // init things like cld module, ccs, etc
   CldModuleInit(CmiMyArgv);
 
@@ -416,12 +418,18 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
   CmiInitHwlocTopology();
 #endif
 
-  backend_poll_freq = 1; // default to poll every iteration
+  backend_poll_freq = BACKEND_POLL_FREQ_DEFAULT;
   CmiGetArgInt(argv, "+backend_poll_freq", &backend_poll_freq);
   if (backend_poll_freq < 1) backend_poll_freq = 1;
   backend_poll_thread = 1; // default to every thread
   CmiGetArgInt(argv, "+backend_poll_thread", &backend_poll_thread);
   if (backend_poll_thread < 1) backend_poll_thread = 1;
+
+  // must precede CmiQueueRegisterInitThread(), and so CmiStartThreads()
+  CmiSchedulerInitArgs(argv);
+  if (Cmi_mynode == 0 && CmiSchedulerIsOld())
+    printf("Reconverse> Using the original scheduler (+old-scheduler); queue "
+           "registration is disabled\n");
 
   Cmi_argv = argv;
   Cmi_startfn = fn;
@@ -445,6 +453,12 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
   Cmi_queues = new ConverseQueue<void *> *[Cmi_mynodesize];
   CmiHandlerTable = new std::vector<CmiHandlerInfo> *[Cmi_mynodesize];
   CmiNodeQueue = new ConverseNodeQueue<void *>();
+
+  //register queues
+  //Node-level registration: an alternative to the per-PE registration done by
+  //CmiQueueRegisterInitThread(). It builds g_handlers/g_groups, which the
+  //scheduler loop does not read today, so it is left off rather than deleted.
+  //CmiQueueRegisterInit();
 
   _smp_mutex = CmiCreateLock();
   CmiMemLock_lock = CmiCreateLock();
