@@ -62,6 +62,23 @@ if(RECONVERSE_TRY_ENABLE_COMM_LCI2)
       GIT_REPOSITORY https://github.com/uiuc-hpc/lci.git
       GIT_TAG ${RECONVERSE_AUTOFETCH_LCI2_TAG})
     FetchContent_MakeAvailable(lci)
+    # LCI vendors a UCX snapshot whose ucs/sys/stubs.h declares
+    #   void ucs_empty_function();
+    # with an empty parameter list. Through C17 that means "unspecified
+    # parameters", so ucs/async/async.c is free to initialise typed function
+    # pointers with it. C23 redefines () as (void), which makes those
+    # initialisers incompatible-pointer errors -- and GCC 15 compiles as
+    # -std=gnu23 by default. That is the whole reason this snapshot builds
+    # under GCC 14 and breaks under GCC 15 (charmplusplus/reconverse#247);
+    # it is not an arm, CUDA or optimisation-level effect, though #247 was
+    # first seen through an arm CUDA build.
+    # The snapshot is pre-C23 C, so pin it to the standard it was written
+    # against rather than silencing the diagnostic: -Wno-incompatible-pointer-types
+    # would hide real mismatches in the same target, and patching the vendored
+    # source would be overwritten by the next LCI bump.
+    if(TARGET lci-ucx)
+      set_property(TARGET lci-ucx PROPERTY C_STANDARD 17)
+    endif()
     set(LCI_VERSION ${LCI_VERSION} PARENT_SCOPE)
     set(RECONVERSE_ENABLE_COMM_LCI2 ON)
   endif()
