@@ -542,14 +542,22 @@ CmiHandler CmiHandlerToFunction(int handlerId) {
   return CmiGetHandlerTable()->at(handlerId).hdlr;
 }
 
+// The seed balancer's info function index. This used to live in
+// collectiveMetaInfo, which the spanning tree broadcast overwrites with the
+// broadcast root, so every CldEnqueue(CLD_BROADCAST*) arrived asking for info
+// function 0 and called whatever handler happened to be registered first.
 int CmiGetInfo(void *msg) {
   CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
-  return header->collectiveMetaInfo;
+  return header->cldInfoFn;
 }
 
 void CmiSetInfo(void *msg, int infofn) {
   CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
-  header->collectiveMetaInfo = infofn;
+  // cldInfoFn is CmiInt2, so an info function's index is bounded the same way a
+  // handler index already is by CmiSetHandler/CmiSetXHandler. The old
+  // collectiveMetaInfo slot was wider, so assert rather than silently truncate.
+  CmiAssert(infofn >= 0 && infofn <= 32767);
+  header->cldInfoFn = static_cast<CmiInt2>(infofn);
 }
 
 void CmiNumberHandler(int n, CmiHandler h) {
