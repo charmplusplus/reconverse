@@ -90,7 +90,7 @@ static void CmiBcastSendToPeers(void *msg, int size) {
   const int myRank = CmiMyRank();
 
   const CmiInt2 forwardHandler = header->handlerId;
-  header->handlerId = header->swapHandlerId;
+  header->handlerId = header->bcastSwapHandlerId;
   for (int r = 0; r < nodeSize; r++) {
     if (r != myRank)
       CmiSyncSend(first + r, size, msg);
@@ -99,8 +99,8 @@ static void CmiBcastSendToPeers(void *msg, int size) {
 }
 
 // One relay step of a PE-level broadcast, performed by whichever PE currently
-// holds msg. Expects handlerId == Cmi_bcastHandler and swapHandlerId == the
-// user's handler.
+// holds msg. Expects handlerId == Cmi_bcastHandler and bcastSwapHandlerId ==
+// the user's handler.
 static void CmiBcastForward(void *msg, int size) {
   CmiSpanTreeForwardToNodes((int)CmiGetBcastRoot(msg), [&](int childNode) {
     CmiSyncSend(CmiNodeFirst(childNode), size, msg);
@@ -128,11 +128,11 @@ void CmiSyncBroadcast(int size, void *msg) {
 #if SPANTREE
   DEBUGF("[%d] Spanning tree option\n", CmiMyPe());
   CmiSetBcastRoot(msg, CmiMyNode());
-  header->swapHandlerId = header->handlerId;
+  header->bcastSwapHandlerId = header->handlerId;
   header->handlerId = Cmi_bcastHandler;
   CmiBcastForward(msg, size);
   // The caller still owns msg and may keep using it, so hand it back unchanged.
-  header->handlerId = header->swapHandlerId;
+  header->handlerId = header->bcastSwapHandlerId;
 #else
   for (int i = pe + 1; i < CmiNumPes(); i++)
     CmiSyncSend(i, size, msg);
@@ -204,10 +204,10 @@ void CmiSyncNodeBroadcast(unsigned int size, void *msg) {
 
 #if SPANTREE
   CmiSetBcastRoot(msg, node);
-  header->swapHandlerId = header->handlerId;
+  header->bcastSwapHandlerId = header->handlerId;
   header->handlerId = Cmi_nodeBcastHandler;
   CmiNodeBcastForward(msg, size);
-  header->handlerId = header->swapHandlerId;
+  header->handlerId = header->bcastSwapHandlerId;
 #else
 
   for (int i = node + 1; i < CmiNumNodes(); i++)
@@ -251,8 +251,8 @@ void CmiBcastHandler(void *msg) {
   // Forward before delivering: the user's handler takes ownership of msg.
   CmiBcastForward(msg, header->messageSize);
 
-  header->handlerId = header->swapHandlerId;
-  CmiCallHandler(header->swapHandlerId, msg);
+  header->handlerId = header->bcastSwapHandlerId;
+  CmiCallHandler(header->bcastSwapHandlerId, msg);
 #endif
 }
 
@@ -263,8 +263,8 @@ void CmiNodeBcastHandler(void *msg) {
 
   CmiNodeBcastForward(msg, header->messageSize);
 
-  header->handlerId = header->swapHandlerId;
-  CmiCallHandler(header->swapHandlerId, msg);
+  header->handlerId = header->bcastSwapHandlerId;
+  CmiCallHandler(header->bcastSwapHandlerId, msg);
 #endif
 }
 
@@ -693,7 +693,9 @@ void CmiLookupGroup(CmiGroup grp, int *npes, int **pes) {
  * than in swapHandlerId, because swapHandlerId is CmiSetXHandler: the seed
  * balancer parks the user's handler there (CldSwitchHandler in cldb.cpp) on
  * exactly the messages CldEnqueueMulti then list-sends, and borrowing it hangs
- * tests/cld. collectiveMetaInfo is left alone for the same kind of reason.
+ * tests/cld. cldInfoFn is left alone for the same kind of reason. (The
+ * spanning tree broadcast used to borrow both and broke tests/cld outright;
+ * it now has bcastSwapHandlerId, and cldInfoFn is the seed balancer's own.)
  * The fan-out handler restores handlerId before anyone sees the message.
  *
  * Because the payload starts at the front of the buffer, the receiving process
