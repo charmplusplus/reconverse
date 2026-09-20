@@ -7,6 +7,7 @@
 
 #include <cinttypes>
 #include <conv-rdma.h>
+#include <csignal>
 #include <cstdarg>
 #include <cstring>
 #include <pthread.h>
@@ -936,8 +937,15 @@ void CsdExitScheduler() { CmiGetState()->stopFlag = 1; }
 void CmiExitHandler(void *msg) {
   int status = static_cast<CmiExitMsg *>(msg)->status;
 
-  if (status == 1)
+  if (status == 1) {
+    /* Every PE that receives this runs the line below, so the same handler
+       hazard CmiAbort() documents applies here, and here the concurrency is
+       unavoidable -- CmiExit(1) really does mean "all of you, stop". SIG_DFL
+       makes that safe: with no handler to run, the first thread to raise
+       SIGABRT ends the process outright. */
+    std::signal(SIGABRT, SIG_DFL);
     abort();
+  }
 
   CsdExitScheduler();
 }
@@ -1135,7 +1143,39 @@ void CmiAbort(const char *format, ...) {
   va_end(args);
   CmiAbortHelper("Called CmiAbort", newmsg, NULL, 1, 0);
 
-  CmiExitHelper(1);
+  /* No CmiExitHelper() here. The broadcast it performed bought nothing and
+     cost the abort path its determinism:
+
+     - Within this process it was redundant. The abort() below raises SIGABRT,
+       whose default action terminates every thread in the process, so the PE
+       threads that would have received the exit message die regardless. All
+       the broadcast added was a window in which several PEs run abort()
+       concurrently, and in which one PE is tearing the process down while
+       others are still in runtime code.
+     - Across processes it was unreliable anyway. A remote PE's copy leaves
+       here through comm_backend::issueAm(), which only queues the send; the
+       abort() on the next line kills the process without waiting for
+       completion, so whether a peer process ever sees the message is a race.
+       Peers learn of the abort from the launcher, which tears the job down
+       when a process dies on a signal -- which is what actually ends the
+       multi-process abort_peer test today.
+
+     It also made an abort depend on the runtime it is aborting: CmiExitHelper
+     allocates (CmiAlloc -> the LCI mempool) and enqueues. Those are the last
+     things that should run when we are aborting because runtime state is
+     already corrupt or a lock is already held. See issue #231. */
+
+  /* Go to the kernel's default SIGABRT action rather than through whatever
+     handler happens to be installed. libfabric dlopens its PSM provider while
+     scanning providers in fi_getinfo(), and that provider (libinfinipath)
+     installs a SIGABRT handler that formats a message and symbolises a
+     backtrace: snprintf(), malloc() and backtrace(), none of them
+     async-signal-safe. Four PE threads running that handler at once is what
+     hung #231; one thread running it can hang too, whenever CmiAbort is
+     reached while this thread already holds the allocator lock. SIG_DFL still
+     terminates the process and still writes a core dump -- it just does so
+     without executing any of that first. */
+  std::signal(SIGABRT, SIG_DFL);
   abort();
 }
 
