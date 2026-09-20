@@ -7,6 +7,7 @@
 
 #include <cinttypes>
 #include <conv-rdma.h>
+#include <csignal>
 #include <cstdarg>
 #include <cstring>
 #include <pthread.h>
@@ -936,8 +937,10 @@ void CsdExitScheduler() { CmiGetState()->stopFlag = 1; }
 void CmiExitHandler(void *msg) {
   int status = static_cast<CmiExitMsg *>(msg)->status;
 
-  if (status == 1)
+  if (status == 1) {
+    std::signal(SIGABRT, SIG_DFL);
     abort();
+  }
 
   CsdExitScheduler();
 }
@@ -1135,7 +1138,8 @@ void CmiAbort(const char *format, ...) {
   va_end(args);
   CmiAbortHelper("Called CmiAbort", newmsg, NULL, 1, 0);
 
-  CmiExitHelper(1);
+  /* No CmiExitHelper() here. */
+  std::signal(SIGABRT, SIG_DFL);
   abort();
 }
 
