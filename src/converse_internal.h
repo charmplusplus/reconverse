@@ -56,8 +56,14 @@ typedef struct State {
   int stopFlag = 0;
 } CmiState;
 
-extern int backend_poll_freq; // poll every backend_poll_freq iterations of the
-                             // scheduler loop
+// +backend_poll_freq: how often to make network progress, as a RATE -- the
+// larger the number, the more often progress is polled. (It used to be a
+// period, where larger meant less often.) The registered scheduler passes it
+// straight through as pollProgress's weight in the slot table; the old
+// scheduler turns it back into a loop period, saturating at once per
+// iteration, which is as often as that loop can poll.
+#define BACKEND_POLL_FREQ_DEFAULT 4
+extern int backend_poll_freq;
 extern int backend_poll_thread; // every backend_poll_thread threads will call progress
 
 // state relevant functionality
@@ -67,12 +73,15 @@ ConverseQueue<void *> *CmiGetQueue(int pe);
 // queue of messages the calling PE sent to itself
 ConverseSelfQueue<void *> *CmiGetSelfQueue();
 void CrnInit(void);
-
 void CmiPushPE(int destRank, int messageSize, void *msg);
 
 // CmiSyncSendAndFree without the CmiUsePersistentHandle() detour, used by the
 // persistent module itself for its setup, notification, and credit messages.
 void CmiSyncSendAndFreeNoPersistent(int destPE, int messageSize, void *msg);
+
+//queue reg init
+void CmiQueueRegisterInit(void);
+void CmiQueueRegisterInitThread(void); 
 
 // node queue
 ConverseNodeQueue<void *> *CmiGetNodeQueue();
