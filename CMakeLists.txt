@@ -50,7 +50,7 @@ set(RECONVERSE_AUTOFETCH_LCW_TAG
     "20689cad808bdb3af32a4707485d8e0d41fdfbe0"
     CACHE STRING "The tag to fetch for LCW") # master branch as of 2025-09-25
 
-option(SPANTREE "whether to enable spanning tree collectives" OFF) #should turn this on once charm issues fixed
+option(SPANTREE "whether to enable spanning tree collectives" ON) 
 
 # Reconverse uses SMP always, but turn on this option for backwards compatibility (see pingpong_multipairs for example)
 option(CMK_SMP "whether to enable SMP support" ON)
