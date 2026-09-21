@@ -201,14 +201,28 @@ typedef int (*CldEstimator)(void);
 
 typedef struct Header {
   CmiInt2 handlerId;
+  // Seed balancer (Cld): the info function's handler index, set by CmiSetInfo.
+  // It has a slot of its own because a Cld message must carry it all the way to
+  // the receiving PE, including across a broadcast, and the spanning tree
+  // broadcast owns collectiveMetaInfo for that whole trip. This sits in what
+  // was padding after handlerId, so the header does not grow for it.
+  CmiInt2 cldInfoFn;
   CmiUInt4 destPE; // global ID of destination PE
   int messageSize;
   // used for bcast (the node the broadcast is rooted at), multicast (group id),
   // reductions (reduction id)
   CmiUInt4 collectiveMetaInfo;
-  // used for special ops (bcast, reduction, multicast) when the handler field
-  // is repurposed
+  // used for special ops (reduction, multicast) when the handler field is
+  // repurposed. This is CmiSetXHandler/CmiGetXHandler, where the seed balancer
+  // parks the user's handler (CldSwitchHandler in cldb.cpp).
   CmiInt2 swapHandlerId;
+  // Where the spanning tree broadcast parks the message's real handler while
+  // handlerId routes to the relay handler. It cannot share swapHandlerId: on a
+  // CldEnqueue(CLD_BROADCAST*) message the seed balancer has already parked the
+  // user's handler there, and overwriting it sends the message back to
+  // CldHandler forever. The fan-out path avoids the same collision by putting
+  // the payload's handler in its trailer (see collectives.cpp).
+  CmiInt2 bcastSwapHandlerId;
   bool nokeep;
   CmiUInt1 zcMsgType; // 0: normal, 1: zero-copy
 } CmiMessageHeader;

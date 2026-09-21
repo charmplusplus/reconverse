@@ -7,6 +7,7 @@
 
 #include <cinttypes>
 #include <conv-rdma.h>
+#include <csignal>
 #include <cstdarg>
 #include <cstring>
 #include <pthread.h>
@@ -147,6 +148,8 @@ void converseRunPe(int rank, int everReturn) {
   // init task queue work-stealing callbacks
   CmiTaskQueueInit();
   #endif
+
+  CmiQueueRegisterInitThread();
 
   // init things like cld module, ccs, etc
   CldModuleInit(CmiMyArgv);
@@ -428,12 +431,18 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
   CmiInitHwlocTopology();
 #endif
 
-  backend_poll_freq = 1; // default to poll every iteration
+  backend_poll_freq = BACKEND_POLL_FREQ_DEFAULT;
   CmiGetArgInt(argv, "+backend_poll_freq", &backend_poll_freq);
   if (backend_poll_freq < 1) backend_poll_freq = 1;
   backend_poll_thread = 1; // default to every thread
   CmiGetArgInt(argv, "+backend_poll_thread", &backend_poll_thread);
   if (backend_poll_thread < 1) backend_poll_thread = 1;
+
+  // must precede CmiQueueRegisterInitThread(), and so CmiStartThreads()
+  CmiSchedulerInitArgs(argv);
+  if (Cmi_mynode == 0 && CmiSchedulerIsOld())
+    printf("Reconverse> Using the original scheduler (+old-scheduler); queue "
+           "registration is disabled\n");
 
   Cmi_argv = argv;
   Cmi_startfn = fn;
@@ -457,6 +466,12 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
   Cmi_queues = new ConverseQueue<void *> *[Cmi_mynodesize];
   CmiHandlerTable = new std::vector<CmiHandlerInfo> *[Cmi_mynodesize];
   CmiNodeQueue = new ConverseNodeQueue<void *>();
+
+  //register queues
+  //Node-level registration: an alternative to the per-PE registration done by
+  //CmiQueueRegisterInitThread(). It builds g_handlers/g_groups, which the
+  //scheduler loop does not read today, so it is left off rather than deleted.
+  //CmiQueueRegisterInit();
 
   _smp_mutex = CmiCreateLock();
   CmiMemLock_lock = CmiCreateLock();
@@ -552,14 +567,22 @@ CmiHandler CmiHandlerToFunction(int handlerId) {
   return CmiGetHandlerTable()->at(handlerId).hdlr;
 }
 
+// The seed balancer's info function index. This used to live in
+// collectiveMetaInfo, which the spanning tree broadcast overwrites with the
+// broadcast root, so every CldEnqueue(CLD_BROADCAST*) arrived asking for info
+// function 0 and called whatever handler happened to be registered first.
 int CmiGetInfo(void *msg) {
   CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
-  return header->collectiveMetaInfo;
+  return header->cldInfoFn;
 }
 
 void CmiSetInfo(void *msg, int infofn) {
   CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
-  header->collectiveMetaInfo = infofn;
+  // cldInfoFn is CmiInt2, so an info function's index is bounded the same way a
+  // handler index already is by CmiSetHandler/CmiSetXHandler. The old
+  // collectiveMetaInfo slot was wider, so assert rather than silently truncate.
+  CmiAssert(infofn >= 0 && infofn <= 32767);
+  header->cldInfoFn = static_cast<CmiInt2>(infofn);
 }
 
 void CmiNumberHandler(int n, CmiHandler h) {
@@ -926,8 +949,10 @@ void CsdExitScheduler() { CmiGetState()->stopFlag = 1; }
 void CmiExitHandler(void *msg) {
   int status = static_cast<CmiExitMsg *>(msg)->status;
 
-  if (status == 1)
+  if (status == 1) {
+    std::signal(SIGABRT, SIG_DFL);
     abort();
+  }
 
   CsdExitScheduler();
 }
@@ -1126,7 +1151,8 @@ void CmiAbort(const char *format, ...) {
   va_end(args);
   CmiAbortHelper("Called CmiAbort", newmsg, NULL, 1, 0);
 
-  CmiExitHelper(1);
+  /* No CmiExitHelper() here. */
+  std::signal(SIGABRT, SIG_DFL);
   abort();
 }
 
