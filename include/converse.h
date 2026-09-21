@@ -1498,6 +1498,13 @@ inline const std::size_t& CmiRecommendedIpcBlockCutoff(void) {
 // message is over CmiRecommendedIpcBlockCutoff(), or the pool is full.
 bool CmiIpcTrySendAndFree(int destNode, int destRank, int messageSize,
                           void *msg);
+
+// Whether the shared-memory pool is up and destNode is another process on
+// this host, i.e. whether a small enough message to destNode would go through
+// the pool rather than the network. A layer that follows a one-sided put with
+// a notification has to know this: the put still crosses the network, but the
+// notification would not, and could arrive before the data does.
+bool CmiIpcReaches(int destNode);
 #endif /* __cplusplus */
 
 CsvExtern(CmiIpcManager*, coreIpcManager_);

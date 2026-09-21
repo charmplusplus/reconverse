@@ -449,8 +449,7 @@ CLINKAGE long CmiIpcMessagesReceived(void) {
   return CpvInitialized(ipcRecvd_) ? CpvAccess(ipcRecvd_) : 0;
 }
 
-bool CmiIpcTrySendAndFree(int destNode, int destRank, int messageSize,
-                          void* msg) {
+bool CmiIpcReaches(int destNode) {
   auto* manager = CsvAccess(coreIpcManager_);
   if (manager == nullptr) return false;
   // Acquire-load of the flag the setup code released: it orders this PE's
@@ -458,9 +457,14 @@ bool CmiIpcTrySendAndFree(int destNode, int destRank, int messageSize,
   // writes, and it keeps sends off a pool whose segments are not all mapped.
   if (!manager->ready.load(std::memory_order_acquire)) return false;
   // one load rules out every destination the pool cannot reach
-  if (destNode < 0 || destNode >= (int)manager->peers.size() ||
-      !manager->peers[destNode])
-    return false;
+  return destNode >= 0 && destNode < (int)manager->peers.size() &&
+         manager->peers[destNode];
+}
+
+bool CmiIpcTrySendAndFree(int destNode, int destRank, int messageSize,
+                          void* msg) {
+  if (!CmiIpcReaches(destNode)) return false;
+  auto* manager = CsvAccess(coreIpcManager_);
   if ((std::size_t)messageSize > CmiRecommendedIpcBlockCutoff()) return false;
 
   auto* block = CmiMsgToIpcBlock(manager, (char*)msg, (std::size_t)messageSize,

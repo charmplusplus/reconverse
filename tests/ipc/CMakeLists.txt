@@ -13,3 +13,7 @@ add_test(NAME ipc-auto COMMAND ${RECONVERSE_TEST_LAUNCHER} -n 3
 # well under the largest message, so both paths get exercised in one run.
 add_test(NAME ipc-smallpool COMMAND ${RECONVERSE_TEST_LAUNCHER} -n 2
          $<TARGET_FILE:ipc_test> +pe 4 +ipc ++ipcpoolsize 262144)
+# Same traffic under the original scheduler loop: the pool is drained from
+# both scheduler implementations, and this is the one that covers the other.
+add_test(NAME ipc-shm-old-scheduler COMMAND ${RECONVERSE_TEST_LAUNCHER} -n 2
+         $<TARGET_FILE:ipc_test> +pe 4 +ipc +ipcmode shm +old-scheduler)
