@@ -699,8 +699,9 @@ void CmiLookupGroup(CmiGroup grp, int *npes, int **pes) {
  * The fan-out handler restores handlerId before anyone sees the message.
  *
  * Because the payload starts at the front of the buffer, the receiving process
- * delivers the received buffer itself and copies nothing for a nokeep message,
- * and copies only for the ranks after the first otherwise. The trailer is then
+ * delivers the received buffer itself to the first listed rank and copies only
+ * for the ranks after it -- for nokeep messages too, which must not be shared
+ * between ranks here (see CmiFanoutHandler for why). The trailer is then
  * slack past messageSize inside the delivered allocation. Nothing on the
  * receive path treats messageSize as the allocation length: CmiPushPE ignores
  * the size it is handed, the scheduler passes only the pointer, and CmiFree
@@ -723,8 +724,8 @@ void CmiLookupGroup(CmiGroup grp, int *npes, int **pes) {
  *
  * Copy accounting, for a list send to k ranks of one other process: the sender
  * copies the payload once for that process (it used to copy k times, once per
- * rank), and the receiving process copies it zero times for a nokeep payload
- * and k-1 times otherwise. Network sends go from k to 1. Removing the sender's
+ * rank), and the receiving process copies it k-1 times. Network sends go from
+ * k to 1. Removing the sender's
  * remaining copy would need the rank list out of band (LCI immediate data or
  * the tag, i.e. a comm_backend interface change); that is deliberately out of
  * scope here.
@@ -758,6 +759,30 @@ static size_t CmiFanoutTotalSize(int len, int nranks) {
 // Runs on the first listed rank of the destination process and hands the
 // payload to every rank the sender listed. The received buffer IS the payload
 // message, so it can be delivered as it stands.
+//
+// Every rank gets a buffer of its own, nokeep or not: the received buffer
+// serves the first rank and the others get copies, k-1 copies for k ranks.
+// Sharing one buffer across ranks for a nokeep message, as the within-node
+// broadcast does (CmiForwardMsgToPeers), is not safe here, because this buffer
+// arrived off the wire and may still be PACKED. Charm++ marks marshalled entry
+// methods nokeep, CldEnqueueMulti packs a list send before it goes out (unlike
+// CldEnqueueWithinNode, it does not skip packing for nokeep), and each
+// receiving PE then unpacks it in place (CkUnpackMessage):
+//
+//   if (env->isPacked()) { msg = unpack(msg); env->setPacked(0); }
+//
+// For a CkMarshallMsg, unpack turns msgBuf from an offset back into a pointer
+// by adding the message's address. Two PEs sharing the buffer can both see it
+// packed and both add, leaving msgBuf at 2*msg + offset, and every PE that
+// reads it afterwards faults at that one address. NAMD's hybrid load balancer
+// hit this on every few runs (HybridBaseLB::PropagateInfo, a marshalled
+// multicast to all ranks of a remote process). Stock Charm++ never shares a
+// list-send buffer between PEs: its SMP CmiSyncListSendFn copies the message
+// for every destination, local ones included, precisely because of this
+// "race between unpacking for local PEs" (Charm++ bug #3061). The within-node
+// broadcast is different: Charm++ knows that message will be shared and skips
+// packing it for exactly that reason (CldEnqueueWithinNode: "If message is
+// NOKEEP, do not pack it since its pointer is just going to be shared").
 void CmiFanoutHandler(void *msg) {
   CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
   const int len = header->messageSize;
@@ -770,34 +795,16 @@ void CmiFanoutHandler(void *msg) {
   const CmiUInt4 *ranks = trailer + CmiFanoutTrailerFixed;
   const int firstPe = CmiNodeFirst(CmiMyNode());
 
-  if (CmiMsgIsNokeep(msg)) {
-    // Same contract as CmiForwardMsgToPeers' nokeep case, and no copy at all:
-    // one buffer for the whole process, one reference per receiving rank, so
-    // each PE's CmiFree drops one and the last one releases it. Like
-    // CmiForwardMsgToPeers, a shared message keeps whatever header->destPE the
-    // sender left in it: one buffer cannot name a per-PE destination.
-    // Every reference is taken before the first push, or the first receiver
-    // could free the buffer while this loop is still running.
-    for (int i = 1; i < nranks; i++)
-      CmiReference(msg); // the received buffer already holds the first
-    for (int i = 0; i < nranks; i++)
-      CmiPushPE((int)ranks[i], len, msg);
-  } else {
-    // A message its handler may keep or modify needs one buffer per rank, as
-    // the within-node fan-out does for non-nokeep messages -- but the received
-    // buffer serves the first rank, so this is k-1 copies, not k. The copies
-    // are made before that buffer is handed over: once pushed, another PE may
-    // free it.
-    for (int i = 1; i < nranks; i++) {
-      void *copy = CmiAlloc(len);
-      memcpy(copy, msg, len);
-      static_cast<CmiMessageHeader *>(copy)->destPE =
-          firstPe + (int)ranks[i];
-      CmiPushPE((int)ranks[i], len, copy);
-    }
-    header->destPE = firstPe + (int)ranks[0];
-    CmiPushPE((int)ranks[0], len, msg);
+  // The copies are made before the received buffer is handed over: once
+  // pushed, its PE may free it.
+  for (int i = 1; i < nranks; i++) {
+    void *copy = CmiAlloc(len);
+    memcpy(copy, msg, len);
+    static_cast<CmiMessageHeader *>(copy)->destPE = firstPe + (int)ranks[i];
+    CmiPushPE((int)ranks[i], len, copy);
   }
+  header->destPE = firstPe + (int)ranks[0];
+  CmiPushPE((int)ranks[0], len, msg);
 }
 
 // Send the payload to nranks destinations in one other process. order[start..]
