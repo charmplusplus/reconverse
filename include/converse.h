@@ -948,12 +948,9 @@ void CldEnqueueGroup(CmiGroup grp, void *msg, int infofn);
 /* The nokeep flag is a promise by the sender that no receiving handler will
    retain the message past its return or modify it. In exchange the runtime may
    hand one shared buffer to several PEs of a process instead of copying it for
-   each, every one of those PEs still calling CmiFree exactly once. It does so
-   only in the within-node broadcast, whose sender knows the buffer will be
-   shared (Charm++ leaves such a message unpacked for that reason). A list
-   send's fan-out never shares: Charm++ also sets nokeep on messages it packs,
-   and unpacks them in place on receipt, which two PEs sharing one buffer
-   would do twice. */
+   each, every one of those PEs still calling CmiFree exactly once. Only the
+   within-node broadcast shares; a list send's fan-out does not, because
+   Charm++ also sets nokeep on packed messages and unpacks them in place. */
 CLINKAGE void CmiSetMsgNokeep(void *msg, int nokeep);
 CLINKAGE int CmiMsgIsNokeep(const void *msg);
 

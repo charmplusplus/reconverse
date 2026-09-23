@@ -19,20 +19,12 @@
 // one across the call).
 //
 // Phase C: the same list send with a nokeep payload. Every listed rank must
-// still get a buffer of its own, exactly as without the flag. The fan-out used
-// to hand one buffer to all the listed ranks of a process for a nokeep message,
-// which broke Charm++: it sets nokeep on marshalled messages that it has
-// PACKED, and each receiving PE unpacks in place with an unsynchronized
-// isPacked() check, so two PEs sharing the buffer both converted msgBuf from
-// an offset to a pointer, leaving it at 2*msg + offset (NAMD's hybrid load
-// balancer segfaulted on it). The old code took every reference before the
-// first push, so at least one receiver always saw a count of 2 or more: the
-// check that each receiver saw exactly 1 fails deterministically against it,
-// no race required.
+// still get a buffer of its own: sharing one broke Charm++, which unpacks
+// packed nokeep messages in place (see CmiFanoutHandler). The old sharing code
+// always left some receiver with 2+ references, so this fails without a race.
 //
-// Phases B-D also check, across ALL listed ranks of the several-rank process,
-// that exactly one of them was handed the received fan-out buffer (it is
-// larger than the payload: it carries the rank trailer) and the rest copies.
+// Phases B-D also check that exactly one listed rank of the several-rank
+// process got the received fan-out buffer (larger: it carries the trailer).
 //
 // Phase D: the same destinations through CmiEstablishGroup / CmiSyncMulticastFn
 // and CmiFreeMulticastFn, which reach the same code by way of CmiLookupGroup.
@@ -100,8 +92,7 @@ static int destA[2];
 static int numDestA = 0;
 static int destB[256];
 static int numDestB = 0;
-// The several-rank remote process of phases B-D: every one of its ranks is
-// listed, so the fan-out serves sharedGroupNRanks ranks there.
+// The several-rank remote process of phases B-D; all its ranks are listed.
 static int sharedGroupFirst = 0;
 static int sharedGroupNRanks = 0;
 static CmiGroup group;
@@ -139,8 +130,7 @@ static void recv_handler(void *vmsg) {
       }
   }
   int step = p->step;
-  // Record the ownership facts before freeing: a receiver must be the only
-  // holder of its buffer (reference count 1), nokeep or not.
+  // Record ownership before freeing: a receiver must hold the only reference.
   uint64_t ptr = (uint64_t)(uintptr_t)vmsg;
   int ref = CmiGetReference(vmsg);
   int alloc = CmiSize(vmsg);
@@ -185,8 +175,7 @@ static void checkStep(void) {
                stepName[step], pe, arrivals[pe], expected[pe]);
 
   if (step >= S_B_SYNC) {
-    // Every receiver owned its buffer outright: no PE was handed a buffer that
-    // another PE also held. This is what the in-place unpack in Charm++ needs.
+    // No PE may share its buffer: Charm++'s in-place unpack depends on it.
     for (int pe = 0; pe < npes; pe++)
       if (expected[pe] && refOf[pe] != 1)
         CmiAbort("fanout_refcount: %s: pe %d was handed a buffer with %d "
@@ -194,10 +183,7 @@ static void checkStep(void) {
                  stepName[step], pe, refOf[pe]);
 
     if (sharedGroupNRanks >= 2) {
-      // The received buffer serves exactly one listed rank of that process;
-      // the others get copies. None of them getting it would mean the
-      // receiving process copied for every rank, and more than one would mean
-      // it was shared.
+      // The received buffer serves exactly one listed rank; the rest copies.
       int big = 0;
       for (int r = 0; r < sharedGroupNRanks; r++)
         big += allocOf[sharedGroupFirst + r] > bigSize;

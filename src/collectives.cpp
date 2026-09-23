@@ -700,9 +700,8 @@ void CmiLookupGroup(CmiGroup grp, int *npes, int **pes) {
  *
  * Because the payload starts at the front of the buffer, the receiving process
  * delivers the received buffer itself to the first listed rank and copies only
- * for the ranks after it -- for nokeep messages too, which must not be shared
- * between ranks here (see CmiFanoutHandler for why). The trailer is then
- * slack past messageSize inside the delivered allocation. Nothing on the
+ * for the ranks after it, nokeep or not (see CmiFanoutHandler). The trailer is
+ * then slack past messageSize inside the delivered allocation. Nothing on the
  * receive path treats messageSize as the allocation length: CmiPushPE ignores
  * the size it is handed, the scheduler passes only the pointer, and CmiFree
  * goes by the allocator's own SIZEFIELD. The one visible consequence is that
@@ -725,10 +724,9 @@ void CmiLookupGroup(CmiGroup grp, int *npes, int **pes) {
  * Copy accounting, for a list send to k ranks of one other process: the sender
  * copies the payload once for that process (it used to copy k times, once per
  * rank), and the receiving process copies it k-1 times. Network sends go from
- * k to 1. Removing the sender's
- * remaining copy would need the rank list out of band (LCI immediate data or
- * the tag, i.e. a comm_backend interface change); that is deliberately out of
- * scope here.
+ * k to 1. Removing the sender's remaining copy would need the rank list out
+ * of band (LCI immediate data or the tag, i.e. a comm_backend interface
+ * change); that is deliberately out of scope here.
  *
  * Ownership is exactly as before, because nothing here takes a reference on
  * the caller's buffer: it is only read, either by CmiSyncSend (which copies)
@@ -761,28 +759,15 @@ static size_t CmiFanoutTotalSize(int len, int nranks) {
 // message, so it can be delivered as it stands.
 //
 // Every rank gets a buffer of its own, nokeep or not: the received buffer
-// serves the first rank and the others get copies, k-1 copies for k ranks.
-// Sharing one buffer across ranks for a nokeep message, as the within-node
-// broadcast does (CmiForwardMsgToPeers), is not safe here, because this buffer
-// arrived off the wire and may still be PACKED. Charm++ marks marshalled entry
-// methods nokeep, CldEnqueueMulti packs a list send before it goes out (unlike
-// CldEnqueueWithinNode, it does not skip packing for nokeep), and each
-// receiving PE then unpacks it in place (CkUnpackMessage):
-//
-//   if (env->isPacked()) { msg = unpack(msg); env->setPacked(0); }
-//
-// For a CkMarshallMsg, unpack turns msgBuf from an offset back into a pointer
-// by adding the message's address. Two PEs sharing the buffer can both see it
-// packed and both add, leaving msgBuf at 2*msg + offset, and every PE that
-// reads it afterwards faults at that one address. NAMD's hybrid load balancer
-// hit this on every few runs (HybridBaseLB::PropagateInfo, a marshalled
-// multicast to all ranks of a remote process). Stock Charm++ never shares a
-// list-send buffer between PEs: its SMP CmiSyncListSendFn copies the message
-// for every destination, local ones included, precisely because of this
-// "race between unpacking for local PEs" (Charm++ bug #3061). The within-node
-// broadcast is different: Charm++ knows that message will be shared and skips
-// packing it for exactly that reason (CldEnqueueWithinNode: "If message is
-// NOKEEP, do not pack it since its pointer is just going to be shared").
+// serves the first rank and the others get copies. Sharing it for a nokeep
+// message, as CmiForwardMsgToPeers does, is unsafe here: Charm++ marks
+// marshalled entry methods nokeep, CldEnqueueMulti packs the message anyway,
+// and each receiving PE unpacks it in place (CkUnpackMessage) behind an
+// unsynchronized isPacked() check. Two PEs sharing it both add the message
+// address to CkMarshallMsg::msgBuf and then fault (seen in NAMD's
+// HybridBaseLB::PropagateInfo). Stock Charm++ copies per destination for the
+// same reason (Charm++ bug #3061); only CldEnqueueWithinNode leaves a nokeep
+// message unpacked so that it can be shared.
 void CmiFanoutHandler(void *msg) {
   CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
   const int len = header->messageSize;
