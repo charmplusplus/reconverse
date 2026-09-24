@@ -8,10 +8,6 @@ extern std::vector<QueuePollHandler> g_handlers; //list of handlers
 extern Groups g_groups; //groups of handlers by index
 CpvExtern(QueuePollHandlerFn *, poll_handlers);
 
-// One trip around the polling table is ARRAY_SIZE scheduler iterations, so
-// re-balance every ADAPT_PERIOD_CYCLES * ARRAY_SIZE iterations.
-#define ADAPT_INTERVAL ((uint64_t)ARRAY_SIZE * ADAPT_PERIOD_CYCLES)
-
 // Sweep the table starting at `start`, stopping as soon as a handler reports it
 // did work, so a message never waits for the loop counter to rotate back around
 // to its slot.  Whichever queue produced the message gets the credit, which is
@@ -28,6 +24,11 @@ static inline bool pollOnce(PollTable *pt, uint64_t start) {
       }
       return true;
     }
+  }
+  // Nothing anywhere: this sweep probed every slot once, charging each queue
+  // once per slot it holds.  Undo that if idle sweeps are not to count.
+  if (pt->skipIdle) {
+    for (size_t i = 0; i < pt->polls.size(); ++i) pt->polls[i] -= pt->slotsOf[i];
   }
   return false;
 }
@@ -138,8 +139,15 @@ bool pollThreadPrioQueue() {
 
 bool pollProgress()
 {
-  if(CmiMyRank() % backend_poll_thread == 0) comm_backend::progress();
-  return false; //polling progress doesn't count
+  if (CmiMyRank() % backend_poll_thread != 0) return false;
+  if (!comm_backend::progress()) return false;
+  // Under adaptation, network progress counts as work whenever the backend
+  // completed something, so it earns table slots like a queue that delivered
+  // a message.  Reporting nothing, as before, meant every adaptive policy cut
+  // it to its one-slot floor regardless of how much the application depends
+  // on the network.  A static table keeps the old behaviour.
+  PollTable *pt = CpvAccess(poll_table);
+  return pt && pt->adaptive;
 }
 
 #if CMK_TASKQUEUE
@@ -170,9 +178,8 @@ void CmiQueueRegisterInitThread(char **argv) {
   names.push_back("threadprio");
 
   // Within a single process there is nothing for the network backend to
-  // progress, and pollProgress never reports work, so it would sit in the
-  // table holding its guaranteed slot and cost a call per trip.
-  // +no_progress_polling leaves it unregistered.
+  // progress, so this handler would only hold its guaranteed slot and cost a
+  // call per trip; +no_progress_polling leaves it unregistered.
   if (!CmiGetArgFlag(argv, "+no_progress_polling")) {
     handlers.push_back(std::make_pair(pollProgress, 4));
     names.push_back("progress");
@@ -204,6 +211,7 @@ void CmiQueueRegisterInit() {
 void CsdScheduler() {
 
   uint64_t loop_counter = 0;
+  uint64_t until_adapt = CpvAccess(poll_table)->adaptPeriod;
 
   while (CmiStopFlag() == 0) {
 
@@ -223,8 +231,11 @@ void CsdScheduler() {
     CsdPeriodic();
     loop_counter++;
 
-    // Re-apportion slots from what each queue actually delivered.
-    if (pt->adaptive && (loop_counter % ADAPT_INTERVAL) == 0) {
+    // Re-apportion slots from what each queue actually delivered, every
+    // pt->adaptPeriod iterations.  A countdown keeps a runtime divisor out of
+    // the loop; it fires on the same iterations as a modulo test would.
+    if (pt->adaptive && --until_adapt == 0) {
+      until_adapt = pt->adaptPeriod;
       pollTableAdapt(pt);
     }
 
@@ -237,6 +248,7 @@ void CsdScheduler() {
  */
 void CsdSchedulePoll() {
   uint64_t loop_counter = 0;
+  uint64_t until_adapt = CpvAccess(poll_table)->adaptPeriod;
 
   while(1){
 
@@ -251,7 +263,8 @@ void CsdSchedulePoll() {
     CsdPeriodic();
     loop_counter++;
 
-    if (pt->adaptive && (loop_counter % ADAPT_INTERVAL) == 0) {
+    if (pt->adaptive && --until_adapt == 0) {
+      until_adapt = pt->adaptPeriod;
       pollTableAdapt(pt);
     }
 

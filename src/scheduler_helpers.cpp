@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
+#include <unistd.h>
 
 std::vector<QueuePollHandler> g_handlers; //list of handlers
 Groups g_groups; //groups of handlers by index
@@ -11,6 +12,8 @@ CpvDeclare(PollTable *, poll_table);
 
 // default handler used to safely occupy any unassigned slot
 static bool pollNoWork() { return false; }
+
+static void pollTableSample(void *);  // +poll_adapt_sample, defined below
 
 // Build a 64-bit mask for a period n (1..64) with optional phase (0..n-1)
 inline uint64_t make_mask_every_n(unsigned n, unsigned phase = 0) {
@@ -82,10 +85,8 @@ void add_handler(QueuePollHandlerFn fn, unsigned period, unsigned phase)
 // comes back -- without that, a queue that went quiet could never be polled
 // again and would be starved permanently.
 // ---------------------------------------------------------------------------
-void pollTableAssign(PollTable *pt, const std::vector<uint64_t>& weights) {
-    const unsigned n = static_cast<unsigned>(pt->fns.size());
-    if (n == 0) return;
-
+static std::vector<unsigned> pollTableApportion(
+    unsigned n, const std::vector<uint64_t>& weights) {
     std::vector<unsigned> slots(n, 0);
 
     if (n >= ARRAY_SIZE) {
@@ -123,6 +124,19 @@ void pollTableAssign(PollTable *pt, const std::vector<uint64_t>& weights) {
             }
         }
     }
+
+    return slots;
+}
+
+void pollTableAssign(PollTable *pt, const std::vector<uint64_t>& weights) {
+    const unsigned n = static_cast<unsigned>(pt->fns.size());
+    if (n == 0) return;
+    pollTableLayout(pt, pollTableApportion(n, weights));
+}
+
+void pollTableLayout(PollTable *pt, const std::vector<unsigned>& slots) {
+    const unsigned n = static_cast<unsigned>(pt->fns.size());
+    if (n == 0) return;
 
     // Lay the slots out.  For a handler holding s slots the ideal positions are
     // evenly spaced at (j + 0.5) * ARRAY_SIZE / s; place each at the nearest
@@ -181,6 +195,77 @@ void pollTableAssign(PollTable *pt, const std::vector<uint64_t>& weights) {
 // Re-apportion the table from the per-queue message counters collected since
 // the last adjustment, then clear them for the next window.
 // ---------------------------------------------------------------------------
+// Round non-negative slot targets that sum to ARRAY_SIZE to integers with the
+// same sum (largest remainder).  Targets >= 1 stay >= 1.
+static std::vector<unsigned> roundSlots(const std::vector<double>& target) {
+    const size_t n = target.size();
+    std::vector<unsigned> slots(n);
+    std::vector<double> frac(n);
+    unsigned handed = 0;
+    for (size_t i = 0; i < n; ++i) {
+        slots[i] = (unsigned)target[i];
+        frac[i] = target[i] - slots[i];
+        handed += slots[i];
+    }
+    std::vector<size_t> order(n);
+    for (size_t i = 0; i < n; ++i) order[i] = i;
+    std::sort(order.begin(), order.end(),
+              [&](size_t a, size_t b) { return frac[a] > frac[b]; });
+    for (size_t k = 0; handed < ARRAY_SIZE && n; ++k, ++handed) slots[order[k % n]]++;
+    return slots;
+}
+
+// Smoothed adjustment: EWMA over queue shares, a cap on slots moved per
+// adjustment, and hysteresis on redraws.
+static void pollTableAdaptTuned(PollTable *pt, const std::vector<uint64_t>& weights) {
+    const size_t n = pt->fns.size();
+    if (n >= ARRAY_SIZE) return;
+
+    double wsum = 0;
+    for (size_t i = 0; i < n; ++i) wsum += (double)weights[i];
+    if (wsum <= 0) return;
+
+    // 1. EWMA of the measured shares.  The state keeps evolving even when the
+    //    table is not redrawn, so a small persistent shift eventually shows.
+    for (size_t i = 0; i < n; ++i)
+        pt->share[i] = pt->alpha * ((double)weights[i] / wsum) +
+                       (1.0 - pt->alpha) * pt->share[i];
+
+    // 2. Apportion the free slots after the one-slot floor, as
+    //    pollTableAssign does.
+    std::vector<double> target(n);
+    const double freeSlots = (double)(ARRAY_SIZE - n);
+    for (size_t i = 0; i < n; ++i) target[i] = 1.0 + pt->share[i] * freeSlots;
+    std::vector<unsigned> proposed = roundSlots(target);
+
+    // 3. Limit how many slots change owner in one adjustment by moving only
+    //    part of the way from the current counts toward the proposal.
+    const std::vector<unsigned>& cur = pt->slotsOf;
+    if (pt->maxMove > 0) {
+        unsigned moved = 0;
+        for (size_t i = 0; i < n; ++i)
+            if (proposed[i] > cur[i]) moved += proposed[i] - cur[i];
+        if (moved > pt->maxMove) {
+            const double lambda = (double)pt->maxMove / moved;
+            for (size_t i = 0; i < n; ++i)
+                target[i] = cur[i] + lambda * ((double)proposed[i] - cur[i]);
+            proposed = roundSlots(target);
+        }
+    }
+
+    // 4. Hysteresis: skip the redraw unless some queue moves by more than
+    //    `hysteresis` slots.  An unchanged table is always left as it is.
+    unsigned maxDelta = 0;
+    for (size_t i = 0; i < n; ++i) {
+        unsigned d = proposed[i] > cur[i] ? proposed[i] - cur[i] : cur[i] - proposed[i];
+        maxDelta = std::max(maxDelta, d);
+    }
+    if (maxDelta == 0 || maxDelta <= pt->hysteresis) return;
+
+    pollTableLayout(pt, proposed);
+    pt->redraws++;
+}
+
 void pollTableAdapt(PollTable *pt) {
     if (!pt || pt->fns.empty()) return;
 
@@ -216,7 +301,14 @@ void pollTableAdapt(PollTable *pt) {
         }
     }
 
-    pollTableAssign(pt, weights);
+    const bool tuned = pt->alpha < 1.0 || pt->hysteresis > 0 || pt->maxMove > 0;
+    if (!tuned) {
+        const std::vector<unsigned> before = pt->slotsOf;
+        pollTableAssign(pt, weights);
+        if (pt->slotsOf != before) pt->redraws++;
+    } else {
+        pollTableAdaptTuned(pt, weights);
+    }
     pt->adjustments++;
     std::fill(pt->counts.begin(), pt->counts.end(), 0);
     std::fill(pt->polls.begin(), pt->polls.end(), 0);
@@ -263,7 +355,8 @@ static void add_list_of_handlers_impl(
     const char *env = getenv("RECONVERSE_ADAPTIVE_POLLING");
     if (env && (env[0] == '0')) pt->adaptive = false;
 
-    /* Weighting rule.  hitrate is the default; see pollTableAdapt for why. */
+    /* Weighting rule: count unless +poll_adapt_mode says otherwise; see
+       pollTableAdapt. */
     char *modeStr = NULL;
     if (argv) CmiGetArgString(argv, "+poll_adapt_mode", &modeStr);
     if (!modeStr) {
@@ -275,10 +368,87 @@ static void add_list_of_handlers_impl(
     else if (modeStr && strcmp(modeStr, "hitrate") == 0)
         pt->mode = PollTable::ADAPT_HITRATE;
 
+    // Adjustment period in scheduler iterations.  The default is ten trips
+    // around the table; larger values adapt less often from longer windows.
+    CmiInt8 period = 0;
+    if (!(argv && CmiGetArgLong(argv, "+poll_adapt_period", &period))) {
+        const char *e = getenv("RECONVERSE_POLL_ADAPT_PERIOD");
+        if (e) period = strtoll(e, NULL, 10);
+    }
+    if (period > 0) pt->adaptPeriod = (uint64_t)period;
+
+    // Adjustment controls; see PollTable.  Flags override the environment.
+    const char *e;
+    if ((e = getenv("RECONVERSE_POLL_ADAPT_ALPHA")) && *e) pt->alpha = strtod(e, NULL);
+    int hyst = 0, maxMove = 0;
+    if ((e = getenv("RECONVERSE_POLL_ADAPT_HYSTERESIS")) && *e) hyst = atoi(e);
+    if ((e = getenv("RECONVERSE_POLL_ADAPT_MAX_MOVE")) && *e) maxMove = atoi(e);
+    if ((e = getenv("RECONVERSE_POLL_ADAPT_SKIP_IDLE")) && e[0] == '1') pt->skipIdle = true;
+    if (argv) {
+        CmiGetArgDouble(argv, "+poll_adapt_alpha", &pt->alpha);
+        CmiGetArgInt(argv, "+poll_adapt_hysteresis", &hyst);
+        CmiGetArgInt(argv, "+poll_adapt_max_move", &maxMove);
+        if (CmiGetArgFlag(argv, "+poll_adapt_skip_idle")) pt->skipIdle = true;
+    }
+    pt->alpha = std::min(1.0, std::max(0.0, pt->alpha));
+    pt->hysteresis = hyst > 0 ? (unsigned)hyst : 0;
+    pt->maxMove = maxMove > 0 ? (unsigned)maxMove : 0;
+
+    if (argv && CmiGetArgFlag(argv, "+poll_adapt_report")) pt->report = true;
+
+    if (argv && CmiGetArgFlag(argv, "+poll_adapt_sample")) pt->sample = true;
+    const char *ps = getenv("RECONVERSE_POLL_ADAPT_SAMPLE");
+    if (ps && ps[0] == '1') pt->sample = true;
+    const char *rep = getenv("RECONVERSE_POLL_ADAPT_REPORT");
+    if (rep && rep[0] == '1') pt->report = true;
+
     // Seed the table from the frequencies given at registration.
     std::vector<uint64_t> seed(pt->fns.size());
     for (size_t i = 0; i < pt->fns.size(); ++i) seed[i] = pt->baseFreq[i];
     pollTableAssign(pt, seed);
+
+    // The smoothed shares start at the registered frequencies.
+    double bsum = 0;
+    for (unsigned f : pt->baseFreq) bsum += f;
+    pt->share.assign(pt->fns.size(), 0.0);
+    for (size_t i = 0; i < pt->fns.size(); ++i)
+        pt->share[i] = bsum > 0 ? pt->baseFreq[i] / bsum : 0.0;
+
+    if (pt->sample) {
+        pt->sampledLifetime.assign(pt->fns.size(), 0);
+        if (CmiMyPe() == 0) {
+            std::string header = "POLLSAMPLE_HEADER,pe,wall,adj,redraws";
+            for (const auto &name : pt->names) header += ",slots:" + name;
+            for (const auto &name : pt->names) header += ",work:" + name;
+            header += "\n";
+            (void)!write(STDERR_FILENO, header.data(), header.size());
+        }
+        CcdCallOnConditionKeep(CcdPERIODIC_10s, pollTableSample, nullptr);
+    }
+}
+
+// CcdPERIODIC_10s callback registered by +poll_adapt_sample.  Each line goes
+// out in a single write() to stderr: stdout is buffered and flushed at
+// arbitrary byte boundaries, so lines from different PEs and processes could
+// be cut and interleaved, and applications print partial lines there too.
+static void pollTableSample(void *) {
+    PollTable *pt = CpvAccess(poll_table);
+    if (!pt) return;
+    const size_t n = pt->fns.size();
+    if (pt->sampledLifetime.size() != n) pt->sampledLifetime.assign(n, 0);
+    char buf[1024];
+    int off = snprintf(buf, sizeof(buf), "POLLSAMPLE,%d,%.3f,%lld,%lld", CmiMyPe(),
+                       CmiWallTimer(), (long long)pt->adjustments,
+                       (long long)pt->redraws);
+    for (size_t i = 0; i < n && off < (int)sizeof(buf) - 32; ++i)
+        off += snprintf(buf + off, sizeof(buf) - off, ",%u", pt->slotsOf[i]);
+    for (size_t i = 0; i < n && off < (int)sizeof(buf) - 32; ++i) {
+        off += snprintf(buf + off, sizeof(buf) - off, ",%llu",
+                        (unsigned long long)(pt->lifetime[i] - pt->sampledLifetime[i]));
+        pt->sampledLifetime[i] = pt->lifetime[i];
+    }
+    off += snprintf(buf + off, sizeof(buf) - off, "\n");
+    (void)!write(STDERR_FILENO, buf, std::min(off, (int)sizeof(buf) - 1));
 }
 
 void add_list_of_handlers(
@@ -341,7 +511,18 @@ extern "C" void CmiPollingDump(const char *tag) {
                         pt->names[i].c_str(), pt->slotsOf[i],
                         (long long)pt->lifetime[i]);
     }
-    snprintf(buf + off, sizeof(buf) - off, " adj=%lld\n",
-             (long long)pt->adjustments);
+    snprintf(buf + off, sizeof(buf) - off, " redraw=%lld adj=%lld\n",
+             (long long)pt->redraws, (long long)pt->adjustments);
     CmiPrintf("%s", buf);
+}
+
+// Called by every PE from ConverseExit.  Charm++ reaches ConverseExit from a
+// message handler, without returning from CsdScheduler, so this is the one
+// exit point common to Converse and Charm++ programs.
+void CmiPollingReportAtExit(void) {
+    if (!CpvInitialized(poll_table)) return;
+    PollTable *pt = CpvAccess(poll_table);
+    if (!pt || !pt->report) return;
+    pt->report = false;
+    CmiPollingDump("final");
 }

@@ -218,6 +218,8 @@ void converseRunPe(int rank, int everReturn) {
 //waits for all threads to call, then does cleanup on rank 0
 void ConverseExit(int exitcode)
 {
+  CmiPollingReportAtExit();
+
   // increment number of PEs ready for exit
   std::atomic_fetch_add_explicit(&numPEsReadyForExit, 1, std::memory_order_release);
   // we need everyone to spin unlike old converse to be able to exit threads
