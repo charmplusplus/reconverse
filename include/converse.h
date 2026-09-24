@@ -278,7 +278,9 @@ public:
   int getRef() const { return ref.load(std::memory_order_acquire); }
   void setRef(int r) { return ref.store(r, std::memory_order_release); }
   int incRef() { return ref.fetch_add(1, std::memory_order_release); }
-  int decRef() { return ref.fetch_sub(1, std::memory_order_release); }
+  // acq_rel, not release: the caller that drops the last reference frees the
+  // block, and must observe every other holder's accesses to it first.
+  int decRef() { return ref.fetch_sub(1, std::memory_order_acq_rel); }
 };
 #else
 struct CMI_ALIGNAS(ALIGN_BYTES) CmiChunkHeader {
@@ -290,7 +292,7 @@ struct CMI_ALIGNAS(ALIGN_BYTES) CmiChunkHeader {
 static inline int CmiChunkHeader_getRef(struct CmiChunkHeader* hdr) { return hdr->ref; }
 static inline void CmiChunkHeader_setRef(struct CmiChunkHeader* hdr, int r) { hdr->ref = r; }
 static inline int CmiChunkHeader_incRef(struct CmiChunkHeader* hdr) { return __atomic_fetch_add(&hdr->ref, 1, __ATOMIC_RELEASE); }
-static inline int CmiChunkHeader_decRef(struct CmiChunkHeader* hdr) { return __atomic_fetch_sub(&hdr->ref, 1, __ATOMIC_RELEASE); }
+static inline int CmiChunkHeader_decRef(struct CmiChunkHeader* hdr) { return __atomic_fetch_sub(&hdr->ref, 1, __ATOMIC_ACQ_REL); }
 #endif
 
 // threads library
