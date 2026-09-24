@@ -3,14 +3,31 @@
  * and simultaneously send a message in a circle using normal send
  * "division=" start at some number, divide into 2 tasks of 1/2 the number
  * until reaching 1
+ * the test exits only once the ring has completed AND every task has run, so
+ * a task queue the scheduler never polls shows up as a hang (ctest timeout)
 */
 
 #include "converse.h"
+#include <atomic>
 
 #define MAX_TASK_NUM 512
 #define MAX_RING_HOPS 1000
 CpvDeclare(int, divideHandlerId);
 CpvDeclare(int, ringHandlerId);
+
+// Work items finished in this process: one per leaf task (num == 1) plus one
+// for the ring. Tasks are stolen across PEs, so this is process-wide.
+static std::atomic<int> finished{0};
+
+// Each PE launches tasks 1, 2, 4, ..., MAX_TASK_NUM/2, and a task of size n
+// ends in n leaves, so each PE contributes MAX_TASK_NUM - 1 leaves.
+static void finishOne() {
+  const int total = CmiMyNodeSize() * (MAX_TASK_NUM - 1) + 1;
+  if (finished.fetch_add(1) + 1 == total) {
+    CmiPrintf("[PE %d] All tasks and the ring completed\n", CmiMyPe());
+    CmiExit(0);
+  }
+}
 
 struct Message {
   CmiMessageHeader header;
@@ -37,7 +54,9 @@ void divide_handler(void *msg) {
       newTaskMsg->num = num / 2;
       CsdTaskEnqueue((void *)newTaskMsg);
     }
-  } /*else: no task created*/
+  } else {
+    finishOne();
+  }
 
   CmiFree(msg);
 }
@@ -50,7 +69,7 @@ void ring_handler(void *msg) {
   if (ring_msg->num == 0) {
     CmiPrintf("[PE %d] Ring completed\n", CmiMyPe());
     CmiFree(msg);
-    CmiExit(0);
+    finishOne();
   }
   else {
     CmiMessageHeader *header = (CmiMessageHeader *)msg;

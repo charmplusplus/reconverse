@@ -1,4 +1,5 @@
 #include "scheduler.h"
+#include <algorithm>
 
 std::vector<QueuePollHandler> g_handlers; //list of handlers
 Groups g_groups; //groups of handlers by index
@@ -84,14 +85,29 @@ void add_list_of_handlers(const std::vector<std::pair<QueuePollHandlerFn, unsign
         CpvAccess(poll_handlers)[i] = pollNoWork; // ensure valid callable in every slot
     }
     //poll_handlers = new QueuePollHandlerFn[SCHED_TABLE_SIZE];
+    // decide every handler's slot count before placing any: each is its
+    // rounded share of the table, at least one. Rounding up can overshoot the
+    // table, and placing first would then leave the last handlers with no
+    // slot at all, so trim the largest counts until everything fits.
+    std::vector<unsigned int> slots;
+    unsigned int total_slots = 0;
+    for(const auto& handler : handlers){
+        long normalized = lround((handler.second * SCHED_TABLE_SIZE) / static_cast<double>(total));
+        if(normalized == 0) normalized = 1; // at least once
+        slots.push_back(normalized);
+        total_slots += normalized;
+    }
+    while(total_slots > SCHED_TABLE_SIZE){
+        auto largest = std::max_element(slots.begin(), slots.end());
+        if(*largest <= 1) break; // more handlers than slots: nothing to trim
+        (*largest)--;
+        total_slots--;
+    }
     unsigned int current_index = 0; //earliest slot is index within handlers vector
     unsigned int total_assigned = 0;
-    int handler_index = 0;//for debugging
+    int handler_index = 0; //index into slots
     for(const auto& handler : handlers){
-        unsigned int freq = handler.second;
-        long normalized = lround((freq * SCHED_TABLE_SIZE) / static_cast<double>(total)); //estimate of how many slots this handler should take
-        //CmiPrintf("Handler %d frequency %u normalized to %ld\n", handler_index, freq, normalized);
-        if(normalized == 0) normalized = 1; // at least once
+        unsigned int normalized = slots[handler_index];
         // go through loop and find empty slots
         // spread out as evenly as possible
         unsigned int remaining = normalized;
