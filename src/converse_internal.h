@@ -61,8 +61,9 @@ typedef struct State {
 // period, where larger meant less often.) The registered scheduler passes it
 // straight through as pollProgress's weight in the slot table; the old
 // scheduler turns it back into a loop period, saturating at once per
-// iteration, which is as often as that loop can poll.
-#define BACKEND_POLL_FREQ_DEFAULT 4
+// iteration, which is as often as that loop can poll. The default gives
+// progress a little over half the slot table.
+#define BACKEND_POLL_FREQ_DEFAULT 64
 extern int backend_poll_freq;
 extern int backend_poll_thread; // every backend_poll_thread threads will call progress
 
