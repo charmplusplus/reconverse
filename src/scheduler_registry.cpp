@@ -85,10 +85,6 @@ void add_list_of_handlers(const std::vector<std::pair<QueuePollHandlerFn, unsign
         CpvAccess(poll_handlers)[i] = pollNoWork; // ensure valid callable in every slot
     }
     //poll_handlers = new QueuePollHandlerFn[SCHED_TABLE_SIZE];
-    // decide every handler's slot count before placing any: each is its
-    // rounded share of the table, at least one. Rounding up can overshoot the
-    // table, and placing first would then leave the last handlers with no
-    // slot at all, so trim the largest counts until everything fits.
     std::vector<unsigned int> slots;
     unsigned int total_slots = 0;
     for(const auto& handler : handlers){
