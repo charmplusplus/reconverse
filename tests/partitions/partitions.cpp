@@ -21,7 +21,13 @@ typedef struct {
   int tag;
 } TestMsg;
 
-enum { TAG_PE_INTRA, TAG_PE_INTER, TAG_NODE_INTRA, TAG_NODE_INTER };
+enum {
+  TAG_PE_INTRA,
+  TAG_PE_INTER,
+  TAG_NODE_INTRA,
+  TAG_NODE_INTER,
+  TAG_NODE_DONE
+};
 
 CpvStaticDeclare(int, peHIdx);
 CpvStaticDeclare(int, nodeHIdx);
@@ -140,11 +146,19 @@ static void nodeHandler(void *env) {
 
   /* Any PE on this process can drain the node queue, so the one that takes the
      last message has to wake the others rather than let them wait on a counter
-     no further message will touch. */
+     no further message will touch.
+
+     CmiWithinNodeBroadcast consumes the buffer: the peers get their own copies
+     (or, for a nokeep message, a counted reference each) and the original is
+     handed to this PE's own queue by CmiSyncSendAndFree, to be released by the
+     receiving handler. Freeing it here as well returned the block to the
+     allocator while it was still queued, and the next CmiAlloc handed the same
+     block straight back out -- so one block sat in the queue twice and its
+     handler ran twice on whatever the second message wrote there. That is what
+     surfaced as a duplicate intra- or inter-partition message (issue #225). */
   if (seen == nodeExpected()) {
-    TestMsg *done = newMsg(TAG_PE_INTRA, CpvAccess(nodeDoneHIdx));
+    TestMsg *done = newMsg(TAG_NODE_DONE, CpvAccess(nodeDoneHIdx));
     CmiWithinNodeBroadcast(sizeof(TestMsg), done);
-    CmiFree(done);
   }
 }
 

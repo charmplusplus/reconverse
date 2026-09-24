@@ -50,7 +50,7 @@ set(RECONVERSE_AUTOFETCH_LCW_TAG
     "20689cad808bdb3af32a4707485d8e0d41fdfbe0"
     CACHE STRING "The tag to fetch for LCW") # master branch as of 2025-09-25
 
-option(SPANTREE "whether to enable spanning tree collectives" OFF) #should turn this on once charm issues fixed
+option(SPANTREE "whether to enable spanning tree collectives" ON) 
 
 # Reconverse uses SMP always, but turn on this option for backwards compatibility (see pingpong_multipairs for example)
 option(CMK_SMP "whether to enable SMP support" ON)
@@ -66,6 +66,27 @@ set(RECONVERSE_TEST_LAUNCHER
 
 find_package(HWLOC)
 option(RECONVERSE_ENABLE_CPU_AFFINITY "Enable cpu affinity with hwloc" ${HWLOC_FOUND})
+
+# This option defaults to OFF whenever hwloc is absent, which silently drops
+# +setcpuaffinity, +pemap and +showcpuaffinity from the build. The only symptom
+# used to appear much later, at runtime, as an unrelated-looking complaint about
+# an unparsed '+' argument. Say plainly at configure time which way it went.
+if(RECONVERSE_ENABLE_CPU_AFFINITY AND NOT HWLOC_FOUND)
+  message(FATAL_ERROR
+    "RECONVERSE_ENABLE_CPU_AFFINITY=ON was requested but hwloc was not found. "
+    "Install hwloc (libhwloc-dev on Debian/Ubuntu, hwloc-devel on RHEL, "
+    "'brew install hwloc' on macOS) or point CMake at it with "
+    "-DHWLOC_ROOT=<prefix>.")
+elseif(RECONVERSE_ENABLE_CPU_AFFINITY)
+  message(STATUS "CPU affinity enabled: +setcpuaffinity, +pemap and "
+                 "+showcpuaffinity are available")
+else()
+  message(WARNING
+    "hwloc was not found, so CPU affinity is DISABLED: +setcpuaffinity, +pemap "
+    "and +showcpuaffinity will be accepted but do nothing. Install hwloc "
+    "(libhwloc-dev on Debian/Ubuntu, hwloc-devel on RHEL, 'brew install hwloc' "
+    "on macOS) and reconfigure to enable them.")
+endif()
 
 function(charm_determine_arch output input)
   if(input STREQUAL "x86_64" OR input STREQUAL "AMD64")

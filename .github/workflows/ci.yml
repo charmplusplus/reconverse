@@ -20,7 +20,11 @@ jobs:
       - name: Install Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake ninja-build libfabric-bin libfabric-dev openmpi-bin openmpi-common openmpi-doc libopenmpi-dev
+          # libhwloc-dev is what turns RECONVERSE_ENABLE_CPU_AFFINITY on, and with
+          # it the runtime_modes test asserts that +pemap really binds (-expect-bound).
+          # It also arrives transitively with libopenmpi-dev; name it so that a change
+          # to the MPI packages cannot silently disable affinity here.
+          sudo apt-get install -y cmake ninja-build libhwloc-dev libfabric-bin libfabric-dev openmpi-bin openmpi-common openmpi-doc libopenmpi-dev
 
       - name: Verify Installation
         run: |
@@ -45,6 +49,23 @@ jobs:
             cmake --build build --target all
             ctest --test-dir build --extra-verbose --timeout 60
 
+      - name: With the LCI communication backend and CMK_USE_SHMEM=ON
+        shell: bash
+        run: |
+            cmake \
+                -Bbuild-shmem \
+                -GNinja \
+                -DCMAKE_BUILD_TYPE=Debug \
+                -DRECONVERSE_AUTOFETCH_LCI2=ON \
+                -DRECONVERSE_TEST_LAUNCHER="mpirun;--oversubscribe" \
+                -DLCT_PMI_BACKEND_ENABLE_MPI=ON \
+                -DCMK_USE_SHMEM=ON \
+                .
+            cmake --build build-shmem --target all
+            # Only runtime_modes bootstraps the IPC manager; the other tests
+            # run exactly as they do without shared memory.
+            ctest --test-dir build-shmem --extra-verbose --timeout 120 -R runtime_modes
+
       - name: With the LCW communication backend
         shell: bash
         run: |
@@ -58,3 +79,111 @@ jobs:
                 .
             cmake --build build --target all
             ctest --test-dir build --extra-verbose --timeout 60
+
+  cpu-affinity:
+    runs-on: ubuntu-latest
+    name: CPU affinity (${{ matrix.config }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # hwloc present: affinity is compiled in and the flags bind for real.
+          - config: with-hwloc
+            packages: cmake ninja-build libhwloc-dev
+            expect_affinity: 'ON'
+          # hwloc absent: affinity is compiled out. CmiInitCPUAffinity must
+          # still strip +setcpuaffinity, +pemap and +showcpuaffinity from argv,
+          # or a caller such as Charm++'s init.C reports them as unparsed '+'
+          # arguments. No MPI packages here: libopenmpi-dev depends on
+          # libhwloc-dev and would put hwloc back.
+          - config: without-hwloc
+            packages: cmake ninja-build
+            expect_affinity: 'OFF'
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ${{ matrix.packages }}
+
+      - name: Confirm hwloc is ${{ matrix.expect_affinity == 'ON' && 'present' || 'absent' }}
+        run: |
+          if [ -f /usr/include/hwloc.h ]; then found=ON; else found=OFF; fi
+          echo "hwloc headers: $found (expected ${{ matrix.expect_affinity }})"
+          test "$found" = "${{ matrix.expect_affinity }}"
+
+      - name: Build
+        shell: bash
+        run: |
+          # No comm backend: affinity is per process and needs neither.
+          cmake \
+              -Bbuild \
+              -GNinja \
+              -DCMAKE_BUILD_TYPE=Debug \
+              -DRECONVERSE_TRY_ENABLE_COMM_LCI2=OFF \
+              -DRECONVERSE_TRY_ENABLE_COMM_LCW=OFF \
+              . 2>&1 | tee configure.log
+          cmake --build build --target all
+
+      - name: Affinity was configured as expected
+        shell: bash
+        run: |
+          grep -q '#define RECONVERSE_ENABLE_CPU_AFFINITY' build/src/converse_config.h \
+            && got=ON || got=OFF
+          echo "RECONVERSE_ENABLE_CPU_AFFINITY=$got (expected ${{ matrix.expect_affinity }})"
+          test "$got" = "${{ matrix.expect_affinity }}"
+          # A build with no affinity has to say so at configure time; that
+          # warning is the only early hint that the flags will do nothing.
+          if [ "${{ matrix.expect_affinity }}" = "OFF" ]; then
+            grep -q "CPU affinity is DISABLED" configure.log
+          fi
+
+      - name: The affinity flags are consumed either way
+        run: ctest --test-dir build --extra-verbose --timeout 60 -R cpuaffinity_args
+
+      - name: Requesting affinity without hwloc fails loudly
+        if: matrix.expect_affinity == 'OFF'
+        shell: bash
+        run: |
+          # Explicitly asking for affinity that cannot be built must be an
+          # error, not a silent downgrade to a no-op.
+          if cmake -Bbuild-should-fail -GNinja \
+               -DRECONVERSE_ENABLE_CPU_AFFINITY=ON \
+               -DRECONVERSE_TRY_ENABLE_COMM_LCI2=OFF \
+               -DRECONVERSE_TRY_ENABLE_COMM_LCW=OFF . > out.log 2>&1; then
+            echo "BUG: configure succeeded without hwloc"; cat out.log; exit 1
+          fi
+          grep -q "hwloc was not found" out.log
+          echo "configure failed with the expected message"
+
+  c-header-compat:
+    runs-on: ubuntu-latest
+    name: converse.h is valid C
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc clang
+
+      # converse.h is included from C translation units, not just C++ ones
+      # (Charm++ and user programs both do this), so it has to parse under a
+      # C compiler. Its unconditional <stdatomic.h> puts the floor at C11.
+      # This is a parse check only: it needs no build of reconverse itself,
+      # so it stays cheap and runs even when the full build is broken.
+      - name: Include converse.h from a C translation unit
+        shell: bash
+        run: |
+          printf '#include "converse.h"\nint main(void) { return 0; }\n' > c_include_check.c
+          status=0
+          for cc in gcc clang; do
+            for std in c11 gnu11 c17 gnu17; do
+              echo "== $cc -std=$std =="
+              "$cc" -std="$std" -fsyntax-only -Iinclude c_include_check.c || status=1
+            done
+          done
+          exit $status

@@ -15,13 +15,13 @@ static bool pollNoWork() { return false; }
 
 static void pollTableSample(void *);  // +poll_adapt_sample, defined below
 
-// Build a 64-bit mask for a period n (1..64) with optional phase (0..n-1)
+// Build a slot mask for a period n (1..SCHED_TABLE_SIZE) with optional phase (0..n-1)
 inline uint64_t make_mask_every_n(unsigned n, unsigned phase = 0) {
     if (n == 0) return 0ULL;
-    if (n == 1) return ~0ULL;
-    if (n > 64) n = 64; // clamp to 64
+    if (n == 1) return SCHED_ALL_SLOTS;
+    if (n > SCHED_TABLE_SIZE) n = SCHED_TABLE_SIZE; // clamp to the table
     uint64_t mask = 0ULL;
-    for (unsigned pos = 0; pos < 64; ++pos) {
+    for (unsigned pos = 0; pos < SCHED_TABLE_SIZE; ++pos) {
         if (((pos + phase) % n) == 0) mask |= (1ULL << pos);
     }
     return mask;
@@ -37,7 +37,7 @@ inline void rebuild_groups() {
     for (const auto &h : g_handlers) {
         uint64_t m = h.mask;
         if (m == 0) continue;
-        for (unsigned bit = 0; bit < 64; ++bit) {
+        for (unsigned bit = 0; bit < SCHED_TABLE_SIZE; ++bit) {
             if ((m >> bit) & 1ULL) {
                 g_groups[bit].push_back(h.fn);
             }
@@ -45,7 +45,7 @@ inline void rebuild_groups() {
     }
 }
 
-// Set handler period and phase (period: 1..64, 0 disables).
+// Set handler period and phase (period: 1..SCHED_TABLE_SIZE, 0 disables).
 // Rebuilds groups immediately (cheap relative to hot path).
 inline void set_frequency(size_t handlerIndex, unsigned period, unsigned phase = 0) {
     if (handlerIndex >= g_handlers.size()) return;
@@ -56,7 +56,7 @@ inline void set_frequency(size_t handlerIndex, unsigned period, unsigned phase =
         h.phase = 0;
         h.mask = 0ULL;
     } else {
-        if (period > 64) period = 64;
+        if (period > SCHED_TABLE_SIZE) period = SCHED_TABLE_SIZE;
         h.period = period;
         h.phase = phase % period;
         h.mask = make_mask_every_n(h.period, h.phase);
@@ -75,7 +75,7 @@ void add_handler(QueuePollHandlerFn fn, unsigned period, unsigned phase)
 // ---------------------------------------------------------------------------
 // Slot allocation
 //
-// Turn a set of relative weights into slot counts over the ARRAY_SIZE-entry
+// Turn a set of relative weights into slot counts over the SCHED_TABLE_SIZE-entry
 // table, then lay each handler's slots out as evenly as the table allows.
 //
 // Every registered handler is guaranteed at least one slot: we hand out one
@@ -89,12 +89,12 @@ static std::vector<unsigned> pollTableApportion(
     unsigned n, const std::vector<uint64_t>& weights) {
     std::vector<unsigned> slots(n, 0);
 
-    if (n >= ARRAY_SIZE) {
+    if (n >= SCHED_TABLE_SIZE) {
         // More queues than slots: everyone gets one, extras are dropped.
-        for (unsigned i = 0; i < n && i < ARRAY_SIZE; ++i) slots[i] = 1;
+        for (unsigned i = 0; i < n && i < SCHED_TABLE_SIZE; ++i) slots[i] = 1;
     } else {
         for (unsigned i = 0; i < n; ++i) slots[i] = 1;      // the floor
-        unsigned remaining = ARRAY_SIZE - n;
+        unsigned remaining = SCHED_TABLE_SIZE - n;
 
         uint64_t total = 0;
         for (uint64_t w : weights) total += w;
@@ -139,11 +139,11 @@ void pollTableLayout(PollTable *pt, const std::vector<unsigned>& slots) {
     if (n == 0) return;
 
     // Lay the slots out.  For a handler holding s slots the ideal positions are
-    // evenly spaced at (j + 0.5) * ARRAY_SIZE / s; place each at the nearest
+    // evenly spaced at (j + 0.5) * SCHED_TABLE_SIZE / s; place each at the nearest
     // free slot, searching outward.  Handlers with the most slots go first so
     // the frequently-polled queues get the even spacing, and the sparse ones
     // fill the gaps.
-    for (unsigned i = 0; i < ARRAY_SIZE; ++i) {
+    for (unsigned i = 0; i < SCHED_TABLE_SIZE; ++i) {
         pt->slots[i] = pollNoWork;
         pt->owner[i] = -1;
     }
@@ -159,30 +159,30 @@ void pollTableLayout(PollTable *pt, const std::vector<unsigned>& slots) {
         if (s == 0) continue;
         for (unsigned j = 0; j < s; ++j) {
             unsigned ideal =
-                (unsigned)(((double)j + 0.5) * (double)ARRAY_SIZE / (double)s);
-            if (ideal >= ARRAY_SIZE) ideal = ARRAY_SIZE - 1;
+                (unsigned)(((double)j + 0.5) * (double)SCHED_TABLE_SIZE / (double)s);
+            if (ideal >= SCHED_TABLE_SIZE) ideal = SCHED_TABLE_SIZE - 1;
             // nearest free slot, searching outward from `ideal`
-            unsigned placed = ARRAY_SIZE;
-            for (unsigned d = 0; d < ARRAY_SIZE; ++d) {
-                unsigned up = (ideal + d) % ARRAY_SIZE;
+            unsigned placed = SCHED_TABLE_SIZE;
+            for (unsigned d = 0; d < SCHED_TABLE_SIZE; ++d) {
+                unsigned up = (ideal + d) % SCHED_TABLE_SIZE;
                 if (pt->owner[up] < 0) { placed = up; break; }
-                unsigned dn = (ideal + ARRAY_SIZE - d) % ARRAY_SIZE;
+                unsigned dn = (ideal + SCHED_TABLE_SIZE - d) % SCHED_TABLE_SIZE;
                 if (pt->owner[dn] < 0) { placed = dn; break; }
             }
-            if (placed == ARRAY_SIZE) break; // table full
+            if (placed == SCHED_TABLE_SIZE) break; // table full
             pt->slots[placed] = pt->fns[h];
             pt->owner[placed] = (int)h;
         }
     }
 
     pt->slotsOf.assign(n, 0);
-    for (unsigned i = 0; i < ARRAY_SIZE; ++i) {
+    for (unsigned i = 0; i < SCHED_TABLE_SIZE; ++i) {
         if (pt->owner[i] >= 0) pt->slotsOf[pt->owner[i]]++;
     }
 
     // Keep the legacy flat view in sync for any code still reading it.
     if (CpvAccess(poll_handlers)) {
-        for (unsigned i = 0; i < ARRAY_SIZE; ++i) {
+        for (unsigned i = 0; i < SCHED_TABLE_SIZE; ++i) {
             CpvAccess(poll_handlers)[i] = pt->slots[i];
             CpvAccess(poll_handler_assigned)[i] = (pt->owner[i] >= 0) ? 1 : 0;
         }
@@ -195,7 +195,7 @@ void pollTableLayout(PollTable *pt, const std::vector<unsigned>& slots) {
 // Re-apportion the table from the per-queue message counters collected since
 // the last adjustment, then clear them for the next window.
 // ---------------------------------------------------------------------------
-// Round non-negative slot targets that sum to ARRAY_SIZE to integers with the
+// Round non-negative slot targets that sum to SCHED_TABLE_SIZE to integers with the
 // same sum (largest remainder).  Targets >= 1 stay >= 1.
 static std::vector<unsigned> roundSlots(const std::vector<double>& target) {
     const size_t n = target.size();
@@ -211,7 +211,7 @@ static std::vector<unsigned> roundSlots(const std::vector<double>& target) {
     for (size_t i = 0; i < n; ++i) order[i] = i;
     std::sort(order.begin(), order.end(),
               [&](size_t a, size_t b) { return frac[a] > frac[b]; });
-    for (size_t k = 0; handed < ARRAY_SIZE && n; ++k, ++handed) slots[order[k % n]]++;
+    for (size_t k = 0; handed < SCHED_TABLE_SIZE && n; ++k, ++handed) slots[order[k % n]]++;
     return slots;
 }
 
@@ -219,7 +219,7 @@ static std::vector<unsigned> roundSlots(const std::vector<double>& target) {
 // adjustment, and hysteresis on redraws.
 static void pollTableAdaptTuned(PollTable *pt, const std::vector<uint64_t>& weights) {
     const size_t n = pt->fns.size();
-    if (n >= ARRAY_SIZE) return;
+    if (n >= SCHED_TABLE_SIZE) return;
 
     double wsum = 0;
     for (size_t i = 0; i < n; ++i) wsum += (double)weights[i];
@@ -234,7 +234,7 @@ static void pollTableAdaptTuned(PollTable *pt, const std::vector<uint64_t>& weig
     // 2. Apportion the free slots after the one-slot floor, as
     //    pollTableAssign does.
     std::vector<double> target(n);
-    const double freeSlots = (double)(ARRAY_SIZE - n);
+    const double freeSlots = (double)(SCHED_TABLE_SIZE - n);
     for (size_t i = 0; i < n; ++i) target[i] = 1.0 + pt->share[i] * freeSlots;
     std::vector<unsigned> proposed = roundSlots(target);
 
@@ -326,10 +326,10 @@ static void add_list_of_handlers_impl(
     if (total == 0) return; // nothing to add
 
     CpvInitialize(QueuePollHandlerFn *, poll_handlers);
-    CpvAccess(poll_handlers) = new QueuePollHandlerFn[ARRAY_SIZE];
+    CpvAccess(poll_handlers) = new QueuePollHandlerFn[SCHED_TABLE_SIZE];
     CpvInitialize(int*, poll_handler_assigned);
-    CpvAccess(poll_handler_assigned) = new int[ARRAY_SIZE];
-    for (unsigned int i = 0; i < ARRAY_SIZE; i++) {
+    CpvAccess(poll_handler_assigned) = new int[SCHED_TABLE_SIZE];
+    for (unsigned int i = 0; i < SCHED_TABLE_SIZE; i++) {
         CpvAccess(poll_handler_assigned)[i] = 0;
         CpvAccess(poll_handlers)[i] = pollNoWork;
     }
@@ -467,41 +467,46 @@ void add_list_of_handlers(
 // ---------------------------------------------------------------------------
 // Reporting, for benchmarks and debugging
 // ---------------------------------------------------------------------------
+// Under +old-scheduler no table is ever built, so these report nothing.
+static PollTable *myPollTable() {
+    return CpvInitialized(poll_table) ? CpvAccess(poll_table) : nullptr;
+}
+
 extern "C" int CmiPollingNumQueues(void) {
-    PollTable *pt = CpvAccess(poll_table);
+    PollTable *pt = myPollTable();
     return pt ? (int)pt->fns.size() : 0;
 }
 
 extern "C" int CmiPollingSlots(int i) {
-    PollTable *pt = CpvAccess(poll_table);
+    PollTable *pt = myPollTable();
     if (!pt || i < 0 || i >= (int)pt->slotsOf.size()) return 0;
     return (int)pt->slotsOf[i];
 }
 
 extern "C" const char *CmiPollingName(int i) {
-    PollTable *pt = CpvAccess(poll_table);
+    PollTable *pt = myPollTable();
     if (!pt || i < 0 || i >= (int)pt->names.size()) return "?";
     return pt->names[i].c_str();
 }
 
 extern "C" long long CmiPollingCount(int i) {
-    PollTable *pt = CpvAccess(poll_table);
+    PollTable *pt = myPollTable();
     if (!pt || i < 0 || i >= (int)pt->lifetime.size()) return 0;
     return (long long)pt->lifetime[i];
 }
 
 extern "C" long long CmiPollingAdjustments(void) {
-    PollTable *pt = CpvAccess(poll_table);
+    PollTable *pt = myPollTable();
     return pt ? (long long)pt->adjustments : 0;
 }
 
 extern "C" int CmiPollingAdaptive(void) {
-    PollTable *pt = CpvAccess(poll_table);
+    PollTable *pt = myPollTable();
     return (pt && pt->adaptive) ? 1 : 0;
 }
 
 extern "C" void CmiPollingDump(const char *tag) {
-    PollTable *pt = CpvAccess(poll_table);
+    PollTable *pt = myPollTable();
     if (!pt) return;
     char buf[512];
     int off = snprintf(buf, sizeof(buf), "[PE %d] %s slots:", CmiMyPe(),
@@ -520,8 +525,7 @@ extern "C" void CmiPollingDump(const char *tag) {
 // message handler, without returning from CsdScheduler, so this is the one
 // exit point common to Converse and Charm++ programs.
 void CmiPollingReportAtExit(void) {
-    if (!CpvInitialized(poll_table)) return;
-    PollTable *pt = CpvAccess(poll_table);
+    PollTable *pt = myPollTable();
     if (!pt || !pt->report) return;
     pt->report = false;
     CmiPollingDump("final");

@@ -7,7 +7,9 @@
 
 #include <cinttypes>
 #include <conv-rdma.h>
+#include <csignal>
 #include <cstdarg>
+#include <cstring>
 #include <pthread.h>
 #include <stdio.h>
 #include <sys/stat.h>
@@ -283,12 +285,62 @@ void ConverseExit(int exitcode)
   }
 }
 
+// pthread entry trampoline for the PE threads created by CmiStartThreads.
+// everReturn is 0 for ranks > 0, meaning these ranks call the start function
+// and never return from ConverseInit, so this never returns in practice.
+static void *converseRunPeThread(void *arg) {
+  converseRunPe((int)(intptr_t)arg, 0);
+  return nullptr;
+}
+
 void CmiStartThreads() {
+
+  // PE thread stack size. macOS gives secondary threads only 512 KB of stack
+  // by default, which can overflow for large stack frames, causing SIGBUS in
+  // SMP runs. Match the 8 MB main-thread default there. Other platforms
+  // inherit the system default (RLIMIT_STACK), so we leave it untouched.
+  // Tunable on any platform via the CHARM_PE_STACKSIZE env var (in bytes;
+  // 0 = leave the platform default).
+  //
+  // This is why the PE threads are created with pthread_create rather than
+  // std::thread: standard C++ offers no way to set a thread's stack size.
+  //
+  // Unrelated to the +stacksize runtime option handled in threads.cpp: that
+  // one sizes the user-level Cth (ULT) stacks, which are malloc'd blocks, not
+  // these PE pthread stacks.
+  size_t pe_stacksize = 0;
+#if defined(__APPLE__)
+  pe_stacksize = (size_t)8 * 1024 * 1024;
+#endif
+  const char *pe_stacksize_env = getenv("CHARM_PE_STACKSIZE");
+  if (pe_stacksize_env != nullptr)
+    pe_stacksize = (size_t)strtoul(pe_stacksize_env, nullptr, 0);
 
   // Create threads for ranks 1 and up, run rank 0 on main thread (like original Converse)
   for (int i = 1; i < Cmi_mynodesize; i++) {
-    std::thread t(converseRunPe, i, 0); // everReturn is 0 for ranks > 0, meaning these ranks will call the start function and not return from ConverseInit
-    t.detach();
+    pthread_attr_t attr;
+    int err = pthread_attr_init(&attr);
+    if (err != 0)
+      CmiAbort("CmiStartThreads: pthread_attr_init: %s (%d)", strerror(err),
+               err);
+    // std::thread objects were detached right after creation; a detached
+    // pthread is the same lifetime contract, with nothing left to join.
+    err = pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+    if (err != 0)
+      CmiAbort("CmiStartThreads: pthread_attr_setdetachstate: %s (%d)",
+               strerror(err), err);
+    if (pe_stacksize > 0) {
+      err = pthread_attr_setstacksize(&attr, pe_stacksize);
+      if (err != 0)
+        CmiAbort("CmiStartThreads: pthread_attr_setstacksize(%zu): %s (%d)",
+                 pe_stacksize, strerror(err), err);
+    }
+    pthread_t pid;
+    err = pthread_create(&pid, &attr, converseRunPeThread,
+                         (void *)(intptr_t)i);
+    if (err != 0)
+      CmiAbort("CmiStartThreads: pthread_create: %s (%d)", strerror(err), err);
+    pthread_attr_destroy(&attr);
   }
 
 }
@@ -369,12 +421,18 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
   CmiInitHwlocTopology();
 #endif
 
-  backend_poll_freq = 1; // default to poll every iteration
+  backend_poll_freq = BACKEND_POLL_FREQ_DEFAULT;
   CmiGetArgInt(argv, "+backend_poll_freq", &backend_poll_freq);
   if (backend_poll_freq < 1) backend_poll_freq = 1;
   backend_poll_thread = 1; // default to every thread
   CmiGetArgInt(argv, "+backend_poll_thread", &backend_poll_thread);
   if (backend_poll_thread < 1) backend_poll_thread = 1;
+
+  // must precede CmiQueueRegisterInitThread(), and so CmiStartThreads()
+  CmiSchedulerInitArgs(argv);
+  if (Cmi_mynode == 0 && CmiSchedulerIsOld())
+    printf("Reconverse> Using the original scheduler (+old-scheduler); queue "
+           "registration is disabled\n");
 
   Cmi_argv = argv;
   Cmi_startfn = fn;
@@ -400,7 +458,10 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
   CmiNodeQueue = new ConverseNodeQueue<void *>();
 
   //register queues
-  CmiQueueRegisterInit();
+  //Node-level registration: an alternative to the per-PE registration done by
+  //CmiQueueRegisterInitThread(). It builds g_handlers/g_groups, which the
+  //scheduler loop does not read today, so it is left off rather than deleted.
+  //CmiQueueRegisterInit();
 
   _smp_mutex = CmiCreateLock();
   CmiMemLock_lock = CmiCreateLock();
@@ -498,14 +559,22 @@ CmiHandler CmiHandlerToFunction(int handlerId) {
   return CmiGetHandlerTable()->at(handlerId).hdlr;
 }
 
+// The seed balancer's info function index. This used to live in
+// collectiveMetaInfo, which the spanning tree broadcast overwrites with the
+// broadcast root, so every CldEnqueue(CLD_BROADCAST*) arrived asking for info
+// function 0 and called whatever handler happened to be registered first.
 int CmiGetInfo(void *msg) {
   CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
-  return header->collectiveMetaInfo;
+  return header->cldInfoFn;
 }
 
 void CmiSetInfo(void *msg, int infofn) {
   CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
-  header->collectiveMetaInfo = infofn;
+  // cldInfoFn is CmiInt2, so an info function's index is bounded the same way a
+  // handler index already is by CmiSetHandler/CmiSetXHandler. The old
+  // collectiveMetaInfo slot was wider, so assert rather than silently truncate.
+  CmiAssert(infofn >= 0 && infofn <= 32767);
+  header->cldInfoFn = static_cast<CmiInt2>(infofn);
 }
 
 void CmiNumberHandler(int n, CmiHandler h) {
@@ -580,7 +649,7 @@ void *CmiAlloc(int size) {
   if (size >= CmiMsgHeaderSizeBytes) {
     // Set zcMsgType in the converse message header to CMK_REG_NO_ZC_MSG
     CMI_ZC_MSGTYPE((void *)ptr) = CMK_REG_NO_ZC_MSG;
-    CMI_MSG_NOKEEP((void *)ptr) = 0;
+    CmiSetMsgNokeep((void *)ptr, 0);
   }
 
   REFFIELDSET(ptr, 1);
@@ -870,8 +939,10 @@ void CsdExitScheduler() { CmiGetState()->stopFlag = 1; }
 void CmiExitHandler(void *msg) {
   int status = static_cast<CmiExitMsg *>(msg)->status;
 
-  if (status == 1)
+  if (status == 1) {
+    std::signal(SIGABRT, SIG_DFL);
     abort();
+  }
 
   CsdExitScheduler();
 }
@@ -966,9 +1037,25 @@ void CmiFreeBroadcastAllFn(int size, char *msg) {
   CmiSyncBroadcastAllAndFree(size, (void *)msg);
 }
 
+void CmiInitMsgHeader(void *msg, int size) {
+  if (size < (int)CmiMsgHeaderSizeBytes) return;
+  CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
+  header->messageSize = size;
+  header->zcMsgType = CMK_REG_NO_ZC_MSG;
+  CmiSetMsgNokeep(msg, 0);
+}
+
 void CmiSetHandler(void *msg, int handlerId) {
   CmiMessageHeader *header = (CmiMessageHeader *)msg;
   header->handlerId = handlerId;
+}
+
+CLINKAGE void CmiSetMsgNokeep(void *msg, int nokeep) {
+  ((CmiMessageHeader *)msg)->nokeep = (nokeep != 0);
+}
+
+CLINKAGE int CmiMsgIsNokeep(const void *msg) {
+  return ((const CmiMessageHeader *)msg)->nokeep ? 1 : 0;
 }
 
 void CmiSetXHandler(void *msg, int xhandlerId) {
@@ -1053,7 +1140,8 @@ void CmiAbort(const char *format, ...) {
   va_end(args);
   CmiAbortHelper("Called CmiAbort", newmsg, NULL, 1, 0);
 
-  CmiExitHelper(1);
+  /* No CmiExitHelper() here. */
+  std::signal(SIGABRT, SIG_DFL);
   abort();
 }
 
@@ -1526,7 +1614,7 @@ void CmiForwardMsgToPeers(int size, char *msg) {
    */
 
   int exceptRank = CmiMyRank();
-  if (CMI_MSG_NOKEEP(msg)) {
+  if (CmiMsgIsNokeep(msg)) {
     for (int i = 0; i < exceptRank; i++) {
       CmiReference(msg);
       CmiPushPE(i, msg);

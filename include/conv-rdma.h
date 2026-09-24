@@ -25,6 +25,24 @@ extern bool CmiUseCopyBasedRDMA;
 
 // LCI layer definition
 #define CMK_REG_REQUIRED 1
+// Charm++ consults this to know how many acknowledgements one Direct-API
+// RDMA operation produces (ckrdma.C, zcQdIncrement): a one-sided layer
+// completes a get or put with a single ack on the initiating PE, and the
+// other side's callback is delivered by Charm++'s deregistration round trip.
+// That is what the RMA path here does (CommRgetLocalHandler and
+// CommRputLocalHandler invoke the ack once, with CMK_SRC_DEST_ACK). Left
+// undefined, Charm++ counts two acks per operation, as for classic's
+// copy-based layers (netlrts), and quiescence is never detected once a
+// program has done one cross-process Direct-API transfer.
+// The copy-based fallback (+nordma, or a backend without RMA) follows the
+// same contract: putDataHandler raises the one ack on the initiating PE.
+#define CMK_ONESIDED_IMPL 1
+// Declaring a one-sided layer also switches on Charm++'s zerocopy broadcast
+// of large readonly variables in charmxi-generated code (xi-Member.C), which
+// needs CMK_ONESIDED_RO_THRESHOLD and the spanning-tree forwarding that
+// CmiForwardNodeBcastMsg still stubs out here. Keep that feature off, so
+// readonlies keep being packed inline as before, until it is supported.
+#define CMK_ONESIDED_RO_DISABLE 1
 // 8-byte for mr, 16-byte for rmr
 // TODO: better to use dynamic allocation and PUP
 #define CMK_NOCOPY_DIRECT_BYTES 32
@@ -64,6 +82,15 @@ void CmiIssueRput(NcpyOperationInfo *ncpyOpInfo);
 
 void CmiDeregisterMem(const void *ptr, void *info, int pe,
                       unsigned short int mode);
+
+// Ask the PE that owns the other side's buffer to deregister it and invoke its
+// callback: Charm++ calls this from its Direct API acknowledgement handler for
+// the buffer whose deregMode is CMK_BUFFER_DEREG. If ncpyOpInfo->freeMe is
+// CMK_FREE_NCPYOPINFO the layer frees ncpyOpInfo here, so the caller must not
+// touch it afterwards. The remote PE's acknowledgement carries opMode
+// CMK_EM_API_SRC_ACK_INVOKE or CMK_EM_API_DEST_ACK_INVOKE and an info that
+// lives inside the request message (freeMe cleared).
+void CmiInvokeRemoteDeregAckHandler(int pe, NcpyOperationInfo *ncpyOpInfo);
 
 #if CMK_USE_CMA
 void CmiIssueRgetUsingCMA(const void *srcAddr, void *srcInfo, int srcPe,

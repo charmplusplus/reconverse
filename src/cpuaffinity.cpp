@@ -9,14 +9,24 @@
  * new options +pemap +commmap takes complex pattern of a list of cores
 */
 
-#include "converse_internal.h"
-
-#ifdef RECONVERSE_ENABLE_CPU_AFFINITY
-#include "hwloc.h"
-
+// _GNU_SOURCE must be defined before the first #include: it is what makes
+// glibc's <sched.h> expose cpu_set_t and CPU_ZERO/CPU_OR, and once any header
+// has pulled <sched.h> in under its own include guard, defining it later has
+// no effect. Every C++ compiler on Linux happens to predefine it (libstdc++
+// and libc++ both require it), so the old placement below the includes was
+// harmless in practice -- but the guards on the CPU_OR blocks in this file
+// silently compile the affinity code away if it is ever missing, so do not
+// rely on that. Charm++'s src/conv-core/cpuaffinity.C defines it here too.
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
 #endif
+
+#include "converse_internal.h"
+
+#include <thread> // std::thread::hardware_concurrency, for the no-hwloc CmiNumCores
+
+#ifdef RECONVERSE_ENABLE_CPU_AFFINITY
+#include "hwloc.h"
 
 #include <algorithm>
 #include <map>
@@ -648,6 +658,34 @@ void CmiInitCPUAffinity(char **argv) {
         CmiPrintf("Charm++> set PE %d on node %d to PU L#%d\n", CmiMyPe(), CmiMyNode(), pu);
       }
     }
+    #else
+    // hwloc is present, so this is the affinity-enabled build, but the binding
+    // above needs cpu_set_t and the CPU_* macros, which are glibc's; on macOS
+    // and other platforms without them the whole body compiles away. Consume
+    // the flags anyway. Every one of them is removed from argv by a build that
+    // can bind, and a caller that sees them survive reports them as
+    // unrecognized -- Charm++'s init.C warns "+setcpuaffinity is a command line
+    // argument beginning with a '+' but was not parsed by the RTS", which says
+    // nothing about the real cause. Same contract as the no-hwloc
+    // CmiInitCPUAffinity at the bottom of this file, different reason.
+    char *pemap = NULL;
+    int affinity_flag =
+        CmiGetArgFlagDesc(argv, "+setcpuaffinity", "set cpu affinity");
+    CmiGetArgStringDesc(argv, "+pemap", &pemap, "define pe to core mapping");
+    int show_affinity_flag =
+        CmiGetArgFlagDesc(argv, "+showcpuaffinity", "print cpu affinity");
+
+    if (CmiMyPe() == 0) {
+      if (affinity_flag)
+        CmiPrintf("Reconverse> +setcpuaffinity disabled: this platform has no "
+                  "cpu_set_t/CPU_* affinity macros.\n");
+      if (pemap != NULL)
+        CmiPrintf("Reconverse> +pemap disabled: this platform has no "
+                  "cpu_set_t/CPU_* affinity macros.\n");
+      if (show_affinity_flag)
+        CmiPrintf("Reconverse> +showcpuaffinity disabled: this platform has no "
+                  "cpu_set_t/CPU_* affinity macros.\n");
+    }
     #endif
     CmiNodeAllBarrier();
 }
@@ -780,10 +818,49 @@ void CmiCheckAffinity(void)
 }
 
 #else
-// Dummy function if RECONVERSE_ENABLE_CPU_AFFINITY not set
-void CmiInitCPUAffinity(char **argv) {}
+// RECONVERSE_ENABLE_CPU_AFFINITY is not set, so there is no hwloc to bind with
+// and no affinity to report. The flags must still be consumed: every one of
+// them is removed from argv by the enabled build, and a caller that sees them
+// survive reports them as unrecognized. Charm++'s init.C does exactly that,
+// warning "+setcpuaffinity is a command line argument beginning with a '+' but
+// was not parsed by the RTS" -- which says nothing about the real cause, that
+// this build has no hwloc. So parse them here too and say what actually
+// happened, mirroring the unsupported-platform CmiInitCPUAffinity in
+// Charm++'s src/conv-core/cpuaffinity.C.
+void CmiInitCPUAffinity(char **argv) {
+  char *pemap = NULL;
+  int affinity_flag =
+      CmiGetArgFlagDesc(argv, "+setcpuaffinity", "set cpu affinity");
+  CmiGetArgStringDesc(argv, "+pemap", &pemap, "define pe to core mapping");
+  int show_affinity_flag =
+      CmiGetArgFlagDesc(argv, "+showcpuaffinity", "print cpu affinity");
+
+  if (CmiMyPe() != 0)
+    return;
+  if (affinity_flag)
+    CmiPrintf("Reconverse> +setcpuaffinity disabled: this build has no hwloc "
+              "(configure with RECONVERSE_ENABLE_CPU_AFFINITY=ON).\n");
+  if (pemap != NULL)
+    CmiPrintf("Reconverse> +pemap disabled: this build has no hwloc "
+              "(configure with RECONVERSE_ENABLE_CPU_AFFINITY=ON).\n");
+  if (show_affinity_flag)
+    CmiPrintf("Reconverse> +showcpuaffinity disabled: this build has no hwloc "
+              "(configure with RECONVERSE_ENABLE_CPU_AFFINITY=ON).\n");
+}
 
 void CmiCheckAffinity(void) {}
+
+// Declared unconditionally in converse.h, so it needs a definition here too:
+// without one, any program calling it fails to link in a build with no hwloc
+// (tests/physical_nodes did). hwloc is what reports the machine-wide PU count,
+// so fall back to the concurrency this process can see, which is all the
+// standard library offers. That is a best-effort answer, and it can differ from
+// the enabled build's: inside a cpuset it reflects the cpuset rather than the
+// machine. Never report 0, since callers use this as a divisor and a count.
+int CmiNumCores(void) {
+  unsigned int n = std::thread::hardware_concurrency();
+  return (n == 0) ? 1 : (int)n;
+}
 
 #endif
 

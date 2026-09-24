@@ -10,6 +10,26 @@ void ping_handler(void *vmsg) {
   CrnSrand(100);
   CmiPrintf("Next random int: %d\n", CrnRand());
   CmiPrintf("Next random double: %f\n", CrnDrand());
+
+  // Ranged draws stay inside their range (the int range is inclusive, as in
+  // classic Converse; the double range is half-open), and a reseed
+  // reproduces the sequence.
+  for (int i = 0; i < 1000; i++) {
+    int r = CrnRandRange(10, 20);
+    if (r < 10 || r > 20)
+      CmiAbort("CrnRandRange(10,20) returned %d", r);
+    double d = CrnDrandRange(-2.5, 2.5);
+    if (d < -2.5 || d >= 2.5)
+      CmiAbort("CrnDrandRange(-2.5,2.5) returned %f", d);
+  }
+  CrnSrand(7);
+  int a = CrnRand(), b = CrnRandRange(0, 1000);
+  double c = CrnDrand(), e = CrnDrandRange(1.0, 2.0);
+  CrnSrand(7);
+  if (a != CrnRand() || b != CrnRandRange(0, 1000) || c != CrnDrand() ||
+      e != CrnDrandRange(1.0, 2.0))
+    CmiAbort("reseeding did not reproduce the random sequence");
+  CmiPrintf("ranged and reseeded draws ok\n");
   CmiExit(0);
 }
 
