@@ -158,13 +158,10 @@ void CsdSchedulerRegistered() {
   while (CmiStopFlag() == 0) {
 
     CcdRaiseCondition(CcdSCHEDLOOP);
-    //always deliver shmem messages first
-    #ifdef CMK_USE_SHMEM
-        CmiIpcBlock* block = CmiPopIpcBlock(CsvAccess(coreIpcManager_));
-        if (block != nullptr) {
-          CmiDeliverIpcBlockMsg(block);
-        }
-    #endif
+    //always deliver shmem messages (+ipc) first, every iteration rather
+    //than from a slot, as the old scheduler does: the drain only moves a
+    //block onto a local queue, and the sweep below then handles it
+    bool ipcDone = CmiSchedulerPollIpc();
     //poll queues: sweep forward from idx until work is found or a full
     //cycle of the table has been checked, so a message doesn't have to
     //wait for loop_counter to rotate back around to its slot
@@ -173,7 +170,7 @@ void CsdSchedulerRegistered() {
       unsigned idx = static_cast<unsigned>((loop_counter + t) & SCHED_TABLE_MASK);
       workDone = CpvAccess(poll_handlers)[idx]();
     }
-    if(!workDone) {
+    if(!workDone && !ipcDone) {
       CmiSchedulerSetIdle();
     }
     CsdPeriodic();
@@ -192,6 +189,9 @@ void CsdSchedulePollRegistered() {
   while(1){
 
     CcdRaiseCondition(CcdSCHEDLOOP);
+    //same shmem drain as CsdSchedulerRegistered; a block handed to a
+    //queue counts as work, so we don't return before it is handled
+    bool ipcDone = CmiSchedulerPollIpc();
     //poll queues: sweep the full table before concluding it's empty, so
     //a message doesn't have to wait for loop_counter to rotate back
     //around to its slot
@@ -200,7 +200,7 @@ void CsdSchedulePollRegistered() {
       unsigned idx = static_cast<unsigned>((loop_counter + t) & SCHED_TABLE_MASK);
       workDone = CpvAccess(poll_handlers)[idx]();
     }
-    if(!workDone) {
+    if(!workDone && !ipcDone) {
       //swept the whole table and every slot was empty: done
       CmiSchedulerSetIdle();
       return;

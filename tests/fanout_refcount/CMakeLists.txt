@@ -7,3 +7,7 @@ add_test(NAME fanout_refcount-multinode4 COMMAND ${RECONVERSE_TEST_LAUNCHER} -n 
 # Timing harness, not a ctest test: it compares the old per-destination-PE
 # fan-out with the per-destination-process one in a single binary.
 add_reconverse_executable(fanout_bench fanout_bench.cpp)
+# Same run with the shared-memory IPC pool carrying the traffic between
+# the two processes, which is a different delivery path for every send
+# above: a pool block rather than an active message.
+add_test(NAME fanout_refcount-multinode-ipc COMMAND ${RECONVERSE_TEST_LAUNCHER} -n 3 $<TARGET_FILE:fanout_refcount> +pe 6 +ipc)

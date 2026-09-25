@@ -2,8 +2,9 @@
 // set of queues, selected at runtime with the +old-scheduler flag.
 //
 // The body below is a copy of the loops that lived in scheduler.cpp before the
-// queue-registration work. Apart from the two function names, the only change
-// is the +backend_poll_freq rate handling below; everything else is untouched
+// queue-registration work. Apart from the two function names, the only changes
+// are the +backend_poll_freq rate handling and the shared-memory IPC drain
+// (CmiSchedulerPollIpc, in both loops); everything else is untouched
 // on purpose. This is the known-good fallback to compare the registered
 // scheduler against, so please resist tidying it. The default implementation
 // is scheduler_registered.cpp.
@@ -43,12 +44,8 @@ void CsdSchedulerOld() {
 
     CcdRaiseCondition(CcdSCHEDLOOP);
 
-    #ifdef CMK_USE_SHMEM
-        CmiIpcBlock* block = CmiPopIpcBlock(CsvAccess(coreIpcManager_));
-        if (block != nullptr) {
-          CmiDeliverIpcBlockMsg(block);
-        }
-    #endif
+    // messages from peer processes on this host (+ipc)
+    CmiSchedulerPollIpc();
 
     // poll node queue
     if (!nodeQueue->empty()) {
@@ -250,6 +247,9 @@ void CsdSchedulePollOld() {
     CsdPeriodic();
 
     CcdRaiseCondition(CcdSCHEDLOOP);
+
+    // messages from peer processes on this host (+ipc)
+    CmiSchedulerPollIpc();
 
     // poll node queue
     if (!nodeQueue->empty()) {

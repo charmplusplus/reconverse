@@ -1489,9 +1489,42 @@ inline const std::size_t& CmiRecommendedIpcBlockCutoff(void) {
   using namespace cmi::ipc;
   return CpvAccess(kRecommendedCutoff);
 }
+
+// Hand a message to a peer process on this host through the shared-memory
+// pool, instead of over the network backend. On success the pool owns the
+// message, exactly as CmiSyncSendAndFree would, and this returns true; on
+// failure the message is left untouched for the caller to send some other
+// way. destRank is the destination's rank within its process, or
+// cmi::ipc::nodeDatagram for a message bound for that process's node queue.
+//
+// Fails, rather than aborting, whenever the pool cannot carry the message:
+// IPC is off, the destination is this process or is on another host, the
+// message is over CmiRecommendedIpcBlockCutoff(), or the pool is full.
+bool CmiIpcTrySendAndFree(int destNode, int destRank, int messageSize,
+                          void *msg);
+
+// Whether the shared-memory pool is up and destNode is another process on
+// this host, i.e. whether a small enough message to destNode would go through
+// the pool rather than the network. A layer that follows a one-sided put with
+// a notification has to know this: the put still crosses the network, but the
+// notification would not, and could arrive before the data does.
+bool CmiIpcReaches(int destNode);
 #endif /* __cplusplus */
 
 CsvExtern(CmiIpcManager*, coreIpcManager_);
+
+/* Whether this run moves messages between processes that share a host
+   through shared memory. Off unless the program was given +ipc. */
+CLINKAGE int CmiIpcEnabled(void);
+/* The mechanism backing the pool: "posixshm", "xpmem", or "none". */
+CLINKAGE const char *CmiIpcImplName(void);
+/* Processes sharing this host, this one included (1 when IPC is off). */
+CLINKAGE int CmiIpcNumPeers(void);
+/* Messages this PE has put into, and taken out of, the pool. Intended for
+   tests and diagnostics: a PE takes messages out of the pool on behalf of
+   its whole process, so the two do not balance per PE. */
+CLINKAGE long CmiIpcMessagesSent(void);
+CLINKAGE long CmiIpcMessagesReceived(void);
 
 /* Persistent communication */
 #include "persistent.h"

@@ -76,6 +76,15 @@ ConverseSelfQueue<void *> *CmiGetSelfQueue();
 void CrnInit(void);
 void CmiPushPE(int destRank, int messageSize, void *msg);
 
+// Shared-memory IPC between processes on one host. CmiIpcCliInit consumes
+// +ipc/+noipc/+ipcmode on every PE and sets the run's mode; CmiIpcStartup
+// then builds the pool, and does not return until every process on this host
+// can reach every other's. Both run from converseRunPe, before the user's
+// start function.
+void CmiIpcCliInit(char **argv);
+void CmiIpcStartup(void);
+int CmiIpcRequested(void);
+
 // CmiSyncSendAndFree without the CmiUsePersistentHandle() detour, used by the
 // persistent module itself for its setup, notification, and credit messages.
 void CmiSyncSendAndFreeNoPersistent(int destPE, int messageSize, void *msg);

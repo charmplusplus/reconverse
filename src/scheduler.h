@@ -39,6 +39,12 @@ void CmiSchedulerInitArgs(char **argv);
 void CmiSchedulerReleaseIdle();
 void CmiSchedulerSetIdle();
 
+// Moves one message a peer process on this host left in the shared-memory
+// IPC pool onto the local queue it is bound for. Returns whether it moved one.
+// A no-op unless the run was given +ipc (or Charm++ set a pool up). Both
+// implementations call it once per loop iteration, ahead of their queues.
+bool CmiSchedulerPollIpc();
+
 // ---------------------------------------------------------------------------
 // Registration-based scheduler (default)
 // ---------------------------------------------------------------------------

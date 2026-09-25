@@ -1,17 +1,78 @@
+// Shared-memory IPC pool: message passing between processes that share a
+// host, bypassing the network backend entirely.
+//
+// This file holds everything that does not depend on how a peer's pool is
+// mapped -- the block allocator, the send/receive queues, argument parsing,
+// startup and the counters -- and includes the backends that do. Keeping
+// them in one translation unit is deliberate: the sleeper list, the manager
+// registry and the Cpv/Csv state below are shared by every backend, and
+// CsvStaticDeclare is a plain file-static.
 #include "cmi-shmem-common.h"
+#include "converse_config.h"
 
-#if CMK_HAS_XPMEM
-#include "cmixpmem.cpp"
-#else
-#include "cmishm.cpp"
-#endif
+#include <cstring>
 
 #define CMI_DEST_RANK(msg) ((CmiMsgHeaderBasic*)msg)->destPE
+
+// ---------------------------------------------------------------------------
+// state shared by the backends
+// ---------------------------------------------------------------------------
+
+// which backend this run settled on, and whether it is usable yet
+CsvStaticDeclare(int, ipcMode_);
+// requested on the command line but not yet bootstrapped
+CsvStaticDeclare(int, ipcRequested_);
+CpvStaticDeclare(int, ipcInitDone_);
+CpvStaticDeclare(long, ipcSent_);
+CpvStaticDeclare(long, ipcRecvd_);
+
+static void awakenSleepers_(void) {
+  auto& current_sleepers = CsvAccess(sleepers);
+  for (std::size_t i = 0; i < current_sleepers.size(); i++) {
+    auto& th = current_sleepers[i];
+    // A PE that asked for the pool without a thread to park (reconverse's own
+    // startup, and Charm++'s communication thread) leaves a null here.
+    if (th == nullptr) continue;
+    if ((int)i == CmiMyRank()) {
+      CthAwaken(th);
+    } else {
+      auto* token = CthGetToken(th);
+      CmiSetHandler(token, CpvAccess(CthResumeNormalThreadIdx));
+      CmiPushPE(i, token);
+    }
+    th = nullptr;
+  }
+}
+
+// Called by a backend once every peer segment on this host is mapped. Records
+// which logical nodes those peers are -- the send path tests that one array
+// instead of walking the topology -- and publishes the pool.
+static void finishSetup_(CmiIpcManager* meta) {
+  int* pes;
+  int nPes;
+  CmiGetPesOnPhysicalNode(CmiPhysicalNodeID(CmiMyPe()), &pes, &nPes);
+  const int nSize = CmiMyNodeSize();
+  const int nProcs = nPes / nSize;
+  meta->nPeers = nProcs;
+  for (int i = 0; i < nProcs; i++) {
+    const int proc = CmiNodeOf(pes[i * nSize]);
+    if (proc != meta->mine && proc >= 0 && proc < (int)meta->peers.size())
+      meta->peers[proc] = 1;
+  }
+  meta->ready.store(true, std::memory_order_release);
+}
+
+#include "cmishm.cpp"
+#if CMK_HAS_XPMEM
+#include "cmixpmem.cpp"
+#endif
+
+// ---------------------------------------------------------------------------
+// block pool
+// ---------------------------------------------------------------------------
+
 extern void CmiPushNode(void* msg);
 
-CpvExtern(int, CthResumeNormalThreadIdx);
-
-inline std::size_t whichBin_(std::size_t size);
 inline static CmiIpcBlock* popBlock_(std::atomic<std::uintptr_t>& head,
                                      void* base);
 inline static bool pushBlock_(std::atomic<std::uintptr_t>& head,
@@ -70,11 +131,21 @@ extern void CmiHandleImmediateMessage(void *msg);
 
 void CmiDeliverIpcBlockMsg(CmiIpcBlock* block) {
   auto* msg = CmiIpcBlockToMsg(block);
-  auto& rank = CMI_DEST_RANK(msg);
-  if (rank == cmi::ipc::nodeDatagram) {
+  auto& dest = CMI_DEST_RANK(msg);
+  if (CpvInitialized(ipcRecvd_)) CpvAccess(ipcRecvd_)++;
+  // The sender put a *rank* (or the node-datagram marker) in the header's
+  // destination field, because that is all the pool needs to route within
+  // this process. Put back what a message off the network would carry, so a
+  // handler cannot tell the two apart: reconverse's own receive path and
+  // Charm++ both read this field as a global PE number.
+  if (dest == cmi::ipc::nodeDatagram) {
+    dest = CmiMessageDestPENode;
     CmiPushNode(msg);
-  } else
+  } else {
+    const int rank = (int)dest;
+    dest = (CmiUInt4)(CmiNodeFirst(CmiMyNode()) + rank);
     CmiPushPE(rank, msg);
+  }
 }
 
 inline static bool metadataReady_(CmiIpcManager* meta) {
@@ -213,4 +284,244 @@ inline static bool pushBlock_(std::atomic<std::uintptr_t>& head,
   auto check = head.exchange(value, std::memory_order_release);
   CmiAssert(check == cmi::ipc::nil);
   return true;
+}
+
+// ---------------------------------------------------------------------------
+// setup
+// ---------------------------------------------------------------------------
+
+static const char* ipcModeName_(int mode) {
+  switch (mode) {
+    case CMI_IPC_MODE_POSIX_SHM: return "posixshm";
+    case CMI_IPC_MODE_XPMEM: return "xpmem";
+    default: return "none";
+  }
+}
+
+// Whether xpmem is compiled in and this host's kernel actually offers it.
+static bool ipcXpmemAvailable_(void) {
+#if CMK_HAS_XPMEM
+  return ipcXpmemUsable_();
+#else
+  return false;
+#endif
+}
+
+// Picks the backend for this run. Every process on a host sees the same
+// answer, because the only run-time input is whether that host's kernel
+// exposes xpmem.
+static int chooseIpcMode_(const char* requested) {
+  if (requested == nullptr || strcmp(requested, "auto") == 0) {
+    return ipcXpmemAvailable_() ? CMI_IPC_MODE_XPMEM : CMI_IPC_MODE_POSIX_SHM;
+  }
+  if (strcmp(requested, "off") == 0 || strcmp(requested, "none") == 0) {
+    return CMI_IPC_MODE_OFF;
+  }
+  if (strcmp(requested, "shm") == 0 || strcmp(requested, "posixshm") == 0 ||
+      strcmp(requested, "pxshm") == 0) {
+    return CMI_IPC_MODE_POSIX_SHM;
+  }
+  if (strcmp(requested, "xpmem") == 0) {
+#if !CMK_HAS_XPMEM
+    CmiAbort("+ipcmode xpmem: this reconverse was built without xpmem support "
+             "(configure with -DRECONVERSE_ENABLE_XPMEM=ON and an xpmem "
+             "installation on the search path)");
+#endif
+    if (!ipcXpmemAvailable_())
+      CmiAbort("+ipcmode xpmem: /dev/xpmem is not available here -- the xpmem "
+               "kernel module does not appear to be loaded on this host");
+    return CMI_IPC_MODE_XPMEM;
+  }
+  CmiAbort("+ipcmode: unknown mode '%s' (expected auto, shm, xpmem or off)",
+           requested);
+  return CMI_IPC_MODE_OFF;
+}
+
+void CmiIpcInit(char** argv) {
+  // Charm++ calls this too; whoever gets here first sets the run up.
+  if (CpvInitialized(ipcInitDone_) && CpvAccess(ipcInitDone_)) return;
+  CpvInitialize(int, ipcInitDone_);
+  CpvAccess(ipcInitDone_) = 1;
+  CpvInitialize(long, ipcSent_);
+  CpvInitialize(long, ipcRecvd_);
+
+  CsvInitialize(ipc_manager_map_, managers_);
+
+  initSleepers_();
+  initSegmentSize_(argv);
+
+  // Register every backend's handlers whichever one is in use: handler ids
+  // are assigned in call order and have to match across processes, and two
+  // hosts in one job can disagree about whether xpmem is available.
+  ipcInitShm_(argv);
+#if CMK_HAS_XPMEM
+  ipcInitXpmem_(argv);
+#endif
+
+  // The backend a pool would use if one is built. Charm++ drives its own
+  // setup and never touches the flags below, so this is what it gets.
+  if (CmiMyRank() == 0) CsvAccess(ipcMode_) = chooseIpcMode_(nullptr);
+}
+
+// Parses the flags that decide whether reconverse itself uses the pool, and
+// consumes them whether or not it does. Runs on every PE.
+void CmiIpcCliInit(char** argv) {
+  char* modeArg = nullptr;
+  const int on = CmiGetArgFlagDesc(
+      argv, "+ipc", "use shared memory between processes on the same host");
+  const int off = CmiGetArgFlagDesc(argv, "+noipc",
+                                    "do not use shared memory between "
+                                    "processes on the same host (default)");
+  CmiGetArgStringDesc(argv, "+ipcmode", &modeArg,
+                      "shared-memory mechanism to use: auto, shm or xpmem");
+
+  CmiIpcInit(argv);
+
+  int mode = CMI_IPC_MODE_OFF;
+  if (!off && (on || modeArg != nullptr)) {
+    mode = chooseIpcMode_(modeArg);
+  }
+  if (CmiMyRank() == 0) {
+    CsvAccess(ipcRequested_) = (mode != CMI_IPC_MODE_OFF);
+    if (mode != CMI_IPC_MODE_OFF) CsvAccess(ipcMode_) = mode;
+  }
+  CmiNodeAllBarrier();
+}
+
+int CmiIpcRequested(void) { return CsvAccess(ipcRequested_); }
+
+// Brings the pool up and blocks until every process on this host has mapped
+// every other's segment. Called by every PE from converseRunPe, before the
+// user's start function, so that a program can send over the pool from its
+// very first message.
+void CmiIpcStartup(void) {
+  if (!CsvAccess(ipcRequested_)) return;
+
+  if (CmiNumNodes() == 1) {
+    if (CmiMyPe() == 0)
+      CmiPrintf("Converse> +ipc ignored: this job has a single process, so "
+                "there is no peer to share memory with.\n");
+    if (CmiMyRank() == 0) CsvAccess(ipcRequested_) = 0;
+    CmiNodeAllBarrier();
+    return;
+  }
+
+  CmiIpcManager* manager = CmiMakeIpcManager(nullptr);
+  if (CmiMyRank() == 0) CsvAccess(coreIpcManager_) = manager;
+  CmiNodeAllBarrier();
+
+  // Drive the scheduler until the exchange finishes. Only bootstrap messages
+  // are in flight here: no process leaves this function before the barrier
+  // below, and nothing has run the user's code yet.
+  const double deadline = CmiWallTimer() + 120.0;
+  while (!manager->ready.load(std::memory_order_acquire)) {
+    CsdSchedulePoll();
+    if (CmiWallTimer() > deadline)
+      CmiAbort("+ipc: timed out setting up the %s pool on PE %d",
+               ipcModeName_(CsvAccess(ipcMode_)), CmiMyPe());
+  }
+  CmiNodeAllBarrier();
+
+  // Nobody may start sending until every peer has mapped our segment, and
+  // nobody may leave startup until every peer's pool is usable.
+  CmiBarrier();
+}
+
+CLINKAGE int CmiIpcEnabled(void) {
+  auto* manager = CsvAccess(coreIpcManager_);
+  return manager != nullptr && manager->ready.load(std::memory_order_acquire);
+}
+
+CLINKAGE const char* CmiIpcImplName(void) {
+  return CmiIpcEnabled() ? ipcModeName_(CsvAccess(ipcMode_)) : "none";
+}
+
+CLINKAGE int CmiIpcNumPeers(void) {
+  auto* manager = CsvAccess(coreIpcManager_);
+  return manager ? manager->nPeers : 1;
+}
+
+CLINKAGE long CmiIpcMessagesSent(void) {
+  return CpvInitialized(ipcSent_) ? CpvAccess(ipcSent_) : 0;
+}
+
+CLINKAGE long CmiIpcMessagesReceived(void) {
+  return CpvInitialized(ipcRecvd_) ? CpvAccess(ipcRecvd_) : 0;
+}
+
+bool CmiIpcReaches(int destNode) {
+  auto* manager = CsvAccess(coreIpcManager_);
+  if (manager == nullptr) return false;
+  // Acquire-load of the flag the setup code released: it orders this PE's
+  // reads of peers[] (written once, by PE 0, during setup) after those
+  // writes, and it keeps sends off a pool whose segments are not all mapped.
+  if (!manager->ready.load(std::memory_order_acquire)) return false;
+  // one load rules out every destination the pool cannot reach
+  return destNode >= 0 && destNode < (int)manager->peers.size() &&
+         manager->peers[destNode];
+}
+
+bool CmiIpcTrySendAndFree(int destNode, int destRank, int messageSize,
+                          void* msg) {
+  if (!CmiIpcReaches(destNode)) return false;
+  auto* manager = CsvAccess(coreIpcManager_);
+  if ((std::size_t)messageSize > CmiRecommendedIpcBlockCutoff()) return false;
+
+  auto* block = CmiMsgToIpcBlock(manager, (char*)msg, (std::size_t)messageSize,
+                                 destNode, destRank, cmi::ipc::defaultTimeout);
+  if (block == nullptr) return false;
+  // the receiver's queue is only ever blocked by another pusher, briefly
+  while (!CmiPushIpcBlock(manager, block))
+    ;
+  CpvAccess(ipcSent_)++;
+  return true;
+}
+
+CmiIpcManager* CmiMakeIpcManager(CthThread th) {
+  putSleeper_(th);
+
+  // ensure all sleepers are reg'd
+  CmiNodeAllBarrier();
+
+  // reconverse's own startup may already have brought a pool up; hand that
+  // one back rather than building a second pool nobody would drain
+  if (auto* existing = CsvAccess(coreIpcManager_)) {
+    if (CmiMyRank() == 0) awakenSleepers_();
+    CmiNodeAllBarrier();
+    return existing;
+  }
+
+  CmiIpcManager* manager = nullptr;
+  if (CmiMyRank() == 0) {
+    auto key = CsvAccess(managers_).size() + 1;
+    switch (CsvAccess(ipcMode_)) {
+#if CMK_HAS_XPMEM
+      case CMI_IPC_MODE_XPMEM:
+        manager = ipcMakeManagerXpmem_(key);
+        break;
+#endif
+      default:
+        manager = ipcMakeManagerShm_(key);
+        break;
+    }
+    // register before bootstrapping: a peer's reply is looked up by key
+    CsvAccess(managers_).emplace_back(manager);
+    switch (CsvAccess(ipcMode_)) {
+#if CMK_HAS_XPMEM
+      case CMI_IPC_MODE_XPMEM:
+        ipcBootstrapXpmem_(manager);
+        break;
+#endif
+      default:
+        ipcBootstrapShm_(manager);
+        break;
+    }
+    // signal the metadata is ready
+    CmiNodeAllBarrier();
+    return manager;
+  } else {
+    // pause until the metadata is ready
+    CmiNodeAllBarrier();
+    return CsvAccess(managers_).back().get();
+  }
 }
