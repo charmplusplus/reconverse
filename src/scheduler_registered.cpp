@@ -5,6 +5,13 @@
 // according to a relative frequency, and the loop sweeps that table. Adding a
 // queue means registering a handler here rather than editing the loop.
 //
+// One ordering rule sits outside the table: the converse thread queue is
+// drained before the sweep. It holds every message delivered to this PE,
+// including the ones Charm++'s _skipCldHandler still has to move into the
+// prioritized CsdSchedQueue, and [expedited] entries that run straight from
+// it. Running CsdSchedQueue while it is non-empty picks the "highest
+// priority" message from an incomplete set (issue #258).
+//
 // The original hardcoded loop is in scheduler_old.cpp (+old-scheduler).
 
 #include "scheduler.h"
@@ -168,7 +175,8 @@ void CsdSchedulerRegistered() {
     //poll queues: sweep forward from idx until work is found or a full
     //cycle of the table has been checked, so a message doesn't have to
     //wait for loop_counter to rotate back around to its slot
-    bool workDone = false;
+    //the thread queue feeds CsdSchedQueue, so drain it first (see top)
+    bool workDone = pollConverseThreadQueue();
     for (unsigned t = 0; t < SCHED_TABLE_SIZE && !workDone; ++t) {
       unsigned idx = static_cast<unsigned>((loop_counter + t) & SCHED_TABLE_MASK);
       workDone = CpvAccess(poll_handlers)[idx]();
@@ -195,7 +203,8 @@ void CsdSchedulePollRegistered() {
     //poll queues: sweep the full table before concluding it's empty, so
     //a message doesn't have to wait for loop_counter to rotate back
     //around to its slot
-    bool workDone = false;
+    //the thread queue feeds CsdSchedQueue, so drain it first (see top)
+    bool workDone = pollConverseThreadQueue();
     for (unsigned t = 0; t < SCHED_TABLE_SIZE && !workDone; ++t) {
       unsigned idx = static_cast<unsigned>((loop_counter + t) & SCHED_TABLE_MASK);
       workDone = CpvAccess(poll_handlers)[idx]();
