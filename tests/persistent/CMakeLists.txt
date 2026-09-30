@@ -10,3 +10,7 @@ add_test(NAME persistent_nordma COMMAND ${RECONVERSE_TEST_LAUNCHER} -n 2 $<TARGE
 # A single process: every channel is intra-node, so this covers channel setup,
 # teardown, and the intra-node send path rather than the receive buffers.
 add_test(NAME persistent_single_node COMMAND ${RECONVERSE_TEST_LAUNCHER} -n 1 $<TARGET_FILE:persistent> +pe 2)
+# Same run with the shared-memory IPC pool carrying the traffic between
+# the two processes, which is a different delivery path for every send
+# above: a pool block rather than an active message.
+add_test(NAME persistent-ipc COMMAND ${RECONVERSE_TEST_LAUNCHER} -n 2 $<TARGET_FILE:persistent> +pe 4 +ipc)

@@ -4,3 +4,7 @@ add_reconverse_executable(megarecon megarecon.cpp handler.cpp ringsimple.cpp
 add_test(NAME megarecon COMMAND megarecon +pe 4)
 add_test(NAME megarecon-onepe COMMAND megarecon +pe 1)
 add_test(NAME megarecon-multinode COMMAND ${RECONVERSE_TEST_LAUNCHER} -n 2 $<TARGET_FILE:megarecon> +pe 4)
+# Same run with the shared-memory IPC pool carrying the traffic between
+# the two processes, which is a different delivery path for every send
+# above: a pool block rather than an active message.
+add_test(NAME megarecon-multinode-ipc COMMAND ${RECONVERSE_TEST_LAUNCHER} -n 2 $<TARGET_FILE:megarecon> +pe 4 +ipc)

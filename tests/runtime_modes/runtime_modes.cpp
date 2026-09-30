@@ -4,7 +4,7 @@
  * than exercised by every program, so no other test reaches them:
  *
  *   1. CPU affinity   (+setcpuaffinity / +pemap, RECONVERSE_ENABLE_CPU_AFFINITY)
- *   2. Shared-memory IPC blocks between processes on one host (CMK_USE_SHMEM)
+ *   2. Shared-memory IPC blocks between processes on one host
  *   3. The copy-based zerocopy Direct API (+nordma, or a backend without RMA),
  *      including the deregistration round trip Charm++ drives after every
  *      Direct API completion.
@@ -23,7 +23,7 @@
  * to hold exactly one CPU and PEs sharing a physical node to hold different
  * ones. Elsewhere the flags must at least be accepted and the run complete.
  *
- * Phase 2, IPC (only when built with CMK_USE_SHMEM). Every PE runs the
+ * Phase 2, IPC. Every PE runs the
  * bootstrap Charm++ runs: CmiIpcInit, then CmiMakeIpcManager from a
  * suspendable thread that sleeps until the segments of all processes on the
  * host are attached. Each PE then sends messages of several sizes to the PE of
@@ -52,7 +52,6 @@
  * (reconverse #221).
  */
 #include "conv-rdma.h"
-#include "converse_config.h" // CMK_USE_SHMEM; converse.h does not expose it
 #include <atomic>
 #include <converse.h>
 #include <stdio.h>
@@ -264,8 +263,6 @@ static void affinityHandler(void *vmsg) {
 
 static void startDirectPhase();
 
-#ifdef CMK_USE_SHMEM
-
 // Runs in a suspendable thread on every PE: the bootstrap Charm++'s init.C
 // performs, then the sends.
 static void ipcThreadFn(void *) {
@@ -381,29 +378,16 @@ static void ipcDoneHandler(void *vmsg) {
   if (++CpvAccess(ipcDoneReports) < CmiNumPes())
     return;
   CmiPrintf("IPC: %d blocks of %d sizes delivered between the two processes "
-            "on every PE\n",
-            numIpcSizes * CmiNumPes(), numIpcSizes);
+            "on every PE, through the %s pool\n",
+            numIpcSizes * CmiNumPes(), numIpcSizes, CmiIpcImplName());
   startDirectPhase();
 }
 
 static void startIpcPhase() {
-  CmiPrintf("IPC: shared-memory blocks (CMK_USE_SHMEM)\n");
+  CmiPrintf("IPC: shared-memory blocks between the two processes\n");
   CmiSyncBroadcastAllAndFree(sizeof(PlainMsg),
                              newMsg<PlainMsg>(CpvAccess(ipcStartHIdx)));
 }
-
-#else // !CMK_USE_SHMEM
-
-static void ipcStartHandler(void *vmsg) { CmiFree(vmsg); }
-static void ipcRecvHandler(void *vmsg) { CmiFree(vmsg); }
-static void ipcDoneHandler(void *vmsg) { CmiFree(vmsg); }
-
-static void startIpcPhase() {
-  CmiPrintf("IPC: skipped, this build has CMK_USE_SHMEM off\n");
-  startDirectPhase();
-}
-
-#endif
 
 // ===================================== phase 3: Direct API with dereg ==
 
@@ -715,21 +699,14 @@ static void runtimeModesInit(int argc, char **argv) {
   CmiInitCPUAffinity(argv);
   CmiInitCPUTopology(argv);
   CmiCheckAffinity();
-#ifdef CMK_USE_SHMEM
   CmiIpcInit(argv);
-#endif
 
   if (CmiMyPe() == 0) {
     CpvAccess(affinityTable) =
         (AffinityMsg *)malloc(CmiNumPes() * sizeof(AffinityMsg));
-    CmiPrintf("runtime_modes: %d PEs in 2 processes; affinity, %s, Direct API "
-              "(%s)\n",
+    CmiPrintf("runtime_modes: %d PEs in 2 processes; affinity, shared-memory "
+              "IPC, Direct API (%s)\n",
               CmiNumPes(),
-#ifdef CMK_USE_SHMEM
-              "shared-memory IPC",
-#else
-              "no IPC (CMK_USE_SHMEM off)",
-#endif
               CmiUseCopyBasedRDMA ? "copy-based" : "network RDMA");
   }
   reportAffinity();

@@ -3,6 +3,7 @@
 
 #include "converse_internal.h"
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <limits>
@@ -20,6 +21,16 @@ CpvDeclare(std::size_t, kRecommendedCutoff);
 CpvStaticDeclare(std::size_t, kSegmentSize);
 constexpr std::size_t kDefaultSegmentSize = 8 * 1024 * 1024;
 
+// Where the pool stops paying for itself. Carrying a message costs one memcpy
+// into the destination's segment, which grows with the message, while the
+// backend hands large messages to the NIC without a CPU copy at all; past
+// some size the copy is dearer than the backend's fixed overhead. On Delta
+// over LCI/Slingshot-11 the pool still wins 2.4x at 32 KiB and has lost by
+// 128 KiB (see the table in the README), so this is the largest size measured
+// to be worth taking. It is deliberately conservative: a machine whose
+// crossover is higher gives up some of the win until ++ipccutoff raises it.
+constexpr std::size_t kDefaultCutoff = 32 * 1024;
+
 constexpr std::size_t kNumCutOffPoints = 25;
 const std::array<std::size_t, kNumCutOffPoints> kCutOffPoints = {
     64,        128,       256,       512,       1024,     2048,     4096,
@@ -27,7 +38,8 @@ const std::array<std::size_t, kNumCutOffPoints> kCutOffPoints = {
     1048576,   2097152,   4194304,   8388608,   16777216, 33554432, 67108864,
     134217728, 268435456, 536870912, 1073741824};
 
-struct ipc_metadata_;
+CpvExtern(int, CthResumeNormalThreadIdx);
+
 CsvStaticDeclare(CmiNodeLock, sleeper_lock);
 
 using sleeper_map_t = std::vector<CthThread>;
@@ -53,8 +65,12 @@ struct ipc_shared_ {
   }
 };
 
-// shared data for each pe
-struct ipc_metadata_ {
+// Shared state for one IPC pool, common to every backend. Backends derive
+// from this and add whatever they need to map a peer's segment (file
+// descriptors for POSIX shared memory, segment/access ids for xpmem); the
+// block allocator in cmishmem.cpp only ever touches the fields here, so it
+// is the same code whichever backend mapped the segments.
+struct CmiIpcManager {
   // maps procs to shared segments; pre-sized so lookups never mutate the
   // container (PE threads poll this concurrently with segment attachment)
   std::vector<std::atomic<ipc_shared_*>> shared;
@@ -62,14 +78,39 @@ struct ipc_metadata_ {
   int mine;
   // key of this instance
   std::size_t key;
+  // set once every peer segment on this host has been mapped; until then
+  // allocation reports CMI_IPC_TIMEOUT and senders fall back to the network
+  std::atomic<bool> ready;
+  // peers[node] is nonzero for every *other* process sharing this host, so
+  // the send path can rule out a network destination with one load
+  std::vector<char> peers;
+  // number of processes (including this one) on this host
+  int nPeers;
   // base constructor
-  ipc_metadata_(std::size_t key_)
-      : shared(CmiNumNodes()), mine(CmiMyNode()), key(key_) {}
+  CmiIpcManager(std::size_t key_)
+      : shared(CmiNumNodes()),
+        mine(CmiMyNode()),
+        key(key_),
+        ready(false),
+        peers(CmiNumNodes(), 0),
+        nPeers(1) {}
   // virtual destructor may be needed
-  virtual ~ipc_metadata_() {}
+  virtual ~CmiIpcManager() {}
 };
 
-inline std::size_t whichBin_(std::size_t size);
+// Which mechanism maps one process's pool into its peers' address spaces.
+enum CmiIpcMode {
+  CMI_IPC_MODE_OFF = 0,
+  CMI_IPC_MODE_POSIX_SHM,
+  CMI_IPC_MODE_XPMEM
+};
+
+inline std::size_t whichBin_(std::size_t size) {
+  const auto* begin = kCutOffPoints.data();
+  const auto* end = kCutOffPoints.data() + kNumCutOffPoints;
+  const auto* it = std::lower_bound(begin, end, size);
+  return static_cast<std::size_t>(it - begin);  // kNumCutOffPoints if none
+}
 
 inline static void initIpcShared_(ipc_shared_* shared) {
   auto begin = (std::uintptr_t)(sizeof(ipc_shared_) +
@@ -101,9 +142,15 @@ inline void initSegmentSize_(char** argv) {
     CmiEnforceMsg(bin < kNumCutOffPoints, "ipc cutoff out of range!");
     CpvAccess(kRecommendedCutoff) = kCutOffPoints[bin];
   } else {
-    auto max = CpvAccess(kSegmentSize) / kNumCutOffPoints;
-    auto bin = (std::intptr_t)whichBin_(max) - 1;
-    CpvAccess(kRecommendedCutoff) = kCutOffPoints[(bin >= 0) ? bin : 0];
+    // Two ceilings, and the default is the lower. One is capacity: a message
+    // the pool cannot hold several of would starve every other peer, so keep
+    // it under a bin of segment/25. The other is kDefaultCutoff, which is
+    // about speed and does not move with the pool's size. A pool shrunk with
+    // ++ipcpoolsize hits the capacity ceiling first and keeps its old value.
+    auto capacity = CpvAccess(kSegmentSize) / kNumCutOffPoints;
+    auto bin = (std::intptr_t)whichBin_(capacity) - 1;
+    auto byCapacity = kCutOffPoints[(bin >= 0) ? bin : 0];
+    CpvAccess(kRecommendedCutoff) = std::min(byCapacity, kDefaultCutoff);
   }
 }
 
@@ -130,6 +177,8 @@ inline static void putSleeper_(CthThread th) {
 }
 
 static void awakenSleepers_(void);
+// records which peer processes share this host, and marks the pool usable
+static void finishSetup_(CmiIpcManager* meta);
 
 using ipc_manager_ptr_ = std::unique_ptr<CmiIpcManager>;
 using ipc_manager_map_ = std::vector<ipc_manager_ptr_>;
