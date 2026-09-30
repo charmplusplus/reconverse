@@ -21,6 +21,16 @@ CpvDeclare(std::size_t, kRecommendedCutoff);
 CpvStaticDeclare(std::size_t, kSegmentSize);
 constexpr std::size_t kDefaultSegmentSize = 8 * 1024 * 1024;
 
+// Where the pool stops paying for itself. Carrying a message costs one memcpy
+// into the destination's segment, which grows with the message, while the
+// backend hands large messages to the NIC without a CPU copy at all; past
+// some size the copy is dearer than the backend's fixed overhead. On Delta
+// over LCI/Slingshot-11 the pool still wins 2.4x at 32 KiB and has lost by
+// 128 KiB (see the table in the README), so this is the largest size measured
+// to be worth taking. It is deliberately conservative: a machine whose
+// crossover is higher gives up some of the win until ++ipccutoff raises it.
+constexpr std::size_t kDefaultCutoff = 32 * 1024;
+
 constexpr std::size_t kNumCutOffPoints = 25;
 const std::array<std::size_t, kNumCutOffPoints> kCutOffPoints = {
     64,        128,       256,       512,       1024,     2048,     4096,
@@ -132,9 +142,15 @@ inline void initSegmentSize_(char** argv) {
     CmiEnforceMsg(bin < kNumCutOffPoints, "ipc cutoff out of range!");
     CpvAccess(kRecommendedCutoff) = kCutOffPoints[bin];
   } else {
-    auto max = CpvAccess(kSegmentSize) / kNumCutOffPoints;
-    auto bin = (std::intptr_t)whichBin_(max) - 1;
-    CpvAccess(kRecommendedCutoff) = kCutOffPoints[(bin >= 0) ? bin : 0];
+    // Two ceilings, and the default is the lower. One is capacity: a message
+    // the pool cannot hold several of would starve every other peer, so keep
+    // it under a bin of segment/25. The other is kDefaultCutoff, which is
+    // about speed and does not move with the pool's size. A pool shrunk with
+    // ++ipcpoolsize hits the capacity ceiling first and keeps its old value.
+    auto capacity = CpvAccess(kSegmentSize) / kNumCutOffPoints;
+    auto bin = (std::intptr_t)whichBin_(capacity) - 1;
+    auto byCapacity = kCutOffPoints[(bin >= 0) ? bin : 0];
+    CpvAccess(kRecommendedCutoff) = std::min(byCapacity, kDefaultCutoff);
   }
 }
 

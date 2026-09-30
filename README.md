@@ -89,7 +89,7 @@ The example executables are located in the build/test/<program_name> folders. Yo
 - **`+ipc`** / **`+noipc`**: send messages between processes that share a host through shared memory instead of the communication backend. Off by default; see [Shared-memory IPC](#shared-memory-ipc-ipc).
 - **`+ipcmode <auto|shm|xpmem>`**: pick the mechanism backing the shared-memory pool. Implies `+ipc`.
 - **`++ipcpoolsize <bytes>`**: size of each process's shared-memory pool (8 MiB by default).
-- **`++ipccutoff <bytes>`**: largest message the pool will carry. Messages above it go over the communication backend. Defaults to a bin below `poolsize / 25`.
+- **`++ipccutoff <bytes>`**: largest message the pool will carry. Messages above it go over the communication backend. Defaults to 32 KiB, or to a bin below `poolsize / 25` when that is smaller.
 
 ## Shared-memory IPC (`+ipc`)
 
@@ -143,14 +143,26 @@ size (one-way microseconds):
 |   32 KiB |  15.39 |   6.53 |    2.4x |
 |  128 KiB |  21.07 |  24.65 |    0.85x |
 
-The pool wins by a wide margin up to tens of kilobytes and loses past that:
-it copies the message into the destination's pool, while LCI's own on-host
-path is already shared memory and does not. On this machine the crossover is
-somewhere between 32 and 128 KiB, which is *below* the cutoff the pool picks
-by default (256 KiB for the default 8 MiB pool), so a program that sends
-large messages between processes on a host should measure and lower
-`++ipccutoff` -- e.g. `++ipccutoff 65536`. Where the crossover falls depends
-on the backend and the machine, so measure rather than copying this number.
+The pool wins by a wide margin up to tens of kilobytes and loses past that,
+and what it loses to is its own copy. Carrying a message costs one memcpy:
+the sender copies it into a block in the destination's segment, and the
+receiver takes delivery of that block where it lies. That cost grows with the
+message. The backend's does not, in the same way -- the jump from 4.38 to
+14.86 us between 2 and 8 KiB is LCI switching from eager to rendezvous, and
+past that point it transfers out of the registered mempool `CmiAlloc` already
+hands it, so the bytes move by DMA with no CPU copying them. Once a message
+is large enough, one memcpy of it costs more than LCI's fixed handshake.
+
+It is *not* that LCI's on-host path is itself shared memory. If it were, 8
+bytes would not cost 3.42 us; that is not the price of a memcpy.
+
+The default cutoff is 32 KiB, the largest size measured here at which the
+pool still wins, so a default run takes the slower path for nothing in this
+table. That makes it a conservative floor rather than a tuned value: the
+crossover is somewhere between 32 and 128 KiB here, and elsewhere on another
+machine or backend, so a program that moves a lot of 64-128 KiB messages
+between processes on a host may do better with `++ipccutoff 131072`. Measure
+before raising it.
 
 ### Querying it from a program
 
