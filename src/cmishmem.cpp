@@ -25,6 +25,10 @@ CsvStaticDeclare(int, ipcRequested_);
 CpvStaticDeclare(int, ipcInitDone_);
 CpvStaticDeclare(long, ipcSent_);
 CpvStaticDeclare(long, ipcRecvd_);
+// Nesting depth of CmiIpcBeginNetworkOnly(): while it is nonzero this PE's
+// sends stay on the backend, so they cannot overtake a network operation the
+// caller already has in flight.
+CpvStaticDeclare(int, ipcNetworkOnly_);
 
 static void awakenSleepers_(void) {
   auto& current_sleepers = CsvAccess(sleepers);
@@ -344,6 +348,7 @@ void CmiIpcInit(char** argv) {
   CpvAccess(ipcInitDone_) = 1;
   CpvInitialize(long, ipcSent_);
   CpvInitialize(long, ipcRecvd_);
+  CpvInitialize(int, ipcNetworkOnly_);
 
   CsvInitialize(ipc_manager_map_, managers_);
 
@@ -449,6 +454,20 @@ CLINKAGE long CmiIpcMessagesReceived(void) {
   return CpvInitialized(ipcRecvd_) ? CpvAccess(ipcRecvd_) : 0;
 }
 
+CLINKAGE void CmiIpcBeginNetworkOnly(void) {
+  // Uninitialized means CmiIpcInit has not run, so there is no pool to keep
+  // sends off of and nothing to do.
+  if (CpvInitialized(ipcNetworkOnly_)) CpvAccess(ipcNetworkOnly_)++;
+}
+
+CLINKAGE void CmiIpcEndNetworkOnly(void) {
+  if (!CpvInitialized(ipcNetworkOnly_)) return;
+  CmiEnforceMsg(CpvAccess(ipcNetworkOnly_) > 0,
+                "CmiIpcEndNetworkOnly without a matching "
+                "CmiIpcBeginNetworkOnly");
+  CpvAccess(ipcNetworkOnly_)--;
+}
+
 bool CmiIpcReaches(int destNode) {
   auto* manager = CsvAccess(coreIpcManager_);
   if (manager == nullptr) return false;
@@ -464,6 +483,10 @@ bool CmiIpcReaches(int destNode) {
 bool CmiIpcTrySendAndFree(int destNode, int destRank, int messageSize,
                           void* msg) {
   if (!CmiIpcReaches(destNode)) return false;
+  // The caller is inside a CmiIpcBeginNetworkOnly() scope: it has a network
+  // operation in flight that this message must not overtake, so the pool is
+  // not an option here however well it would fit.
+  if (CpvAccess(ipcNetworkOnly_) > 0) return false;
   auto* manager = CsvAccess(coreIpcManager_);
   if ((std::size_t)messageSize > CmiRecommendedIpcBlockCutoff()) return false;
 

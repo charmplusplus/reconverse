@@ -1526,6 +1526,27 @@ CLINKAGE int CmiIpcNumPeers(void);
 CLINKAGE long CmiIpcMessagesSent(void);
 CLINKAGE long CmiIpcMessagesReceived(void);
 
+/* Keep this PE's sends off the shared-memory pool until the matching
+   CmiIpcEndNetworkOnly(); nestable.
+
+   A layer that follows a one-sided put with a notification needs this. The
+   put crosses the network, but a notification handed to a peer process on
+   this host would go through the pool, which does not wait for the network:
+   it can arrive before the data has landed, and the receiver's callback would
+   run on a buffer that is still stale. Sending the notification over the
+   backend instead leaves it behind the put's local completion, which is the
+   ordering the network path has always relied on.
+
+   Only sends the pool would otherwise have carried are affected: a send to
+   this process, to another host, or over CmiRecommendedIpcBlockCutoff() takes
+   the same path either way.
+
+   The depth is per-PE, so the two calls have to bracket a stretch of work on
+   one PE that does not suspend: park a thread in between and every send that
+   PE makes meanwhile stays off the pool too. */
+CLINKAGE void CmiIpcBeginNetworkOnly(void);
+CLINKAGE void CmiIpcEndNetworkOnly(void);
+
 /* Persistent communication */
 #include "persistent.h"
 

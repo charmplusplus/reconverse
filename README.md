@@ -164,6 +164,31 @@ long CmiIpcMessagesReceived(void);/* messages this PE took out of it */
 
 `tests/ipc` uses these to check that traffic really took the pool.
 
+### Ordering a notification behind a one-sided put
+
+A put issued through the communication backend is still in flight when it
+completes locally: local completion says the source buffer may be reused, not
+that the bytes are visible in the destination process. A notification sent
+straight after it -- "your buffer is filled" -- goes through the pool when the
+destination is a peer process on this host, and the pool does not wait for the
+network, so the notification can overtake the data it is announcing.
+
+Reconverse closes this inside the runtime for the two places that put: the
+Converse zerocopy Direct API keeps a put's acknowledgement on the backend
+(`CommRputLocalHandler`), and a persistent channel to a pool peer sends the
+payload inline rather than putting at all (`writeToBuffer`). A layer that
+issues its own puts has the same problem, and these to fix it with:
+
+```c
+void CmiIpcBeginNetworkOnly(void); /* sends from this PE stay on the backend */
+void CmiIpcEndNetworkOnly(void);   /* ...until here; nestable */
+bool CmiIpcReaches(int destNode);  /* would the pool carry a message there? */
+```
+
+`tests/rdma_ipc_ack` covers the Direct API case from both sides: that the
+acknowledgement is kept off the pool, and that the destination's buffer really
+holds the data by the time the acknowledgement is delivered.
+
 ### Caveats
 
 * `+ipc` makes Reconverse call `CmiInitCPUTopology` during startup, because
@@ -175,7 +200,10 @@ long CmiIpcMessagesReceived(void);/* messages this PE took out of it */
   a message under the cutoff and one over it travel by different routes.
   Converse has never ordered messages between PEs, so this breaks no
   guarantee, but a program that happened to rely on the ordering the network
-  backend gave it will notice.
+  backend gave it will notice. A one-sided put is reordered against pool
+  messages the same way, and there it *can* break a program: see [Ordering a
+  notification behind a one-sided
+  put](#ordering-a-notification-behind-a-one-sided-put).
 * A process killed outright (not `CmiExit`) leaves its POSIX shared memory
   segment behind in `/dev/shm`; a clean exit unlinks it. `xpmem` has nothing
   to leave behind.
