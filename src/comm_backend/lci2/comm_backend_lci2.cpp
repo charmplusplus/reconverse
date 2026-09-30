@@ -68,10 +68,15 @@ void *alloc_mempool_block(size_t *size, void **mem_hndl, int expand_flag)
     return pool;
 }
 
+// Set by exit() once deregisterAllMemory() has released every registration,
+// the pool blocks' included; the pools are destroyed after that, and their
+// handles are stale by then.
+static bool g_pool_mrs_released = false;
+
 void free_mempool_block(void *ptr, void* mem_hndl)
 {
     // Deregister the MR before releasing the host pages it covers.
-    if (mem_hndl != NULL)
+    if (mem_hndl != NULL && !g_pool_mrs_released)
         deregisterMemory((mr_t) mem_hndl);
     // Use ::free explicitly: unqualified `free` here resolves to comm_backend::free,
     // which expects a CmiChunkHeader-prefixed user pointer. This function receives
@@ -221,15 +226,32 @@ void CommBackendLCI2::exit() {
   // Drop any still-registered memory regions before tearing the devices down;
   // an open region makes fi_close(domain) fail with FI_EBUSY. This supersedes
   // the reconverse_lci_cache_amd workaround of skipping free_device entirely.
+  // The mempool blocks are registered through registerMemory too, so this
+  // covers them; free_mempool_block below must not deregister them again.
   deregisterAllMemory();
+  g_pool_mrs_released = true;
   for (auto device : m_devices) {
-    lci::free_device(&device);
+    lci::free_device(&device);  // drains and completes what is still posted
   }
   m_devices.clear();
   lci::free_comp(&m_local_comp);
   lci::free_comp(&m_remote_comp);
   lci::g_runtime_fina();
   lci::global_finalize();
+
+  // Only now, with no network progress left anywhere, release every PE's
+  // mempool. Until this point any thread's progress() may still complete a
+  // send (CommLocalHandler frees the buffer into the sender's pool) or land a
+  // receive (LCI allocates the buffer with CmiAlloc, i.e. from the polling
+  // thread's pool), so no pool may go away while the devices are up. Rank 0
+  // does it for all ranks; the others are parked in ConverseExit by now.
+  for (int r = 0; r < CmiMyNodeSize(); r++) {
+    mempool_type *&pool = CpvAccessOther(mempool, r);
+    if (pool != NULL) {
+      mempool_destroy(pool);
+      pool = NULL;
+    }
+  }
 }
 
 void CommBackendLCI2::initThread(int thread_id, int num_threads) {
@@ -243,14 +265,11 @@ void CommBackendLCI2::initThread(int thread_id, int num_threads) {
 }
 
 void CommBackendLCI2::exitThread() {
-  // Destroy this PE's mempool while the LCI devices and runtime are still alive,
-  // so its registered memory blocks are deregistered (deregisterMemory uses
-  // m_devices, and the devices/runtime are only torn down later in exit() on
-  // rank 0). The mempool is a per-PE Cpv, so each thread destroys its own.
-  if (CpvInitialized(mempool) && CpvAccess(mempool) != NULL) {
-    mempool_destroy(CpvAccess(mempool));
-    CpvAccess(mempool) = NULL;
-  }
+  // This PE's mempool is NOT destroyed here: completions processed later by
+  // another thread's progress() still allocate from and free into it (see
+  // exit()). Destroying it here freed buffers of in-flight sends and receive
+  // buffers under LCI: SIGSEGV in CmiFree / CommRemoteHandler <- progress <-
+  // ConverseExit, seen after broadcast-heavy runs and in tests/exit_inflight.
   detail::g_thread_context.tls_device = lci::device_t();
   detail::g_thread_context.device_idx = -1;
   detail::g_thread_context.thread_id = -1;

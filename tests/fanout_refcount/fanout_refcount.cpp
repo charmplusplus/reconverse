@@ -1,5 +1,4 @@
-// List send and multicast fan-out: delivery, ownership and within-process
-// sharing (issue #219).
+// List send and multicast fan-out: delivery and ownership (issue #219).
 //
 // Phase A is the regression test for the reason the fan-out is built the way
 // it is. Sending one message to two PEs of the SAME remote process used to be
@@ -19,10 +18,13 @@
 // CmiFreeListSendFn drops exactly one reference (checked by holding a second
 // one across the call).
 //
-// Phase C: the same list send with a nokeep payload. The destination process
-// must hand ONE buffer to all its listed ranks, so those receivers report the
-// same message pointer and a reference count between 1 and the number of
-// listed ranks.
+// Phase C: the same list send with a nokeep payload. Every listed rank must
+// still get a buffer of its own: sharing one broke Charm++, which unpacks
+// packed nokeep messages in place (see CmiFanoutHandler). The old sharing code
+// always left some receiver with 2+ references, so this fails without a race.
+//
+// Phases B-D also check that exactly one listed rank of the several-rank
+// process got the received fan-out buffer (larger: it carries the trailer).
 //
 // Phase D: the same destinations through CmiEstablishGroup / CmiSyncMulticastFn
 // and CmiFreeMulticastFn, which reach the same code by way of CmiLookupGroup.
@@ -48,7 +50,7 @@ static const char *stepName[S_COUNT] = {
     "A list send 4KB to two PEs of one process",
     "B CmiSyncListSendFn across processes",
     "B CmiFreeListSendFn across processes",
-    "C nokeep list send shared within each process",
+    "C nokeep list send, one buffer per rank",
     "D CmiSyncMulticastFn",
     "D CmiFreeMulticastFn"};
 
@@ -90,8 +92,9 @@ static int destA[2];
 static int numDestA = 0;
 static int destB[256];
 static int numDestB = 0;
-static int sharedGroupPes[2]; // two PEs of one remote process, phase C check
-static int numSharedGroupPes = 0;
+// The several-rank remote process of phases B-D; all its ranks are listed.
+static int sharedGroupFirst = 0;
+static int sharedGroupNRanks = 0;
 static CmiGroup group;
 
 static const int bigSize = 8192;
@@ -127,8 +130,7 @@ static void recv_handler(void *vmsg) {
       }
   }
   int step = p->step;
-  // Read, never write: a nokeep message may be shared with the other PEs of
-  // this process right now.
+  // Record ownership before freeing: a receiver must hold the only reference.
   uint64_t ptr = (uint64_t)(uintptr_t)vmsg;
   int ref = CmiGetReference(vmsg);
   int alloc = CmiSize(vmsg);
@@ -172,48 +174,27 @@ static void checkStep(void) {
       CmiAbort("fanout_refcount: %s: pe %d received %d messages, expected %d",
                stepName[step], pe, arrivals[pe], expected[pe]);
 
-  if (step == S_C_NOKEEP && numSharedGroupPes == 2) {
-    // Both listed ranks of that process must have been handed the same buffer.
-    int a = sharedGroupPes[0], b = sharedGroupPes[1];
-    if (ptrOf[a] != ptrOf[b])
-      CmiAbort("fanout_refcount: %s: pe %d and pe %d of one process got "
-               "different buffers (%llx vs %llx); the nokeep payload was not "
-               "shared",
-               stepName[step], a, b, (unsigned long long)ptrOf[a],
-               (unsigned long long)ptrOf[b]);
-    if (refOf[a] < 1 || refOf[a] > 2 || refOf[b] < 1 || refOf[b] > 2)
-      CmiAbort("fanout_refcount: %s: shared buffer reference counts %d and %d "
-               "are outside 1..2",
-               stepName[step], refOf[a], refOf[b]);
-    // The received fan-out buffer is bigger than the payload -- it carries the
-    // rank trailer -- so an allocation of exactly bigSize would mean the
-    // receiving process copied the payload out instead of delivering it.
-    if (allocOf[a] <= bigSize)
-      CmiAbort("fanout_refcount: %s: pe %d was handed a %d-byte buffer for a "
-               "%d-byte payload, so the payload was copied on the receiver",
-               stepName[step], a, allocOf[a], bigSize);
-    CmiPrintf("[0] %s: shared buffer %llx of %d bytes for a %d-byte payload "
-              "(no receiver copy), references seen %d and %d\n",
-              stepName[step], (unsigned long long)ptrOf[a], allocOf[a], bigSize,
-              refOf[a], refOf[b]);
-  }
+  if (step >= S_B_SYNC) {
+    // No PE may share its buffer: Charm++'s in-place unpack depends on it.
+    for (int pe = 0; pe < npes; pe++)
+      if (expected[pe] && refOf[pe] != 1)
+        CmiAbort("fanout_refcount: %s: pe %d was handed a buffer with %d "
+                 "references, expected 1 (a buffer shared between PEs)",
+                 stepName[step], pe, refOf[pe]);
 
-  if (step == S_B_FREE && numSharedGroupPes == 2) {
-    // Without the nokeep flag the received buffer serves the first listed rank
-    // and the rest get copies: one of the two, and only one, must be holding
-    // the fan-out allocation.
-    int a = sharedGroupPes[0], b = sharedGroupPes[1];
-    int big = (allocOf[a] > bigSize) + (allocOf[b] > bigSize);
-    if (big != 1)
-      CmiAbort("fanout_refcount: %s: %d of 2 ranks got the received buffer "
-               "(%d and %d bytes for a %d-byte payload), expected exactly 1",
-               stepName[step], big, allocOf[a], allocOf[b], bigSize);
-    if (ptrOf[a] == ptrOf[b])
-      CmiAbort("fanout_refcount: %s: a non-nokeep payload was shared between "
-               "pe %d and pe %d",
-               stepName[step], a, b);
-    CmiPrintf("[0] %s: one rank received the buffer itself, the other a copy\n",
-              stepName[step]);
+    if (sharedGroupNRanks >= 2) {
+      // The received buffer serves exactly one listed rank; the rest copies.
+      int big = 0;
+      for (int r = 0; r < sharedGroupNRanks; r++)
+        big += allocOf[sharedGroupFirst + r] > bigSize;
+      if (big != 1)
+        CmiAbort("fanout_refcount: %s: %d of the %d listed ranks of process 1 "
+                 "got the received fan-out buffer, expected exactly 1",
+                 stepName[step], big, sharedGroupNRanks);
+      CmiPrintf("[0] %s: %d ranks of process 1 each got their own buffer, one "
+                "of them the received one\n",
+                stepName[step], sharedGroupNRanks);
+    }
   }
 
   if (keptMsg != nullptr) {
@@ -374,9 +355,8 @@ static void buildDests(void) {
     if (n == 1 && nodeSize >= 2) {
       for (int r = 0; r < nodeSize; r++)
         destB[numDestB++] = CmiNodeFirst(n) + r;
-      sharedGroupPes[0] = CmiNodeFirst(n);
-      sharedGroupPes[1] = CmiNodeFirst(n) + 1;
-      numSharedGroupPes = 2;
+      sharedGroupFirst = CmiNodeFirst(n);
+      sharedGroupNRanks = nodeSize;
     } else {
       destB[numDestB++] = CmiNodeFirst(n);
     }
