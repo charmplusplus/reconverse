@@ -72,7 +72,7 @@ private:
   // (OFI fi_cq_read is not thread-safe without FI_THREAD_SAFE domain).
   // Each lock on its own cache line, so polling one device does not
   // invalidate the line holding the other devices' locks.
-  struct alignas(64) PaddedLock {
+  struct alignas(CMI_CACHE_LINE_SIZE) PaddedLock {
     std::atomic<bool> v{false};
   };
   std::vector<PaddedLock> m_progress_locks;
