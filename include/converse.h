@@ -137,12 +137,16 @@ extern CmiNodeLock CmiMemLock_lock;
 
 // Size of the unit of cache coherence. Data that one PE writes often must not
 // share one of these with data that other PEs read on their hot path, or every
-// write invalidates the readers' copy. Apple silicon uses 128-byte lines; x86
-// and the other aarch64 parts reconverse runs on use 64.
-// ConverseInit warns if the machine reports a larger line than this. Defined
-// only if not already set, so a build can override it (-DCMI_CACHE_LINE_SIZE=n).
+// write invalidates the readers' copy. Apple silicon and POWER use 128-byte
+// lines; x86 and the other aarch64 parts reconverse runs on use 64.
+// Deliberately not std::hardware_destructive_interference_size: it does not
+// exist in C (CsdNodeQueueLen_t below is spelled in both languages and both
+// spellings must agree), and its value follows -mtune, so translation units
+// built with different flags could disagree. ConverseInit warns if the machine
+// reports a larger line than this. Defined only if not already set, so a build
+// can override it (-DCMI_CACHE_LINE_SIZE=n).
 #ifndef CMI_CACHE_LINE_SIZE
-#if defined(__APPLE__) && defined(__aarch64__)
+#if CMK_PPC64 || (defined(__APPLE__) && (defined(__aarch64__) || defined(__arm64__)))
 #define CMI_CACHE_LINE_SIZE 128
 #else
 #define CMI_CACHE_LINE_SIZE 64
@@ -1315,15 +1319,6 @@ int 	   CmmGetLastTag(CmmTable t, int ntags, int *tags);
 #define    CmmProbe(t,nt,tg,rt) (CmmFind((t),(nt),(tg),(rt),0))
 
 
-#ifndef CMI_CACHE_LINE_SIZE
-#ifdef __cpp_lib_hardware_interference_size
-# define CMI_CACHE_LINE_SIZE std::hardware_destructive_interference_size
-#elif CMK_PPC64 || (defined __APPLE__ && defined __arm64__)
-# define CMI_CACHE_LINE_SIZE 128
-#else
-# define CMI_CACHE_LINE_SIZE 64
-#endif
-#endif
 //partitions
 
 /* Charm++ and NAMD both gate their replica support on this macro: with it
