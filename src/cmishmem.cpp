@@ -90,7 +90,18 @@ void* CmiIpcBlockToMsg(CmiIpcBlock* block, bool init) {
     CmiAssert(((uintptr_t)msg % ALIGN_BYTES) == 0);
     CMI_ZC_MSGTYPE((void*) msg) = CMK_REG_NO_ZC_MSG;
     CmiSetMsgNokeep((void *)msg, 0);
-    SIZEFIELD(msg) = block->size;
+    // Pool memory is not registered with the backend, and nothing else ever
+    // writes this field. A handler that forwards a message it received from
+    // the pool to a PE on another host passes MRFIELD straight to issueAm,
+    // and LCI2 dereferences any non-null value, so say there is no region
+    // here rather than relying on the segment's pages starting out zeroed.
+    MRFIELD(msg) = comm_backend::MR_NULL;
+    // block->size covers the chunk header too, so the space a message can
+    // use is that much smaller -- CmiSize must not promise the difference.
+    // A sender overwrites this with the message's real length below, which
+    // is what CmiAlloc stores.
+    CmiAssert(block->size > sizeof(CmiChunkHeader));
+    SIZEFIELD(msg) = block->size - sizeof(CmiChunkHeader);
     REFFIELDSET(msg, 1);
   }
   return msg;
@@ -128,6 +139,12 @@ CmiIpcBlock* CmiMsgToIpcBlock(CmiIpcManager* manager, char* src, std::size_t len
     }
   }
   CMI_DEST_RANK(dst) = rank;
+  // The block came out of a bin, so it is generally larger than the message
+  // in it. Record what was actually written, the way CmiAlloc records the
+  // requested size: a receiver that writes up to CmiSize would otherwise run
+  // off the end of the message and into the next block's header. Freeing is
+  // unaffected -- CmiFreeIpcBlock bins by block->size.
+  SIZEFIELD(dst) = len;
   return block;
 }
 

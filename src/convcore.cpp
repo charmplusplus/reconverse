@@ -712,8 +712,12 @@ void CmiFree(void *msg) {
     // references remain lets two senders allocate the same block.
     CmiIpcBlock* ipc;
     auto* manager = CsvAccess(coreIpcManager_);
-    if (manager && msg &&
-        (ipc = CmiIsIpcBlock(manager, BLKSTART(msg), CmiMyNode()))) {
+    // Ask about the enclosing block, not about msg: a message nested inside
+    // a pool message carries a negative reference count, and BLKSTART(msg)
+    // would point into the middle of the block -- CmiIsIpcBlock only range
+    // checks, so it would hand back a bogus block to push onto a free list.
+    if (manager && parentBlk &&
+        (ipc = CmiIsIpcBlock(manager, BLKSTART(parentBlk), CmiMyNode()))) {
       CmiFreeIpcBlock(manager, ipc);
       return;
     }
