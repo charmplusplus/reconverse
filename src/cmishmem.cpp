@@ -81,6 +81,8 @@ inline static CmiIpcBlock* popBlock_(std::atomic<std::uintptr_t>& head,
                                      void* base);
 inline static bool pushBlock_(std::atomic<std::uintptr_t>& head,
                               std::uintptr_t value, void* base);
+inline static CmiIpcBlock* popBlockFifo_(ipc_shared_* shared);
+inline static bool pushBlockFifo_(ipc_shared_* shared, std::uintptr_t value);
 static std::uintptr_t allocBlock_(ipc_shared_* meta, std::size_t size);
 
 void* CmiIpcBlockToMsg(CmiIpcBlock* block, bool init) {
@@ -176,7 +178,7 @@ inline static bool metadataReady_(CmiIpcManager* meta) {
 CmiIpcBlock* CmiPopIpcBlock(CmiIpcManager* meta) {
   if (metadataReady_(meta)) {
     auto* shared = meta->shared[meta->mine].load(std::memory_order_acquire);
-    return popBlock_(shared->queue, shared);
+    return popBlockFifo_(shared);
   } else {
     return nullptr;
   }
@@ -184,9 +186,8 @@ CmiIpcBlock* CmiPopIpcBlock(CmiIpcManager* meta) {
 
 bool CmiPushIpcBlock(CmiIpcManager* meta, CmiIpcBlock* block) {
   auto* shared = meta->shared[block->src].load(std::memory_order_acquire);
-  auto& queue = shared->queue;
   CmiAssert(meta->mine == block->dst);
-  return pushBlock_(queue, block->orig, shared);
+  return pushBlockFifo_(shared, block->orig);
 }
 
 std::pair<CmiIpcBlock*, CmiIpcAllocStatus> CmiAllocIpcBlock(CmiIpcManager* meta, int dstProc, std::size_t size) {
@@ -306,6 +307,65 @@ inline static bool pushBlock_(std::atomic<std::uintptr_t>& head,
   CmiAssert(check == cmi::ipc::nil);
   return true;
 }
+
+// The receive queue is FIFO, unlike the free lists above. A block on a free
+// list is just storage. A block on the receive queue is a message waiting to
+// be delivered, and taking the newest first hands a sender's messages back
+// reversed and leaves the oldest block at the bottom until the queue drains
+// all the way -- under steady inbound traffic, a long time.
+//
+// Same locking as pushBlock_: nil is never a valid list value, so whichever
+// process exchanges a non-nil value out of the head owns the whole list until
+// it puts one back. qtail is read and written only by that owner, which is why
+// it needs no atomicity of its own; the release-store on the head publishes it.
+inline static bool pushBlockFifo_(ipc_shared_* shared, std::uintptr_t value) {
+  CmiAssert(value != cmi::ipc::nil);
+  auto head = shared->queue.exchange(cmi::ipc::nil, std::memory_order_acquire);
+  if (head == cmi::ipc::nil) {
+    // another process holds the list; the caller retries
+    return false;
+  }
+  auto* block = (CmiIpcBlock*)((char*)shared + value);
+  // it goes on the end, so it terminates the chain
+  block->next = cmi::ipc::max;
+  if (head == cmi::ipc::max) {
+    // the queue was empty, so this block is both ends of it
+    CmiAssert(shared->qtail == cmi::ipc::max);
+    head = value;
+  } else {
+    CmiAssert(shared->qtail != cmi::ipc::max);
+    ((CmiIpcBlock*)((char*)shared + shared->qtail))->next = value;
+  }
+  shared->qtail = value;
+  auto check = shared->queue.exchange(head, std::memory_order_release);
+  CmiAssert(check == cmi::ipc::nil);
+  return true;
+}
+
+inline static CmiIpcBlock* popBlockFifo_(ipc_shared_* shared) {
+  CmiAssert(((std::uintptr_t)shared % ALIGN_BYTES) == 0);
+  auto head = shared->queue.exchange(cmi::ipc::nil, std::memory_order_acquire);
+  if (head == cmi::ipc::nil) {
+    // another process holds the list
+    return nullptr;
+  } else if (head == cmi::ipc::max) {
+    auto check = shared->queue.exchange(head, std::memory_order_release);
+    CmiAssert(check == cmi::ipc::nil);
+    return nullptr;
+  }
+  // translate the "home" process's offset into a local address
+  auto* xlatd = (CmiIpcBlock*)((char*)shared + head);
+  auto next = xlatd->next;
+  if (next == cmi::ipc::max) {
+    // that was the last one
+    CmiAssert(shared->qtail == head);
+    shared->qtail = cmi::ipc::max;
+  }
+  auto check = shared->queue.exchange(next, std::memory_order_release);
+  CmiAssert(check == cmi::ipc::nil);
+  return xlatd;
+}
+
 
 // ---------------------------------------------------------------------------
 // setup

@@ -49,12 +49,22 @@ CsvStaticDeclare(sleeper_map_t, sleepers);
 // contains pool of free blocks, heap, and receive queue
 struct ipc_shared_ {
   std::array<std::atomic<std::uintptr_t>, kNumCutOffPoints> free;
+  // messages waiting to be delivered, oldest first. queue is the head and
+  // doubles as the list's lock (see pushBlockFifo_); qtail is the end, so a
+  // sender can append without walking the list. Both hold offsets from this
+  // segment's base, which mean the same thing in every process that has it
+  // mapped. The free lists above need no tail: they are storage, not a
+  // queue, and newest-first is the warmest block to hand back.
   std::atomic<std::uintptr_t> queue;
+  std::uintptr_t qtail;
   std::atomic<std::uintptr_t> heap;
   std::uintptr_t max;
 
   ipc_shared_(std::uintptr_t begin, std::uintptr_t end)
-      : queue(cmi::ipc::max), heap(cmi::ipc::nil), max(end) {
+      : queue(cmi::ipc::max),
+        qtail(cmi::ipc::max),
+        heap(cmi::ipc::nil),
+        max(end) {
     for (auto& f : this->free) {
       f.store(cmi::ipc::max);
     }

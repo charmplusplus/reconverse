@@ -208,13 +208,20 @@ holds the data by the time the acknowledgement is delivered.
   collective to startup and prints the usual topology line.
 * Cross-partition sends (`CmiInterSyncSend` and friends) always use the
   communication backend.
-* Messages to one destination can be reordered relative to each other, because
-  a message under the cutoff and one over it travel by different routes.
-  Converse has never ordered messages between PEs, so this breaks no
-  guarantee, but a program that happened to rely on the ordering the network
-  backend gave it will notice. A one-sided put is reordered against pool
-  messages the same way, and there it *can* break a program: see [Ordering a
-  notification behind a one-sided
+* Messages to one destination can be reordered relative to each other, in two
+  ways. A message under the cutoff and one over it travel by different routes,
+  so they can cross. And a process has one receive queue, which every PE in it
+  drains, so when a process runs several PEs a block taken by a PE other than
+  the destination reaches that destination by a second hop and can arrive
+  after a block taken later. What does not happen is wholesale reversal: the
+  queue is FIFO, so a burst that goes entirely through the pool, from one PE
+  to a process running one PE, arrives in the order it was sent
+  (`tests/ipc_order` checks this), and no message has to wait for the queue to
+  drain before anything looks at it. Converse has never ordered messages
+  between PEs, so none of this breaks a guarantee, but a program that happened
+  to rely on the ordering the network backend gave it will notice. A one-sided
+  put is reordered against pool messages the same way, and there it *can*
+  break a program: see [Ordering a notification behind a one-sided
   put](#ordering-a-notification-behind-a-one-sided-put).
 * A process killed outright (not `CmiExit`) leaves its POSIX shared memory
   segment behind in `/dev/shm`; a clean exit unlinks it. `xpmem` has nothing
