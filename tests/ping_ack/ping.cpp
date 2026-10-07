@@ -24,6 +24,7 @@ int msg_count;
 #define CALCULATION_PRECISION 0.0001  // the decimal place that the output data is rounded to
 
 int nTRIALS_PER_SIZE;                 // iterations run per msg size
+static int min_size, max_size;        // payload range of the sweep (set by rank 0, see bigmsg_moduleinit)
 int nMSG_SIZE;                        // number of msg sizes in the sweep
 
 double *total_time;                   // times are stored in us, nTRIALS_PER_SIZE entries each
@@ -274,15 +275,25 @@ void bigmsg_moduleinit(int argc, char **argv)
   CpvAccess(trial) = 0;
   CpvAccess(round) = 0;
   CpvAccess(warmup_flag) = 1;
-  msg_count = 100; // default msg count
-  CmiGetArgInt(argv, "-msg_count", &msg_count);
-
-  int min_size = DEFAULT_MIN_SIZE;
-  int max_size = DEFAULT_MAX_SIZE;
-  nTRIALS_PER_SIZE = DEFAULT_TRIALS;
-  CmiGetArgInt(argv, "-min_size", &min_size);
-  CmiGetArgInt(argv, "-max_size", &max_size);
-  CmiGetArgInt(argv, "-iterations", &nTRIALS_PER_SIZE);
+  // msg_count, nTRIALS_PER_SIZE, nMSG_SIZE, msg_sizes[] and the size limits are
+  // process-wide globals. Only rank 0 of each process sets them, and the other
+  // PEs wait for it: when every PE reset nTRIALS_PER_SIZE to its default and
+  // then re-parsed -iterations, PE 0 could allocate its timing arrays during
+  // another PE's reset window (100 entries) and then write up to the parsed
+  // count (e.g. 200) past their end, corrupting the heap (reconverse #265).
+  if (CmiMyRank() == 0) {
+    msg_count = 100; // default msg count
+    CmiGetArgInt(argv, "-msg_count", &msg_count);
+    min_size = DEFAULT_MIN_SIZE;
+    max_size = DEFAULT_MAX_SIZE;
+    nTRIALS_PER_SIZE = DEFAULT_TRIALS;
+    CmiGetArgInt(argv, "-min_size", &min_size);
+    CmiGetArgInt(argv, "-max_size", &max_size);
+    CmiGetArgInt(argv, "-iterations", &nTRIALS_PER_SIZE);
+    if (min_size >= (int)sizeof(int) && max_size >= min_size)
+      nMSG_SIZE = build_msg_sizes(min_size, max_size);
+  }
+  CmiNodeAllBarrier();
 
   if (min_size < (int)sizeof(int) || max_size < min_size || nTRIALS_PER_SIZE < 1) {
     if (CmiMyPe() == 0)
@@ -292,7 +303,6 @@ void bigmsg_moduleinit(int argc, char **argv)
     CmiExit(1);
   }
 
-  nMSG_SIZE = build_msg_sizes(min_size, max_size);
   int largest = msg_sizes[nMSG_SIZE - 1] - CmiMsgHeaderSizeBytes;
   if (CmiMyPe() == 0 && largest <= max_size / 2)
     CmiPrintf("note: sweep truncated to the %d size limit, largest payload is %d bytes\n",
