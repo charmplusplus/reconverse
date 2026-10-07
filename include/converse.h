@@ -135,6 +135,24 @@ extern CmiNodeLock CmiMemLock_lock;
 #define ALIGN_DEFAULT(x) CMIALIGN(x, ALIGN_BYTES)
 #define CMIPADDING(x, n) (CMIALIGN((x), (n)) - (size_t)(x))
 
+// Size of the unit of cache coherence. Data that one PE writes often must not
+// share one of these with data that other PEs read on their hot path, or every
+// write invalidates the readers' copy. Apple silicon and POWER use 128-byte
+// lines; x86 and the other aarch64 parts reconverse runs on use 64.
+// Deliberately not std::hardware_destructive_interference_size: it does not
+// exist in C (CsdNodeQueueLen_t below is spelled in both languages and both
+// spellings must agree), and its value follows -mtune, so translation units
+// built with different flags could disagree. ConverseInit warns if the machine
+// reports a larger line than this. Defined only if not already set, so a build
+// can override it (-DCMI_CACHE_LINE_SIZE=n).
+#ifndef CMI_CACHE_LINE_SIZE
+#if CMK_PPC64 || (defined(__APPLE__) && (defined(__aarch64__) || defined(__arm64__)))
+#define CMI_CACHE_LINE_SIZE 128
+#else
+#define CMI_CACHE_LINE_SIZE 64
+#endif
+#endif
+
 // Portable alignment specifier for structs.
 // NOTE: __attribute__((aligned(n))) must be checked before _Alignas because
 // _Alignas is a variable specifier in C11/C17 and cannot appear between
@@ -574,20 +592,34 @@ CsvExtern(CmiNodeLock, CsdNodeQueueLock);
    describe the same object: both are int-sized, int-aligned and lock-free, and
    C11 and C++11 atomics share one ABI on every compiler this builds with.
    CsdNodeQueueLenAdd/Get hide the syntax that genuinely differs, so callers
-   need no #ifdef of their own. */
+   need no #ifdef of their own.
+
+   The counter is wrapped in a struct of exactly one cache line
+   (CMI_CACHE_LINE_SIZE in size and alignment) so that it has the line to
+   itself. It is written on every node-queue enqueue and dequeue, and as a
+   bare int it shared its line with read-hot globals (Cmi_startTime, read by
+   every CmiWallTimer call, and the CsdNodeQueue/CsdNodeQueueLock pointers),
+   so each write invalidated them on every PE. Both spellings of the
+   struct have the atomic at offset 0 and the same size and alignment. */
 #ifdef __cplusplus
-CsvExtern(std::atomic<int>, CsdNodeQueueLen);
+struct alignas(CMI_CACHE_LINE_SIZE) CsdNodeQueueLen_t {
+  std::atomic<int> v;
+};
+CsvExtern(CsdNodeQueueLen_t, CsdNodeQueueLen);
 #define CsdNodeQueueLenAdd(n)                                                  \
-  CsvAccess(CsdNodeQueueLen).fetch_add((n), std::memory_order_relaxed)
+  CsvAccess(CsdNodeQueueLen).v.fetch_add((n), std::memory_order_relaxed)
 #define CsdNodeQueueLenGet()                                                   \
-  CsvAccess(CsdNodeQueueLen).load(std::memory_order_relaxed)
+  CsvAccess(CsdNodeQueueLen).v.load(std::memory_order_relaxed)
 #else
-CsvExtern(_Atomic int, CsdNodeQueueLen);
+typedef struct {
+  _Alignas(CMI_CACHE_LINE_SIZE) _Atomic int v;
+} CsdNodeQueueLen_t;
+CsvExtern(CsdNodeQueueLen_t, CsdNodeQueueLen);
 #define CsdNodeQueueLenAdd(n)                                                  \
-  atomic_fetch_add_explicit(&CsvAccess(CsdNodeQueueLen), (n),                  \
+  atomic_fetch_add_explicit(&CsvAccess(CsdNodeQueueLen).v, (n),                \
                             memory_order_relaxed)
 #define CsdNodeQueueLenGet()                                                   \
-  atomic_load_explicit(&CsvAccess(CsdNodeQueueLen), memory_order_relaxed)
+  atomic_load_explicit(&CsvAccess(CsdNodeQueueLen).v, memory_order_relaxed)
 #endif
 void CqsEnqueueGeneral(Queue q, void *Message, int strategy, int priobits,
                          unsigned int *prioptr);
@@ -1287,15 +1319,6 @@ int 	   CmmGetLastTag(CmmTable t, int ntags, int *tags);
 #define    CmmProbe(t,nt,tg,rt) (CmmFind((t),(nt),(tg),(rt),0))
 
 
-#ifndef CMI_CACHE_LINE_SIZE
-#ifdef __cpp_lib_hardware_interference_size
-# define CMI_CACHE_LINE_SIZE std::hardware_destructive_interference_size
-#elif CMK_PPC64 || (defined __APPLE__ && defined __arm64__)
-# define CMI_CACHE_LINE_SIZE 128
-#else
-# define CMI_CACHE_LINE_SIZE 64
-#endif
-#endif
 //partitions
 
 /* Charm++ and NAMD both gate their replica support on this macro: with it

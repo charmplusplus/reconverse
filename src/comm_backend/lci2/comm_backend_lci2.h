@@ -70,7 +70,12 @@ private:
   std::vector<lci::device_t> m_devices;
   // One trylock per device: prevents concurrent fi_cq_read calls on the same CQ
   // (OFI fi_cq_read is not thread-safe without FI_THREAD_SAFE domain).
-  std::vector<std::atomic<bool>> m_progress_locks;
+  // Each lock on its own cache line, so polling one device does not
+  // invalidate the line holding the other devices' locks.
+  struct alignas(CMI_CACHE_LINE_SIZE) PaddedLock {
+    std::atomic<bool> v{false};
+  };
+  std::vector<PaddedLock> m_progress_locks;
   lci::comp_t m_local_comp;
   lci::comp_t m_remote_comp;
   lci::rcomp_t m_rcomp;

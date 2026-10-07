@@ -35,7 +35,10 @@ Heavily modified by Nikhil Jain 11/28/2011
 #endif
 
 #include "mempool.h"
-int cutOffPoints[] = {64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768,
+// const, so it lives in read-only data. As a writable global it shared a
+// cache line with CthThreadInit's serialno (a fetch_add on every CthCreate),
+// and which_pow2() reads it on every mempool CmiAlloc/CmiFree.
+static const int cutOffPoints[] = {64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768,
                       65536, 131072, 262144, 524288, 1048576, 2097152, 4194304,
                       8388608, 16777216, 33554432, 67108864, 134217728,
                       268435456, 536870912, 1073741824};

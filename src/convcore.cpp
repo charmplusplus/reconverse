@@ -17,6 +17,10 @@
 #include <thread>
 #include <vector>
 #include <sys/time.h>
+#include <unistd.h>
+#ifdef __APPLE__
+#include <sys/sysctl.h>
+#endif
 
 // GLOBALS
 static char **Cmi_argv;
@@ -37,7 +41,33 @@ ConverseNodeQueue<void *> *CmiNodeQueue;
 CpvDeclare(Queue, CsdSchedQueue);
 CpvDeclare(TaskQueue, CsdTaskQueue);
 CsvDeclare(Queue, CsdNodeQueue);
-CsvDeclare(std::atomic<int>, CsdNodeQueueLen);
+CsvDeclare(CsdNodeQueueLen_t, CsdNodeQueueLen);
+static_assert(sizeof(CsdNodeQueueLen_t) == CMI_CACHE_LINE_SIZE &&
+                  alignof(CsdNodeQueueLen_t) == CMI_CACHE_LINE_SIZE,
+              "CsdNodeQueueLen must own exactly one cache line");
+
+// Data padded to keep PEs from sharing a cache line (CsdNodeQueueLen, the LCI2
+// per-device locks) is padded to the compile-time CMI_CACHE_LINE_SIZE. Warn if
+// this machine's line is larger, so the padding no longer separates them. The
+// OS may not report a size (sysconf returns 0 or -1 on some systems); then
+// there is nothing to check.
+static void CmiCheckCacheLineSize() {
+  long line = 0;
+#if defined(__APPLE__)
+  int64_t value = 0;
+  size_t len = sizeof(value);
+  if (sysctlbyname("hw.cachelinesize", &value, &len, NULL, 0) == 0)
+    line = (long)value;
+#elif defined(_SC_LEVEL1_DCACHE_LINESIZE)
+  line = sysconf(_SC_LEVEL1_DCACHE_LINESIZE);
+#endif
+  if (line > CMI_CACHE_LINE_SIZE)
+    printf("Reconverse> Warning: this machine's cache line is %ld bytes, but "
+           "reconverse was built to pad shared data to %d bytes "
+           "(CMI_CACHE_LINE_SIZE in converse.h); PEs may still contend on "
+           "shared lines. Rebuild with a larger CMI_CACHE_LINE_SIZE.\n",
+           line, CMI_CACHE_LINE_SIZE);
+}
 CsvDeclare(CmiNodeLock, CsdNodeQueueLock);
 double Cmi_startTime;
 CmiSpanningTreeInfo *_topoTree = NULL;
@@ -410,6 +440,7 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
     std::string ppnType = (Cmi_mynodesize == 1) ? "PE per process" : "PEs per process";
       printf("Reconverse> Starting Reconverse with %d %s, %d %s (1 PE = 1 thread), and %d %s\n",
            Cmi_numnodes, processType.c_str(), Cmi_npes, peType.c_str(), Cmi_mynodesize, ppnType.c_str());
+    CmiCheckCacheLineSize();
   }
   Cmi_nodestart = Cmi_mynode * Cmi_mynodesize;
   // register am handlers
@@ -515,12 +546,12 @@ void CmiInitState(int rank) {
   CpvAccess(CsdSchedQueue) = (Queue)malloc(sizeof(QueueImpl));
   QueueInit(CpvAccess(CsdSchedQueue));
   CsvInitialize(Queue, CsdNodeQueue);
-  CsvInitialize(std::atomic<int>, CsdNodeQueueLen);
+  CsvInitialize(CsdNodeQueueLen_t, CsdNodeQueueLen);
   if (CmiMyRank() == 0) {
     CsvAccess(CsdNodeQueueLock) = CmiCreateLock();
     CsvAccess(CsdNodeQueue) = (Queue)malloc(sizeof(QueueImpl));
     QueueInit(CsvAccess(CsdNodeQueue));
-    CsvAccess(CsdNodeQueueLen).store(0, std::memory_order_relaxed);
+    CsvAccess(CsdNodeQueueLen).v.store(0, std::memory_order_relaxed);
   }
   CmiNodeBarrier();
 }

@@ -209,10 +209,10 @@ void CommBackendLCI2::init(char **argv) {
 
   lci::g_runtime_init_x().alloc_default_device(false)();
   m_devices.resize(num_devices);
-  m_progress_locks = std::vector<std::atomic<bool>>(num_devices);
+  m_progress_locks = std::vector<PaddedLock>(num_devices);
   for (int i = 0; i < num_devices; i++) {
     m_devices[i] = lci::alloc_device();
-    m_progress_locks[i].store(false, std::memory_order_relaxed);
+    m_progress_locks[i].v.store(false, std::memory_order_relaxed);
   }
 
   m_local_comp = lci::alloc_handler(localCallback);
@@ -367,7 +367,7 @@ bool CommBackendLCI2::progress(void) {
   if (!detail::g_thread_context.tls_device.is_empty()) {
     int dev_idx = detail::g_thread_context.device_idx;
     bool expected = false;
-    if (!m_progress_locks[dev_idx].compare_exchange_strong(
+    if (!m_progress_locks[dev_idx].v.compare_exchange_strong(
             expected, true, std::memory_order_acquire,
             std::memory_order_relaxed)) {
       return false;
@@ -379,13 +379,13 @@ bool CommBackendLCI2::progress(void) {
     detail::g_in_progress_callback = true;
     auto ret = lci::progress_x().device(detail::g_thread_context.tls_device)();
     detail::g_in_progress_callback = prev_in_cb;
-    m_progress_locks[dev_idx].store(false, std::memory_order_release);
+    m_progress_locks[dev_idx].v.store(false, std::memory_order_release);
     return ret.is_done();
   } else {
     bool did_progress = false;
     for (int i = 0; i < (int)m_devices.size(); i++) {
       bool expected = false;
-      if (!m_progress_locks[i].compare_exchange_strong(
+      if (!m_progress_locks[i].v.compare_exchange_strong(
               expected, true, std::memory_order_acquire,
               std::memory_order_relaxed)) {
         continue;
@@ -394,7 +394,7 @@ bool CommBackendLCI2::progress(void) {
       detail::g_in_progress_callback = true;
       auto ret = lci::progress_x().device(m_devices[i])();
       detail::g_in_progress_callback = prev_in_cb;
-      m_progress_locks[i].store(false, std::memory_order_release);
+      m_progress_locks[i].v.store(false, std::memory_order_release);
       if (ret.is_done())
         did_progress = true;
     }

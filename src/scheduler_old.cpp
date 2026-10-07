@@ -104,12 +104,12 @@ void CsdSchedulerOld() {
       // line dominates the scheduler loop and so the latency of noticing any
       // message at all. Measured at 1 process x 120 PEs: 4201 ns per idle
       // iteration before, 88 ns after.
-      if (CsvAccess(CsdNodeQueueLen).load(std::memory_order_relaxed) > 0 &&
+      if (CsdNodeQueueLenGet() > 0 &&
           CmiTryLock(CsvAccess(CsdNodeQueueLock)) == 0) {
         if (!QueueEmpty(CsvAccess(CsdNodeQueue))) {
           void* msg = QueueTop(CsvAccess(CsdNodeQueue));
           QueuePop(CsvAccess(CsdNodeQueue));
-          CsvAccess(CsdNodeQueueLen).fetch_sub(1, std::memory_order_relaxed);
+          CsdNodeQueueLenAdd(-1);
           CmiUnlock(CsvAccess(CsdNodeQueueLock));
 
           // release idle if necessary
@@ -307,12 +307,12 @@ void CsdSchedulePollOld() {
       // line dominates the scheduler loop and so the latency of noticing any
       // message at all. Measured at 1 process x 120 PEs: 4201 ns per idle
       // iteration before, 88 ns after.
-      if (CsvAccess(CsdNodeQueueLen).load(std::memory_order_relaxed) > 0 &&
+      if (CsdNodeQueueLenGet() > 0 &&
           CmiTryLock(CsvAccess(CsdNodeQueueLock)) == 0) {
         if (!QueueEmpty(CsvAccess(CsdNodeQueue))) {
           void *msg = QueueTop(CsvAccess(CsdNodeQueue));
           QueuePop(CsvAccess(CsdNodeQueue));
-          CsvAccess(CsdNodeQueueLen).fetch_sub(1, std::memory_order_relaxed);
+          CsdNodeQueueLenAdd(-1);
           CmiUnlock(CsvAccess(CsdNodeQueueLock));
 
           // release idle if necessary
