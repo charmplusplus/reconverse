@@ -27,9 +27,6 @@ void CsdSchedulerOld() {
   // get node level queue
   ConverseNodeQueue<void *> *nodeQueue = CmiGetNodeQueue();
 
-  // get this PE's self queue
-  ConverseSelfQueue<void *> *selfQueue = CmiGetSelfQueue();
-
   int loop_counter = 0;
 
   // +backend_poll_freq is a rate: larger means progress is polled more often.
@@ -39,7 +36,10 @@ void CsdSchedulerOld() {
   int poll_period = BACKEND_POLL_FREQ_DEFAULT / backend_poll_freq;
   if (poll_period < 1) poll_period = 1;
 
+  int tq_streak = 0; bool took_tq = false; // fairness bound, see the thread-queue branch below
   while (CmiStopFlag() == 0) {
+    if (!took_tq) tq_streak = 0;
+    took_tq = false;
 
     CcdRaiseCondition(CcdSCHEDLOOP);
 
@@ -67,22 +67,15 @@ void CsdSchedulerOld() {
       }
     }
 
-    // poll self queue
-    else if (!selfQueue->empty()) {
-      void *msg = selfQueue->pop();
-
-      // release idle if necessary
-      if (CmiGetIdle()) {
-        CmiSetIdle(false);
-        CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
-      }
-
-      // process event
-      CmiHandleMessage(msg);
-    }
-
-    // poll thread queue
-    else if (!queue->empty()) {
+    // poll the thread queue (this PE's ConverseQueue, the multi-producer
+    // single-consumer queue that other PEs and the network push into), unless
+    // it has supplied +thread_queue_max messages in a row and the priority
+    // queue is waiting: a sustained stream from outside must not starve this
+    // PE's own queued work (self-sends, Charm++ local messages, thread tokens).
+    // The registered scheduler has the same bound from its 16:16 slot weights.
+    else if (!queue->empty() &&
+             !(tq_streak >= thread_queue_max && !QueueEmpty(CpvAccess(CsdSchedQueue)))) {
+      took_tq = true; tq_streak++;
       // get next event (guaranteed to be there because only single consumer)
       void *msg = queue->pop().value();
 
@@ -242,10 +235,10 @@ void CsdSchedulePollOld() {
   // get node level queue
   ConverseNodeQueue<void *> *nodeQueue = CmiGetNodeQueue();
 
-  // get this PE's self queue
-  ConverseSelfQueue<void *> *selfQueue = CmiGetSelfQueue();
-
+  int tq_streak = 0; bool took_tq = false; // fairness bound, see the thread-queue branch below
   while(1){
+    if (!took_tq) tq_streak = 0;
+    took_tq = false;
 
     CsdPeriodic();
 
@@ -269,22 +262,15 @@ void CsdSchedulePollOld() {
       }
     }
 
-    // poll self queue
-    else if (!selfQueue->empty()) {
-      void *msg = selfQueue->pop();
-
-      // release idle if necessary
-      if (CmiGetIdle()) {
-        CmiSetIdle(false);
-        CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
-      }
-
-      // process event
-      CmiHandleMessage(msg);
-    }
-
-    // poll thread queue
-    else if (!queue->empty()) {
+    // poll the thread queue (this PE's ConverseQueue, the multi-producer
+    // single-consumer queue that other PEs and the network push into), unless
+    // it has supplied +thread_queue_max messages in a row and the priority
+    // queue is waiting: a sustained stream from outside must not starve this
+    // PE's own queued work (self-sends, Charm++ local messages, thread tokens).
+    // The registered scheduler has the same bound from its 16:16 slot weights.
+    else if (!queue->empty() &&
+             !(tq_streak >= thread_queue_max && !QueueEmpty(CpvAccess(CsdSchedQueue)))) {
+      took_tq = true; tq_streak++;
       // get next event (guaranteed to be there because only single consumer)
       void *msg = queue->pop().value();
 

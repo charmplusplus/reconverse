@@ -125,42 +125,6 @@ public:
     }
 };
 
-
-// A queue for messages a PE sends to itself. The owning PE is the only
-// producer and the only consumer, so it needs no synchronization at all.
-template <typename MessageType>
-class SPSCQueue
-{
-    std::deque<MessageType> q;
-
-public:
-    // only valid when the queue is not empty
-    MessageType pop()
-    {
-        MessageType message = q.front();
-        q.pop_front();
-        return message;
-    }
-
-    void push(MessageType message)
-    {
-        q.push_back(message);
-    }
-
-    bool empty()
-    {
-        return q.empty();
-    }
-
-    size_t size()
-    {
-        return q.size();
-    }
-};
-
-template <typename MessageType>
-using ConverseSelfQueue = SPSCQueue<MessageType>;
-
 #ifdef ATOMIC_QUEUE_ENABLED
 template <typename MessageType>
 using ConverseQueue = MPSCQueue<MessageType, AtomicAccessControl<MessageType>>;
