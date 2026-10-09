@@ -1512,9 +1512,63 @@ inline const std::size_t& CmiRecommendedIpcBlockCutoff(void) {
   using namespace cmi::ipc;
   return CpvAccess(kRecommendedCutoff);
 }
+
+// Hand a message to a peer process on this host through the shared-memory
+// pool, instead of over the network backend. On success the pool owns the
+// message, exactly as CmiSyncSendAndFree would, and this returns true; on
+// failure the message is left untouched for the caller to send some other
+// way. destRank is the destination's rank within its process, or
+// cmi::ipc::nodeDatagram for a message bound for that process's node queue.
+//
+// Fails, rather than aborting, whenever the pool cannot carry the message:
+// IPC is off, the destination is this process or is on another host, the
+// message is over CmiRecommendedIpcBlockCutoff(), or the pool is full.
+bool CmiIpcTrySendAndFree(int destNode, int destRank, int messageSize,
+                          void *msg);
+
+// Whether the shared-memory pool is up and destNode is another process on
+// this host, i.e. whether a small enough message to destNode would go through
+// the pool rather than the network. A layer that follows a one-sided put with
+// a notification has to know this: the put still crosses the network, but the
+// notification would not, and could arrive before the data does.
+bool CmiIpcReaches(int destNode);
 #endif /* __cplusplus */
 
 CsvExtern(CmiIpcManager*, coreIpcManager_);
+
+/* Whether this run moves messages between processes that share a host
+   through shared memory. Off unless the program was given +ipc. */
+CLINKAGE int CmiIpcEnabled(void);
+/* The mechanism backing the pool: "posixshm", "xpmem", or "none". */
+CLINKAGE const char *CmiIpcImplName(void);
+/* Processes sharing this host, this one included (1 when IPC is off). */
+CLINKAGE int CmiIpcNumPeers(void);
+/* Messages this PE has put into, and taken out of, the pool. Intended for
+   tests and diagnostics: a PE takes messages out of the pool on behalf of
+   its whole process, so the two do not balance per PE. */
+CLINKAGE long CmiIpcMessagesSent(void);
+CLINKAGE long CmiIpcMessagesReceived(void);
+
+/* Keep this PE's sends off the shared-memory pool until the matching
+   CmiIpcEndNetworkOnly(); nestable.
+
+   A layer that follows a one-sided put with a notification needs this. The
+   put crosses the network, but a notification handed to a peer process on
+   this host would go through the pool, which does not wait for the network:
+   it can arrive before the data has landed, and the receiver's callback would
+   run on a buffer that is still stale. Sending the notification over the
+   backend instead leaves it behind the put's local completion, which is the
+   ordering the network path has always relied on.
+
+   Only sends the pool would otherwise have carried are affected: a send to
+   this process, to another host, or over CmiRecommendedIpcBlockCutoff() takes
+   the same path either way.
+
+   The depth is per-PE, so the two calls have to bracket a stretch of work on
+   one PE that does not suspend: park a thread in between and every send that
+   PE makes meanwhile stays off the pool too. */
+CLINKAGE void CmiIpcBeginNetworkOnly(void);
+CLINKAGE void CmiIpcEndNetworkOnly(void);
 
 /* Persistent communication */
 #include "persistent.h"

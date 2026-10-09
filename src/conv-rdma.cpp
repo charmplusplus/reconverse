@@ -493,7 +493,28 @@ void CommRputLocalHandler(comm_backend::Status status) {
   // the receiver's callback never runs.
   auto realFreeMe = ncpyOpInfo->freeMe;
   ncpyOpInfo->freeMe = CMK_DONT_FREE_NCPYOPINFO;
+  // Local completion of a put says the source buffer is free again, not that
+  // the bytes are visible at the destination. The destination's ack leaves
+  // this handler as an ordinary Converse message, and with +ipc a destination
+  // in a peer process on this host would receive it through the shared-memory
+  // pool, which does not wait for the network: the ack could overtake the
+  // data and the receiver's callback would run on a stale buffer. Keeping the
+  // ack on the backend puts it behind this completion, the same ordering the
+  // network path has always relied on (persist-comm.cpp writeToBuffer avoids
+  // the same race by not putting to a pool peer at all).
+  //
+  // The scope covers the whole handler rather than one send because the ack
+  // is raised by the upper layer, not from here: Charm++ reaches the
+  // destination through invokeDestinationCallback, or through
+  // CmiInvokeRemoteDeregAckHandler when registration is required, and a
+  // reconverse program through whatever its own RdmaAckCallerFn sends.
+  // Read destPe first: the handler may hand ncpyOpInfo on.
+  const bool orderBehindPut = CmiIpcReaches(CmiNodeOf(ncpyOpInfo->destPe));
+  if (orderBehindPut)
+    CmiIpcBeginNetworkOnly();
   ncpyDirectAckHandlerFn(ncpyOpInfo);
+  if (orderBehindPut)
+    CmiIpcEndNetworkOnly();
   if (realFreeMe == CMK_FREE_NCPYOPINFO)
     CmiFree(ncpyOpInfo);  
 }
@@ -502,7 +523,9 @@ void CommRputLocalHandler(comm_backend::Status status) {
 void CommRgetLocalHandler(comm_backend::Status status) {
   NcpyOperationInfo *ncpyOpInfo = (NcpyOperationInfo *)status.user_context;
   // See CommRputLocalHandler: leave ackMode at its CMK_SRC_DEST_ACK default so
-  // the source ack is not dropped.
+  // the source ack is not dropped. No ordering scope is needed here: local
+  // completion of a get means the data is already in this process, so nothing
+  // this handler sends can outrun it.
   auto realFreeMe = ncpyOpInfo->freeMe;
   ncpyOpInfo->freeMe = CMK_DONT_FREE_NCPYOPINFO;
   ncpyDirectAckHandlerFn(ncpyOpInfo);
