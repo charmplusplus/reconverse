@@ -12,7 +12,7 @@
 // ---------------------------------------------------------------------------
 // Scheduler selection
 //
-// Two scheduler implementations live side by side:
+// Three scheduler implementations live side by side:
 //
 //   scheduler_registered.cpp  the default. Queues register poll handlers into
 //                             a slot table (see scheduler_registry.cpp) and the
@@ -23,8 +23,12 @@
 //                             set of queues, kept reachable with the
 //                             +old-scheduler runtime flag.
 //
+//   scheduler_randomized.cpp  a debugging loop, selected with +randomized_msgq,
+//                             that drains every source into one per-PE pool
+//                             and runs a uniformly random message from it.
+//
 // The public CsdScheduler()/CsdSchedulePoll() in scheduler.cpp dispatch to one
-// of the two. Queue registration is the default; +old-scheduler opts out.
+// of the three. Queue registration is the default.
 // ---------------------------------------------------------------------------
 
 // Set once by CmiSchedulerInitArgs(), before any PE thread starts, and only
@@ -32,7 +36,14 @@
 extern bool _Cmi_useOldScheduler;
 inline bool CmiSchedulerIsOld() { return _Cmi_useOldScheduler; }
 
-// Consumes +old-scheduler from argv. Must run before CmiQueueRegisterInit().
+// Set once by CmiSchedulerInitArgs() like _Cmi_useOldScheduler.
+// _Cmi_randomizedSeed is the base seed; each PE mixes its PE number into it.
+extern bool _Cmi_useRandomizedScheduler;
+extern uint64_t _Cmi_randomizedSeed;
+inline bool CmiSchedulerIsRandomized() { return _Cmi_useRandomizedScheduler; }
+
+// Consumes +old-scheduler, +randomized_msgq and +randomized_seed from argv.
+// Must run before CmiQueueRegisterInit().
 void CmiSchedulerInitArgs(char **argv);
 
 // Idle bookkeeping shared by both implementations.
@@ -95,6 +106,13 @@ void CsdSchedulePollRegistered();
 
 void CsdSchedulerOld();
 void CsdSchedulePollOld();
+
+// ---------------------------------------------------------------------------
+// Randomized scheduler (+randomized_msgq)
+// ---------------------------------------------------------------------------
+
+void CsdSchedulerRandomized();
+void CsdSchedulePollRandomized();
 
 void CsdScheduler();
 #endif
