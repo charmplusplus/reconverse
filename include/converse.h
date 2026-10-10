@@ -1289,9 +1289,7 @@ CmiAtomicFetchAndIncImpl(T& input) {
 template <typename T>
 typename std::enable_if<!CmiIsAtomic<T>::value, T>::type
 CmiAtomicFetchAndIncImpl(T& input) {
-    T old = input;
-    ++input;
-    return old;
+    return __atomic_fetch_add(&input, T(1), __ATOMIC_SEQ_CST);
 }
 
 #define CmiMemoryAtomicFetchAndInc(input, output) ((output) = CmiAtomicFetchAndIncImpl(input))
