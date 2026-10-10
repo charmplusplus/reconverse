@@ -1286,11 +1286,6 @@ CmiAtomicFetchAndIncImpl(T& input) {
     return std::atomic_fetch_add(&input, typename T::value_type(1));
 }
 
-// A plain integer must still be incremented atomically: callers share it
-// between PEs exactly as they would a std::atomic. NAMD's PME pencils count
-// arriving messages in a plain int this way (CmiMemoryAtomicType is not
-// defined here, so its AtomicInt falls back to int), and a lost increment
-// leaves the pencil waiting forever for a message it already received.
 template <typename T>
 typename std::enable_if<!CmiIsAtomic<T>::value, T>::type
 CmiAtomicFetchAndIncImpl(T& input) {
