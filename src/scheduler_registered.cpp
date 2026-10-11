@@ -12,99 +12,38 @@
 // it. Running CsdSchedQueue while it is non-empty picks the "highest
 // priority" message from an incomplete set (issue #258).
 //
-// The original hardcoded loop is in scheduler_old.cpp (+old-scheduler).
+// The original hardcoded loop is in scheduler_old.cpp (+old-scheduler), and
+// the randomized loop in scheduler_randomized.cpp (+randomized_msgq).
 
-#include "scheduler.h"
-#if CMK_TASKQUEUE
-#include "taskqueue.h"
-CpvExtern(TaskQueue, CsdTaskQueue);
-#endif
+#include "scheduler_take.h"
 
 extern std::vector<QueuePollHandler> g_handlers; //list of handlers
 extern Groups g_groups; //groups of handlers by index
 CpvExtern(QueuePollHandlerFn *, poll_handlers);
 
-//poll converse-level node queue
-bool pollConverseNodeQueue() {
-  ConverseNodeQueue<void *> *nodeQueue = CmiGetNodeQueue();
-  if (!nodeQueue->empty()) {
-    auto result = nodeQueue->pop();
-    if (result) {
-      void *msg = result.value();
-      CmiSchedulerReleaseIdle();
-      // process event
-      CmiHandleMessage(msg);
-      return true;
-    }
-  }
-  return false;
+// Each handler is the source's take (scheduler_take.h) followed by running
+// the message.
+static inline bool runTaken(void *msg) {
+  if (msg == nullptr) return false;
+  CmiSchedulerReleaseIdle();
+  CmiHandleMessage(msg);
+  return true;
 }
+
+//poll converse-level node queue
+bool pollConverseNodeQueue() { return runTaken(CmiTakeNodeQueue()); }
 
 //poll this PE's self queue
-bool pollSelfQueue() {
-  ConverseSelfQueue<void *> *selfQueue = CmiGetSelfQueue();
-  if (!selfQueue->empty()) {
-    void *msg = selfQueue->pop();
-    CmiSchedulerReleaseIdle();
-    // process event
-    CmiHandleMessage(msg);
-    return true;
-  }
-  return false;
-}
+bool pollSelfQueue() { return runTaken(CmiTakeSelfQueue()); }
 
 //poll converse-level thread queue
-bool pollConverseThreadQueue() {
-  ConverseQueue<void *> *queue = CmiGetQueue(CmiMyRank());
-  if (!queue->empty()) {
-    // get next event (guaranteed to be there because only single consumer)
-    void *msg = queue->pop().value();
-    CmiSchedulerReleaseIdle();
-    // process event
-    CmiHandleMessage(msg);
-    return true;
-  }
-  return false;
-}
+bool pollConverseThreadQueue() { return runTaken(CmiTakeThreadQueue()); }
 
 //poll node priority queue
-bool pollNodePrioQueue() {
-  // Check the queue length before reaching for the lock. CmiTryLock is a
-  // CAS on a single process-wide cacheline, and an idle PE would otherwise
-  // execute it on every loop iteration; with many PEs per process that one
-  // line dominates the scheduler loop and so the latency of noticing any
-  // message at all. Measured at 1 process x 120 PEs: 4201 ns per idle
-  // iteration before, 88 ns after.
-  if (CsdNodeQueueLenGet() > 0 &&
-      CmiTryLock(CsvAccess(CsdNodeQueueLock)) == 0) {
-    if (!QueueEmpty(CsvAccess(CsdNodeQueue))) {
-      void *msg = QueueTop(CsvAccess(CsdNodeQueue));
-      QueuePop(CsvAccess(CsdNodeQueue));
-      CsdNodeQueueLenAdd(-1);
-      CmiUnlock(CsvAccess(CsdNodeQueueLock));
-      CmiSchedulerReleaseIdle();
-      // process event
-      CmiHandleMessage(msg);
-      return true;
-    } else {
-      CmiUnlock(CsvAccess(CsdNodeQueueLock));
-    }
-  }
-  return false;
-}
+bool pollNodePrioQueue() { return runTaken(CmiTakeNodePrioQueue()); }
 
 //poll thread priority queue
-bool pollThreadPrioQueue() {
-  if (!QueueEmpty(CpvAccess(CsdSchedQueue))) {
-    void *msg = QueueTop(CpvAccess(CsdSchedQueue));
-    QueuePop(CpvAccess(CsdSchedQueue));
-    CmiSchedulerReleaseIdle();
-    // process event
-    CmiHandleMessage(msg);
-    return true;
-  }
-  return false;
-}
+bool pollThreadPrioQueue() { return runTaken(CmiTakeThreadPrioQueue()); }
 
 bool pollProgress()
 {
@@ -113,20 +52,13 @@ bool pollProgress()
 }
 
 #if CMK_TASKQUEUE
-bool pollTaskQueue() {
-  void *task_msg = TaskQueuePopLocal();
-  if (task_msg != nullptr) {
-    CmiSchedulerReleaseIdle();
-    CmiHandleMessage(task_msg);
-    return true;
-  }
-  return false;
-}
+bool pollTaskQueue() { return runTaken(CmiTakeTaskQueue()); }
 #endif
 
 //called per PE, builds that PE's slot table
 void CmiQueueRegisterInitThread() {
-  if (CmiSchedulerIsOld()) return; //+old-scheduler polls queues directly
+  //+old-scheduler and +randomized_msgq poll queues directly
+  if (CmiSchedulerIsOld() || CmiSchedulerIsRandomized()) return;
   std::vector<std::pair<QueuePollHandlerFn, unsigned int>> handlers;
   handlers.push_back(std::make_pair(pollConverseNodeQueue, 1));
   handlers.push_back(std::make_pair(pollSelfQueue, 16));
@@ -143,7 +75,8 @@ void CmiQueueRegisterInitThread() {
 //will add queue polling functions
 //called at node level (before threads created)
 void CmiQueueRegisterInit() {
-  if (CmiSchedulerIsOld()) return; //+old-scheduler polls queues directly
+  //+old-scheduler and +randomized_msgq poll queues directly
+  if (CmiSchedulerIsOld() || CmiSchedulerIsRandomized()) return;
   add_handler(pollConverseNodeQueue, 1);
   add_handler(pollSelfQueue, 16);
   add_handler(pollConverseThreadQueue, 16);

@@ -3,20 +3,45 @@
 // The loops themselves live in the two implementation files:
 //   scheduler_registered.cpp  queue registration + slot table (default)
 //   scheduler_old.cpp         original hardcoded chain (+old-scheduler)
+//   scheduler_randomized.cpp  random draw from one pool (+randomized_msgq)
 // This file picks between them and holds the pieces both share.
 
 #include "scheduler.h"
+#include <chrono>
 
 // false => registered scheduler (the default). Written once by
 // CmiSchedulerInitArgs() on the main thread, before CmiStartThreads() spawns
 // any PE, and only read from then on, so no synchronization is needed.
 bool _Cmi_useOldScheduler = false;
 
+// Written the same way as _Cmi_useOldScheduler.
+bool _Cmi_useRandomizedScheduler = false;
+uint64_t _Cmi_randomizedSeed = 0;
+bool _Cmi_randomizedSeedGiven = false;
+
 void CmiSchedulerInitArgs(char **argv) {
   _Cmi_useOldScheduler = CmiGetArgFlagDesc(
       argv, "+old-scheduler",
       "Use the original hardcoded scheduler loop instead of the default "
       "registered-queue scheduler");
+  _Cmi_useRandomizedScheduler = CmiGetArgFlagDesc(
+      argv, "+randomized_msgq",
+      "Run messages in uniformly random order from one pool fed by every "
+      "message source (debugging; ignores priorities and FIFO order)");
+  CmiInt8 seed = 0;
+  if (CmiGetArgLongDesc(argv, "+randomized_seed", &seed,
+                        "Base seed for +randomized_msgq (default: from the "
+                        "wall clock)")) {
+    _Cmi_randomizedSeed = (uint64_t)seed;
+    _Cmi_randomizedSeedGiven = true;
+  } else {
+    _Cmi_randomizedSeed = (uint64_t)std::chrono::duration_cast<
+        std::chrono::microseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+  }
+  if (_Cmi_useRandomizedScheduler && _Cmi_useOldScheduler)
+    CmiAbort("+randomized_msgq cannot be combined with +old-scheduler: the "
+             "randomized loop replaces the scheduler loop, so pick one");
 }
 
 // Idle bookkeeping, shared so both implementations raise the same conditions.
@@ -60,6 +85,7 @@ bool CmiSchedulerPollIpc() {
  */
 void CsdScheduler() {
   if (CmiSchedulerIsOld()) CsdSchedulerOld();
+  else if (CmiSchedulerIsRandomized()) CsdSchedulerRandomized();
   else CsdSchedulerRegistered();
 }
 
@@ -69,6 +95,7 @@ void CsdScheduler() {
  */
 void CsdSchedulePoll() {
   if (CmiSchedulerIsOld()) CsdSchedulePollOld();
+  else if (CmiSchedulerIsRandomized()) CsdSchedulePollRandomized();
   else CsdSchedulePollRegistered();
 }
 

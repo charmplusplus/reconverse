@@ -90,6 +90,8 @@ The example executables are located in the build/test/<program_name> folders. Yo
 - **`+ipcmode <auto|shm|xpmem>`**: pick the mechanism backing the shared-memory pool. Implies `+ipc`.
 - **`++ipcpoolsize <bytes>`**: size of each process's shared-memory pool (8 MiB by default).
 - **`++ipccutoff <bytes>`**: largest message the pool will carry. Messages above it go over the communication backend. Defaults to 32 KiB, or to a bin below `poolsize / 25` when that is smaller.
+- **`+randomized_msgq`**: run messages in a uniformly random order, for shaking out message-order races. See [Randomized message order](#randomized-message-order-randomized_msgq). Cannot be combined with `+old-scheduler`.
+- **`+randomized_seed <N>`**: base seed for `+randomized_msgq`. Defaults to a value taken from the wall clock; the startup banner prints the seed in use.
 
 ## Shared-memory IPC (`+ipc`)
 
@@ -226,6 +228,45 @@ holds the data by the time the acknowledgement is delivered.
 * A process killed outright (not `CmiExit`) leaves its POSIX shared memory
   segment behind in `/dev/shm`; a clean exit unlinks it. `xpmem` has nothing
   to leave behind.
+
+## Randomized message order (`+randomized_msgq`)
+
+A debugging mode. With `+randomized_msgq`, each PE's scheduler loop moves
+every message in its own sources into one pool before running anything:
+the converse thread queue, the self queue, the PE priority queue, messages
+the network just delivered and blocks a peer process left in the
+shared-memory IPC pool. From the sources it shares with the other PEs (the
+node queue, the node priority queue and the task queue with
+`CMK_TASKQUEUE`) it takes one message per iteration, so the rest stay where
+the other PEs can run or steal them at the same time, as under the default
+loop. It then runs one message chosen uniformly at random from the pool,
+and repeats. Nothing bypasses the pool, so priorities, FIFO order and
+Charm++'s `[expedited]` entries are not respected, and a program that
+depends on message order without guaranteeing it tends to fail quickly.
+
+```
+$ ./reconverse_megarecon +pe 4 +randomized_msgq
+Reconverse> Randomized message queue (+randomized_msgq, seed 1791586969496906): priorities, FIFO order and [expedited] are not respected.
+```
+
+Each PE seeds its own `std::mt19937_64` from the base seed and its PE
+number, and reduces its output to a pool index itself, so a seed gives the
+same draws with every compiler and standard library. Passing
+`+randomized_seed <N>` repeats the sequence of draws; it does not make the
+run deterministic, because message arrival timing still varies. Without
+`+randomized_seed`, each process takes its own seed from its clock and the
+banner shows process 0's, so pass the flag to repeat a multi-process run.
+
+Charm++ under this mode (`reviewed-with-reconverse`, 2026-10-10): megatest
+passes except its `priotest` module, which checks priority order; the
+Charm++ CI test set and `sdag`, `load_balancing`, `reductionTesting`,
+`chkpt` and `demand_creation` pass; `tests/charm++/delegation/multicast`
+hangs on more than one PE, an ordering dependence in CkMulticast's
+migration path that the mode found (charm #4032).
+
+The mode is a separate scheduler loop chosen once when `CsdScheduler()` or
+`CsdSchedulePoll()` is entered; the default loop is unchanged and costs
+nothing extra when the flag is absent.
 
 ## Example Steps to Build and Run Reconverse
 

@@ -474,6 +474,17 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
   if (Cmi_mynode == 0 && CmiSchedulerIsOld())
     printf("Reconverse> Using the original scheduler (+old-scheduler); queue "
            "registration is disabled\n");
+  if (Cmi_mynode == 0 && CmiSchedulerIsRandomized()) {
+    printf("Reconverse> Randomized message queue (+randomized_msgq, seed "
+           "%llu): priorities, FIFO order and [expedited] are not "
+           "respected.\n",
+           (unsigned long long)_Cmi_randomizedSeed);
+    if (!_Cmi_randomizedSeedGiven && Cmi_numnodes > 1)
+      printf("Reconverse> That seed is process 0's, from its clock; the %d "
+             "other process%s drew their own. Pass +randomized_seed <N> to "
+             "use one seed everywhere.\n",
+             Cmi_numnodes - 1, Cmi_numnodes == 2 ? "" : "es");
+  }
 
   Cmi_argv = argv;
   Cmi_startfn = fn;
