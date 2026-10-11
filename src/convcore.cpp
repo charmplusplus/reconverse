@@ -104,6 +104,7 @@ int _Cmi_mynode_global;
 int _Cmi_numnodes_global;
 int Cmi_nodestartGlobal;
 int backend_poll_freq;
+int thread_queue_max; // +thread_queue_max: old scheduler, consecutive thread-queue messages before the priority queue gets a turn
 int backend_poll_thread;
 
 void (*CmiTraceFn)(char **argv) = nullptr;
@@ -114,10 +115,11 @@ void CldModuleInit(char **);
 static ConverseQueue<void *> **Cmi_queues; // array of queue pointers
 
 // PE LOCALS
-// -1 until CmiInitState runs, so threads that are not PEs (which have no self
-// queue) never match a destination rank in CmiPushPE
+// -1 until CmiInitState runs, so a thread that is not a PE never matches its
+// own rank in CmiSyncSendAndFreeNoPersistent and is kept off the unlocked
+// CsdSchedQueue: its sends go through CmiPushPE to the destination's thread
+// queue
 thread_local int Cmi_myrank = -1;
-thread_local ConverseSelfQueue<void *> Cmi_selfQueue;
 thread_local CmiState Cmi_state;
 thread_local bool idle_condition;
 thread_local double idle_time;
@@ -464,6 +466,10 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
 
   backend_poll_freq = BACKEND_POLL_FREQ_DEFAULT;
   CmiGetArgInt(argv, "+backend_poll_freq", &backend_poll_freq);
+  thread_queue_max = 16;
+  CmiGetArgIntDesc(argv, "+thread_queue_max", &thread_queue_max,
+                   "old scheduler: after N consecutive thread-queue messages, run one from the priority queue");
+  if (thread_queue_max < 1) thread_queue_max = 1;
   if (backend_poll_freq < 1) backend_poll_freq = 1;
   backend_poll_thread = 1; // default to every thread
   CmiGetArgInt(argv, "+backend_poll_thread", &backend_poll_thread);
@@ -568,8 +574,6 @@ void CmiInitState(int rank) {
 
 ConverseQueue<void *> *CmiGetQueue(int rank) { return Cmi_queues[rank]; }
 
-ConverseSelfQueue<void *> *CmiGetSelfQueue() { return &Cmi_selfQueue; }
-
 int CmiMyRank() { return CmiGetState()->rank; }
 
 int CmiMyPe() { return CmiGetState()->pe; }
@@ -642,23 +646,19 @@ void CmiPushPE(int destRank, int messageSize, void *msg) {
       rank >= 0 && rank < Cmi_mynodesize,
       "CmiPushPE(myPe: %d, destPe: %d, nodeSize: %d): rank out of range",
       CmiMyPe(), destRank, Cmi_mynodesize);
-  // a PE sending to itself owns both ends of the queue, so it can bypass the
-  // atomics of the shared per-PE queue
-  if (rank == Cmi_myrank) {
-    Cmi_selfQueue.push(msg);
-    return;
-  }
   Cmi_queues[rank]->push(msg);
 }
 
-/* Classic Converse scheduler-queue enqueue API, used by Charm++'s
- * record-replay engine (ck.C) to re-inject messages it delayed. Reconverse's
- * per-PE queues have no front insertion, so both variants map to a FIFO push
- * onto the caller's own queue. For the replay engine this is correct, merely
- * less prompt: CsdEnqueueLifo is a "process this next" hint, and every
- * delivery re-checks the engine's expected-next predicate. */
-void CsdEnqueue(void *msg) { CmiPushPE(CmiMyRank(), msg); }
-void CsdEnqueueLifo(void *msg) { CmiPushPE(CmiMyRank(), msg); }
+/* Classic Converse scheduler-enqueue API: a message the calling PE wants
+ * scheduled on itself goes into its own priority queue (CsdSchedQueue, at
+ * priority 0), at the back or at the front. The queue belongs to this PE and
+ * is unlocked, so only the owning PE may call these. Users: a CmiSyncSend to
+ * one's own PE, CthAwaken's thread tokens, and Charm++'s record-replay engine
+ * (ck.C), for which CsdEnqueueLifo means "process this next". A self-sent
+ * message is thus scheduled like a Charm++ local message: behind the node
+ * queue and the messages from other PEs and the network. */
+void CsdEnqueue(void *msg) { QueuePush(CpvAccess(CsdSchedQueue), msg, 0); }
+void CsdEnqueueLifo(void *msg) { QueuePushFront(CpvAccess(CsdSchedQueue), msg, 0); }
 
 /* Classic Converse filesystem utility, used by Charm++'s checkpoint code. */
 extern "C" void CmiMkdir(const char *dirName) { mkdir(dirName, 0777); }
@@ -794,7 +794,8 @@ void CmiSyncSendAndFreeNoPersistent(int destPE, int messageSize, void *msg) {
   }
 
   if (CmiMyNode() == destNode) {
-    CmiPushPE(CmiRankOf(destPE), messageSize, msg);
+    if (CmiRankOf(destPE) == Cmi_myrank) CsdEnqueue(msg);
+    else CmiPushPE(CmiRankOf(destPE), messageSize, msg);
   } else if (!CmiIpcTrySendAndFree(destNode, CmiRankOf(destPE), messageSize,
                                    msg)) {
     // Not a peer process on this host, or too big for the pool: over the

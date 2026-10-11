@@ -40,19 +40,6 @@ bool pollConverseNodeQueue() {
   return false;
 }
 
-//poll this PE's self queue
-bool pollSelfQueue() {
-  ConverseSelfQueue<void *> *selfQueue = CmiGetSelfQueue();
-  if (!selfQueue->empty()) {
-    void *msg = selfQueue->pop();
-    CmiSchedulerReleaseIdle();
-    // process event
-    CmiHandleMessage(msg);
-    return true;
-  }
-  return false;
-}
-
 //poll converse-level thread queue
 bool pollConverseThreadQueue() {
   ConverseQueue<void *> *queue = CmiGetQueue(CmiMyRank());
@@ -129,7 +116,6 @@ void CmiQueueRegisterInitThread() {
   if (CmiSchedulerIsOld()) return; //+old-scheduler polls queues directly
   std::vector<std::pair<QueuePollHandlerFn, unsigned int>> handlers;
   handlers.push_back(std::make_pair(pollConverseNodeQueue, 1));
-  handlers.push_back(std::make_pair(pollSelfQueue, 16));
   handlers.push_back(std::make_pair(pollConverseThreadQueue, 16));
   handlers.push_back(std::make_pair(pollNodePrioQueue, 1));
   handlers.push_back(std::make_pair(pollThreadPrioQueue, 16));
@@ -145,7 +131,6 @@ void CmiQueueRegisterInitThread() {
 void CmiQueueRegisterInit() {
   if (CmiSchedulerIsOld()) return; //+old-scheduler polls queues directly
   add_handler(pollConverseNodeQueue, 1);
-  add_handler(pollSelfQueue, 16);
   add_handler(pollConverseThreadQueue, 16);
   add_handler(pollNodePrioQueue, 1);
   add_handler(pollThreadPrioQueue, 16);
