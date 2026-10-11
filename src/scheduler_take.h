@@ -27,13 +27,6 @@ inline void *CmiTakeNodeQueue() {
   return nullptr;
 }
 
-// this PE's self queue
-inline void *CmiTakeSelfQueue() {
-  ConverseSelfQueue<void *> *selfQueue = CmiGetSelfQueue();
-  if (!selfQueue->empty()) return selfQueue->pop();
-  return nullptr;
-}
-
 // converse-level thread queue
 inline void *CmiTakeThreadQueue() {
   ConverseQueue<void *> *queue = CmiGetQueue(CmiMyRank());

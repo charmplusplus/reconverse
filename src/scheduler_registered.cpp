@@ -33,9 +33,6 @@ static inline bool runTaken(void *msg) {
 //poll converse-level node queue
 bool pollConverseNodeQueue() { return runTaken(CmiTakeNodeQueue()); }
 
-//poll this PE's self queue
-bool pollSelfQueue() { return runTaken(CmiTakeSelfQueue()); }
-
 //poll converse-level thread queue
 bool pollConverseThreadQueue() { return runTaken(CmiTakeThreadQueue()); }
 
@@ -61,7 +58,6 @@ void CmiQueueRegisterInitThread() {
   if (CmiSchedulerIsOld() || CmiSchedulerIsRandomized()) return;
   std::vector<std::pair<QueuePollHandlerFn, unsigned int>> handlers;
   handlers.push_back(std::make_pair(pollConverseNodeQueue, 1));
-  handlers.push_back(std::make_pair(pollSelfQueue, 16));
   handlers.push_back(std::make_pair(pollConverseThreadQueue, 16));
   handlers.push_back(std::make_pair(pollNodePrioQueue, 1));
   handlers.push_back(std::make_pair(pollThreadPrioQueue, 16));
@@ -78,7 +74,6 @@ void CmiQueueRegisterInit() {
   //+old-scheduler and +randomized_msgq poll queues directly
   if (CmiSchedulerIsOld() || CmiSchedulerIsRandomized()) return;
   add_handler(pollConverseNodeQueue, 1);
-  add_handler(pollSelfQueue, 16);
   add_handler(pollConverseThreadQueue, 16);
   add_handler(pollNodePrioQueue, 1);
   add_handler(pollThreadPrioQueue, 16);
