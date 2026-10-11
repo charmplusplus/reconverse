@@ -17,6 +17,7 @@ bool _Cmi_useOldScheduler = false;
 // Written the same way as _Cmi_useOldScheduler.
 bool _Cmi_useRandomizedScheduler = false;
 uint64_t _Cmi_randomizedSeed = 0;
+bool _Cmi_randomizedSeedGiven = false;
 
 void CmiSchedulerInitArgs(char **argv) {
   _Cmi_useOldScheduler = CmiGetArgFlagDesc(
@@ -32,6 +33,7 @@ void CmiSchedulerInitArgs(char **argv) {
                         "Base seed for +randomized_msgq (default: from the "
                         "wall clock)")) {
     _Cmi_randomizedSeed = (uint64_t)seed;
+    _Cmi_randomizedSeedGiven = true;
   } else {
     _Cmi_randomizedSeed = (uint64_t)std::chrono::duration_cast<
         std::chrono::microseconds>(

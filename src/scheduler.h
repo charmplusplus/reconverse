@@ -38,8 +38,11 @@ inline bool CmiSchedulerIsOld() { return _Cmi_useOldScheduler; }
 
 // Set once by CmiSchedulerInitArgs() like _Cmi_useOldScheduler.
 // _Cmi_randomizedSeed is the base seed; each PE mixes its PE number into it.
+// _Cmi_randomizedSeedGiven says whether it came from +randomized_seed (the
+// same on every process) or from this process's clock.
 extern bool _Cmi_useRandomizedScheduler;
 extern uint64_t _Cmi_randomizedSeed;
+extern bool _Cmi_randomizedSeedGiven;
 inline bool CmiSchedulerIsRandomized() { return _Cmi_useRandomizedScheduler; }
 
 // Consumes +old-scheduler, +randomized_msgq and +randomized_seed from argv.

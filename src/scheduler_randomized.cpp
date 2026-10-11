@@ -3,9 +3,10 @@
 // A debugging mode for shaking out message-order races. Each loop iteration
 //   1. moves one shared-memory IPC block onto its local queue and runs the
 //      backend progress, as the registered loop does;
-//   2. drains every message source -- node queue, self queue, thread queue,
-//      node priority queue, thread priority queue (CsdSchedQueue) and, with
-//      CMK_TASKQUEUE, the task queue -- into one per-PE pool;
+//   2. drains the PE's own sources -- self queue, thread queue and thread
+//      priority queue (CsdSchedQueue) -- into one per-PE pool, and takes at
+//      most one message from each shared source -- node queue, node priority
+//      queue and, with CMK_TASKQUEUE, the task queue;
 //   3. removes a uniformly random message from the pool and runs it.
 // Nothing bypasses the pool: messages the network just delivered, entries
 // Charm++ marks [expedited], and messages a handler re-enqueues (for example
@@ -13,14 +14,21 @@
 // next iteration drains again) all wait in the pool and are drawn at random.
 // Priorities and FIFO order are therefore not respected.
 //
-// Each drain takes at most the number of messages its source held when the
-// drain started, so a source that refills while being drained cannot keep
-// the loop from reaching the draw.
+// A per-PE drain takes at most the number of messages its source held when
+// the drain started, so a source that refills while being drained cannot
+// keep the loop from reaching the draw. The shared sources are limited to
+// one message per iteration so that the rest stay where the other PEs can
+// run them, or steal them from the task queue, at the same time: node-level
+// handlers keep running concurrently, as they do under the default loop, and
+// the races between them stay as likely as there.
 //
 // The draw uses a per-PE std::mt19937_64 seeded with the base seed
 // (+randomized_seed <N>, or the wall clock) mixed with the PE number, so PEs
-// draw different sequences and a given seed repeats them. Message arrival
-// timing is not controlled, so a seed makes the draws repeatable, not the run.
+// draw different sequences and a given seed repeats them, on every platform:
+// mt19937_64 is fully specified and the reduction of its output to an index
+// is done here rather than with std::uniform_int_distribution, whose results
+// differ between standard libraries. Message arrival timing is not
+// controlled, so a seed makes the draws repeatable, not the run.
 //
 // Cost when the flag is off: none. CsdScheduler()/CsdSchedulePoll() choose
 // this loop or the registered one once per call, outside the loops, and the
@@ -73,27 +81,28 @@ inline bool drainInto(std::vector<void *> &pool, size_t bound, Take take) {
 bool fillPool(std::vector<void *> &pool) {
   bool took = CmiSchedulerPollIpc();
   if (CmiMyRank() % backend_poll_thread == 0) comm_backend::progress();
-  took |= drainInto(pool, CmiGetNodeQueue()->size(), CmiTakeNodeQueue);
+  // shared sources: one message each, the rest stay reachable by other PEs
+  took |= drainInto(pool, 1, CmiTakeNodeQueue);
+  took |= drainInto(pool, 1, CmiTakeNodePrioQueue);
+#if CMK_TASKQUEUE
+  took |= drainInto(pool, 1, CmiTakeTaskQueue);
+#endif
+  // this PE's own sources: everything present when the drain starts
   took |= drainInto(pool, CmiGetSelfQueue()->size(), CmiTakeSelfQueue);
   took |= drainInto(pool, CmiGetQueue(CmiMyRank())->size(), CmiTakeThreadQueue);
-  took |= drainInto(pool, (size_t)CsdNodeQueueLenGet(), CmiTakeNodePrioQueue);
   took |= drainInto(pool, (size_t)QueueSize(CpvAccess(CsdSchedQueue)),
                     CmiTakeThreadPrioQueue);
-#if CMK_TASKQUEUE
-  {
-    TaskQueue tq = (TaskQueue)CpvAccess(CsdTaskQueue);
-    taskq_idx n = tq->tail - tq->head;
-    took |= drainInto(pool, n > 0 ? (size_t)n : 0, CmiTakeTaskQueue);
-  }
-#endif
   return took;
 }
 
-// Removes a uniformly random message from a non-empty pool.
+// Removes a uniformly random message from a non-empty pool. The index is
+// the high half of rng() * size (Lemire's multiply-shift reduction): the
+// same seed gives the same draws with every standard library, which
+// std::uniform_int_distribution does not guarantee. The bias of this
+// reduction is below 2^-50 for any pool size that fits in memory.
 void *drawFromPool(RandomizedState &st) {
   std::vector<void *> &pool = st.pool;
-  std::uniform_int_distribution<size_t> pick(0, pool.size() - 1);
-  size_t i = pick(st.rng);
+  size_t i = (size_t)(((unsigned __int128)st.rng() * pool.size()) >> 64);
   void *msg = pool[i];
   pool[i] = pool.back();
   pool.pop_back();

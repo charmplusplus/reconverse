@@ -7,6 +7,9 @@
 //   fifo    (default scheduler): each group runs in sequence order.
 //   random  (+randomized_msgq):  each group's run order has more than N/10
 //                                inversions.
+// Each PE also prints a digest of its run order. With +randomized_seed the
+// draws are fixed and every message is queued before the scheduler starts,
+// so the digests of two runs must agree; repeat.cmake checks that.
 // When every PE has finished, PE 0 broadcasts the exit.
 
 #include <converse.h>
@@ -53,6 +56,10 @@ static void checkAndReport() {
       CmiPrintf("[%d] sequence %d ran %d times\n", CmiMyPe(), i, seen[i]);
       CmiAbort("randomized_msgq: a message did not run exactly once");
     }
+
+  unsigned long long digest = 1469598103934665603ULL; // FNV-1a over the order
+  for (int s : arr) digest = (digest ^ (unsigned long long)s) * 1099511628211ULL;
+  CmiPrintf("[%d] run order digest %016llx\n", CmiMyPe(), digest);
 
   long long all = countInversions(arr, 0, N);
   long long fifo = countInversions(arr, 0, N_FIFO);
