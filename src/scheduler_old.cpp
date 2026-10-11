@@ -37,10 +37,8 @@ void CsdSchedulerOld() {
   int poll_period = BACKEND_POLL_FREQ_DEFAULT / backend_poll_freq;
   if (poll_period < 1) poll_period = 1;
 
-  int tq_streak = 0; bool took_tq = false; // fairness bound, see the thread-queue branch below
+  int tq_streak = 0; // consecutive thread-queue messages, see the thread-queue branch below
   while (CmiStopFlag() == 0) {
-    if (!took_tq) tq_streak = 0;
-    took_tq = false;
 
     CcdRaiseCondition(CcdSCHEDLOOP);
 
@@ -65,16 +63,25 @@ void CsdSchedulerOld() {
     }
 
     // poll the thread queue (this PE's ConverseQueue, the multi-producer
-    // single-consumer queue that other PEs and the network push into), unless
-    // it has supplied +thread_queue_max messages in a row and the priority
-    // queue is waiting: a sustained stream from outside must not starve this
-    // PE's own queued work (self-sends, Charm++ local messages, thread tokens).
-    // The registered scheduler has the same bound from its 16:16 slot weights.
-    else if (!queue->empty() &&
-             !(tq_streak >= thread_queue_max && !QueueEmpty(CpvAccess(CsdSchedQueue)))) {
-      took_tq = true; tq_streak++;
-      // get next event (guaranteed to be there because only single consumer)
-      void *msg = queue->pop().value();
+    // single-consumer queue that other PEs and the network push into). After
+    // +thread_queue_max consecutive messages from it, one message from the
+    // priority queue runs instead if there is one: a sustained stream from
+    // outside must not starve this PE's own queued work (self-sends, Charm++
+    // local messages, thread tokens). The streak resets only when a priority
+    // queue message runs or the thread queue is empty, never because the node
+    // priority queue branch below ran something. The registered scheduler has
+    // the same bound from its 16:16 slot weights.
+    else if (!queue->empty()) {
+      void *msg;
+      if (tq_streak < thread_queue_max || QueueEmpty(CpvAccess(CsdSchedQueue))) {
+        tq_streak++;
+        // get next event (guaranteed to be there because only single consumer)
+        msg = queue->pop().value();
+      } else {
+        tq_streak = 0;
+        msg = QueueTop(CpvAccess(CsdSchedQueue));
+        QueuePop(CpvAccess(CsdSchedQueue));
+      }
 
       // release idle if necessary
       if (CmiGetIdle()) {
@@ -88,6 +95,7 @@ void CsdSchedulerOld() {
 
         // poll node prio queue
     else {
+      tq_streak = 0; // the thread queue is empty
       // Check the queue length before reaching for the lock. CmiTryLock is a
       // CAS on a single process-wide cacheline, and an idle PE would otherwise
       // execute it on every loop iteration; with many PEs per process that one
@@ -232,10 +240,8 @@ void CsdSchedulePollOld() {
   // get node level queue
   ConverseNodeQueue<void *> *nodeQueue = CmiGetNodeQueue();
 
-  int tq_streak = 0; bool took_tq = false; // fairness bound, see the thread-queue branch below
+  int tq_streak = 0; // consecutive thread-queue messages, see the thread-queue branch below
   while(1){
-    if (!took_tq) tq_streak = 0;
-    took_tq = false;
 
     CsdPeriodic();
 
@@ -263,16 +269,25 @@ void CsdSchedulePollOld() {
     }
 
     // poll the thread queue (this PE's ConverseQueue, the multi-producer
-    // single-consumer queue that other PEs and the network push into), unless
-    // it has supplied +thread_queue_max messages in a row and the priority
-    // queue is waiting: a sustained stream from outside must not starve this
-    // PE's own queued work (self-sends, Charm++ local messages, thread tokens).
-    // The registered scheduler has the same bound from its 16:16 slot weights.
-    else if (!queue->empty() &&
-             !(tq_streak >= thread_queue_max && !QueueEmpty(CpvAccess(CsdSchedQueue)))) {
-      took_tq = true; tq_streak++;
-      // get next event (guaranteed to be there because only single consumer)
-      void *msg = queue->pop().value();
+    // single-consumer queue that other PEs and the network push into). After
+    // +thread_queue_max consecutive messages from it, one message from the
+    // priority queue runs instead if there is one: a sustained stream from
+    // outside must not starve this PE's own queued work (self-sends, Charm++
+    // local messages, thread tokens). The streak resets only when a priority
+    // queue message runs or the thread queue is empty, never because the node
+    // priority queue branch below ran something. The registered scheduler has
+    // the same bound from its 16:16 slot weights.
+    else if (!queue->empty()) {
+      void *msg;
+      if (tq_streak < thread_queue_max || QueueEmpty(CpvAccess(CsdSchedQueue))) {
+        tq_streak++;
+        // get next event (guaranteed to be there because only single consumer)
+        msg = queue->pop().value();
+      } else {
+        tq_streak = 0;
+        msg = QueueTop(CpvAccess(CsdSchedQueue));
+        QueuePop(CpvAccess(CsdSchedQueue));
+      }
 
       // release idle if necessary
       if (CmiGetIdle()) {
@@ -287,6 +302,7 @@ void CsdSchedulePollOld() {
 
     // poll node prio queue
     else {
+      tq_streak = 0; // the thread queue is empty
       // Check the queue length before reaching for the lock. CmiTryLock is a
       // CAS on a single process-wide cacheline, and an idle PE would otherwise
       // execute it on every loop iteration; with many PEs per process that one

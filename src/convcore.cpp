@@ -115,8 +115,10 @@ void CldModuleInit(char **);
 static ConverseQueue<void *> **Cmi_queues; // array of queue pointers
 
 // PE LOCALS
-// -1 until CmiInitState runs, so threads that are not PEs (which have no self
-// queue) never match a destination rank in CmiPushPE
+// -1 until CmiInitState runs, so a thread that is not a PE never matches its
+// own rank in CmiSyncSendAndFreeNoPersistent and is kept off the unlocked
+// CsdSchedQueue: its sends go through CmiPushPE to the destination's thread
+// queue
 thread_local int Cmi_myrank = -1;
 thread_local CmiState Cmi_state;
 thread_local bool idle_condition;
