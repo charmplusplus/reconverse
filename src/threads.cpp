@@ -109,16 +109,17 @@ void CthSetStrategy(CthThread t, CthAwkFn awkfn, CthThFn chsfn) {
 void CthEnqueueNormalThread(CthThreadToken *token, int s, int pb,
                             unsigned int *prio) {
   CmiSetHandler(token, CpvAccess(CthResumeNormalThreadIdx));
-  // the token always goes to the PE that is awakening the thread, so it can
-  // take the self queue and skip the shared queue's atomics
-  CmiGetSelfQueue()->push(token);
+  // The token goes to the awakening PE's own priority queue with the strategy
+  // and priority the caller gave (CthAwaken: FIFO at priority 0; CthAwakenPrio:
+  // the caller's), as in classic Converse.
+  CsdEnqueueGeneral(token, s, pb, prio);
 }
 
 void CthEnqueueSchedulingThread(CthThreadToken *token, int s, int pb,
                                 unsigned int *prio) {
   CmiSetHandler(token, CpvAccess(CthResumeSchedulingThreadIdx));
   CpvStaticDeclare(int, CthResumeSchedulingThreadIdx);
-  CmiGetSelfQueue()->push(token);
+  CsdEnqueueGeneral(token, s, pb, prio);
 }
 
 static CthThread CthSuspendNormalThread(void) {

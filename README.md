@@ -85,6 +85,7 @@ The example executables are located in the build/test/<program_name> folders. Yo
 
 ### Runtime Options
 - **`+pe <num>`**: specify the total number of PEs across all processes.
+- **`+thread_queue_max <num>`**: with `+old-scheduler`, after this many consecutive messages taken from the PE's thread queue (the queue other PEs and the network push into), one message from the PE's priority queue runs if there is one, so a stream from outside cannot starve the PE's own queued work (default 16).
 - **`+backend <lci|lcw>`**: select the communication backend at runtime. If not specified, Reconverse will use the first available backend in the order of LCI, LCW.
 - **`+ipc`** / **`+noipc`**: send messages between processes that share a host through shared memory instead of the communication backend. Off by default; see [Shared-memory IPC](#shared-memory-ipc-ipc).
 - **`+ipcmode <auto|shm|xpmem>`**: pick the mechanism backing the shared-memory pool. Implies `+ipc`.

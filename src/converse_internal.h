@@ -65,14 +65,13 @@ typedef struct State {
 // progress a little over half the slot table.
 #define BACKEND_POLL_FREQ_DEFAULT 64
 extern int backend_poll_freq;
+extern int thread_queue_max;
 extern int backend_poll_thread; // every backend_poll_thread threads will call progress
 
 // state relevant functionality
 CmiState *CmiGetState(void);
 void CmiInitState(int pe);
 ConverseQueue<void *> *CmiGetQueue(int pe);
-// queue of messages the calling PE sent to itself
-ConverseSelfQueue<void *> *CmiGetSelfQueue();
 void CrnInit(void);
 void CmiPushPE(int destRank, int messageSize, void *msg);
 
