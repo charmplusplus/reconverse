@@ -42,6 +42,19 @@ void CmiSchedulerSetIdle() {
   }
 }
 
+// Messages from peer processes on this host arrive in the shared-memory pool
+// rather than through the network backend, so every loop has to drain it --
+// including CsdSchedulePoll, or a program that waits inside it would never
+// see a message a peer put in the pool.
+bool CmiSchedulerPollIpc() {
+  CmiIpcManager *manager = CsvAccess(coreIpcManager_);
+  if (manager == nullptr) return false;
+  CmiIpcBlock *block = CmiPopIpcBlock(manager);
+  if (block == nullptr) return false;
+  CmiDeliverIpcBlockMsg(block);
+  return true;
+}
+
 /**
  * The main scheduler loop for the Charm++ runtime.
  */

@@ -338,7 +338,14 @@ void writeToBuffer(PersistentSendsTable *slot, int bufIndex, int size,
   slot->busy[bufIndex] = true;
   PersistentBufDesc &buf = slot->bufs[bufIndex];
 
-  if (slot->useRdma) {
+  /* A peer process on this host gets the payload inline, even on a channel
+     set up for one-sided puts. The put would still cross the network, but the
+     notification behind it goes through the shared-memory pool, which does not
+     wait for the network: it can arrive before the data has landed, and the
+     receiver would hand over a stale buffer. Deciding per send rather than at
+     setup covers a pool that came up after the channel did; the receive
+     buffers are the same either way. */
+  if (slot->useRdma && !CmiIpcReaches(slot->destNode)) {
     auto *ctx = new PutContext{slot->destHandle, slot, slot->destPE, CmiMyPe(),
                                bufIndex,         size, msg};
     /* The notification is only sent once this put completes locally, which is
@@ -347,8 +354,8 @@ void writeToBuffer(PersistentSendsTable *slot, int bufIndex, int size,
                             (uintptr_t)buf.disp, buf.rmr, persistentPutDone,
                             ctx);
   } else {
-    /* No one-sided support: the notification carries the payload and the
-       receiver copies it into the buffer. */
+    /* No one-sided support, or a peer on this host: the notification carries
+       the payload and the receiver copies it into the buffer. */
     sendNotification(slot->destHandle, slot, slot->destPE, CmiMyPe(), bufIndex,
                      size, msg);
     CmiFree(msg);

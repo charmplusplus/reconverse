@@ -28,6 +28,12 @@ Some general options include:
 * **`RECONVERSE_ENABLE_CPU_AFFINITY`** (`ON` by default if HWLOC is found)
   Enables CPU affinity support via [hwloc](https://www.open-mpi.org/projects/hwloc/). Requires HWLOC to be installed.
 
+* **`RECONVERSE_ENABLE_XPMEM`** (`OFF` by default)
+  Builds the XPMEM backend for shared-memory IPC in addition to the POSIX
+  shared memory one, so that `+ipcmode xpmem` (and `+ipcmode auto` on a host
+  with the kernel module loaded) can use it. Requires an XPMEM installation;
+  point CMake at it with `-DXPMEM_ROOT=<prefix>` if it is not in `/opt/xpmem`.
+
 * **`CMAKE_BUILD_TYPE`** (not set by default)
   Selects the build type and corresponding compiler flags. For example:
 
@@ -81,6 +87,146 @@ The example executables are located in the build/test/<program_name> folders. Yo
 - **`+pe <num>`**: specify the total number of PEs across all processes.
 - **`+thread_queue_max <num>`**: with `+old-scheduler`, after this many consecutive messages taken from the PE's thread queue (the queue other PEs and the network push into), one message from the PE's priority queue runs if there is one, so a stream from outside cannot starve the PE's own queued work (default 16).
 - **`+backend <lci|lcw>`**: select the communication backend at runtime. If not specified, Reconverse will use the first available backend in the order of LCI, LCW.
+- **`+ipc`** / **`+noipc`**: send messages between processes that share a host through shared memory instead of the communication backend. Off by default; see [Shared-memory IPC](#shared-memory-ipc-ipc).
+- **`+ipcmode <auto|shm|xpmem>`**: pick the mechanism backing the shared-memory pool. Implies `+ipc`.
+- **`++ipcpoolsize <bytes>`**: size of each process's shared-memory pool (8 MiB by default).
+- **`++ipccutoff <bytes>`**: largest message the pool will carry. Messages above it go over the communication backend. Defaults to 32 KiB, or to a bin below `poolsize / 25` when that is smaller.
+
+## Shared-memory IPC (`+ipc`)
+
+Two processes on the same host do not need the network to talk to each other.
+With `+ipc`, every process maps a pool of shared memory into each of its
+peers' address spaces, and `CmiSyncSend*`/`CmiSyncNodeSend*` to a peer process
+on the same host copy the message straight into that peer's pool instead of
+handing it to LCI or MPI. Nothing about the messaging API changes: a message
+that arrives through the pool is indistinguishable from one off the network,
+down to the destination field in its header, and the same handler runs.
+
+This is off by default, so a run that does not ask for it behaves exactly as
+before. Turn it on with `+ipc`:
+
+```
+$ srun -n 4 ./reconverse_ping_ack +pe 8 +ipc
+```
+
+Messages fall back to the communication backend, silently and per message,
+whenever the pool cannot carry them: the destination is on another host, the
+message is larger than `++ipccutoff`, or the pool is momentarily full. A
+program therefore never has to know whether IPC is on.
+
+### Mechanisms
+
+* **`shm`** — POSIX shared memory (`shm_open`/`mmap`). Needs nothing beyond a
+  working `/dev/shm`, so it is the fallback everywhere.
+* **`xpmem`** — [XPMEM](https://github.com/hpc/xpmem), which maps one process's
+  ordinary heap into another's, avoiding the shm file entirely. Must be built
+  in with `-DRECONVERSE_ENABLE_XPMEM=ON` (point CMake at a non-standard
+  install with `-DXPMEM_ROOT=<prefix>`), and needs the `xpmem` kernel module
+  loaded at run time.
+* **`auto`** (the default) — xpmem if it was built in *and* `/dev/xpmem` is
+  present, otherwise POSIX shared memory. Asking for `+ipcmode xpmem`
+  explicitly on a host without it is an error rather than a silent fallback.
+
+### What it buys
+
+`tests/orig-converse/pingpong`, two processes with one PE each on one NCSA
+Delta CPU node, LCI over Slingshot-11 as the backend, 1000 round trips per
+size (one-way microseconds):
+
+| message | backend | `+ipc` | speedup |
+| ------: | ------: | -----: | ------: |
+|     8 B |    3.42 |   0.76 |    4.5x |
+|    32 B |    3.21 |   0.77 |    4.2x |
+|   128 B |    3.72 |   0.75 |    4.9x |
+|   512 B |    3.86 |   0.76 |    5.1x |
+|    2 KiB |   4.38 |   1.01 |    4.4x |
+|    8 KiB |  14.86 |   2.26 |    6.6x |
+|   32 KiB |  15.39 |   6.53 |    2.4x |
+|  128 KiB |  21.07 |  24.65 |    0.85x |
+
+The pool wins by a wide margin up to tens of kilobytes and loses past that,
+and what it loses to is its own copy. Carrying a message costs one memcpy:
+the sender copies it into a block in the destination's segment, and the
+receiver takes delivery of that block where it lies. That cost grows with the
+message. The backend's does not, in the same way -- the jump from 4.38 to
+14.86 us between 2 and 8 KiB is LCI switching from eager to rendezvous, and
+past that point it transfers out of the registered mempool `CmiAlloc` already
+hands it, so the bytes move by DMA with no CPU copying them. Once a message
+is large enough, one memcpy of it costs more than LCI's fixed handshake.
+
+It is *not* that LCI's on-host path is itself shared memory. If it were, 8
+bytes would not cost 3.42 us; that is not the price of a memcpy.
+
+The default cutoff is 32 KiB, the largest size measured here at which the
+pool still wins, so a default run takes the slower path for nothing in this
+table. That makes it a conservative floor rather than a tuned value: the
+crossover is somewhere between 32 and 128 KiB here, and elsewhere on another
+machine or backend, so a program that moves a lot of 64-128 KiB messages
+between processes on a host may do better with `++ipccutoff 131072`. Measure
+before raising it.
+
+### Querying it from a program
+
+```c
+int CmiIpcEnabled(void);          /* is the pool up? */
+const char *CmiIpcImplName(void); /* "posixshm", "xpmem", or "none" */
+int CmiIpcNumPeers(void);         /* processes on this host, this one included */
+long CmiIpcMessagesSent(void);    /* messages this PE put into the pool */
+long CmiIpcMessagesReceived(void);/* messages this PE took out of it */
+```
+
+`tests/ipc` uses these to check that traffic really took the pool.
+
+### Ordering a notification behind a one-sided put
+
+A put issued through the communication backend is still in flight when it
+completes locally: local completion says the source buffer may be reused, not
+that the bytes are visible in the destination process. A notification sent
+straight after it -- "your buffer is filled" -- goes through the pool when the
+destination is a peer process on this host, and the pool does not wait for the
+network, so the notification can overtake the data it is announcing.
+
+Reconverse closes this inside the runtime for the two places that put: the
+Converse zerocopy Direct API keeps a put's acknowledgement on the backend
+(`CommRputLocalHandler`), and a persistent channel to a pool peer sends the
+payload inline rather than putting at all (`writeToBuffer`). A layer that
+issues its own puts has the same problem, and these to fix it with:
+
+```c
+void CmiIpcBeginNetworkOnly(void); /* sends from this PE stay on the backend */
+void CmiIpcEndNetworkOnly(void);   /* ...until here; nestable */
+bool CmiIpcReaches(int destNode);  /* would the pool carry a message there? */
+```
+
+`tests/rdma_ipc_ack` covers the Direct API case from both sides: that the
+acknowledgement is kept off the pool, and that the destination's buffer really
+holds the data by the time the acknowledgement is delivered.
+
+### Caveats
+
+* `+ipc` makes Reconverse call `CmiInitCPUTopology` during startup, because
+  the pool has to know which processes share a host. That adds a small
+  collective to startup and prints the usual topology line.
+* Cross-partition sends (`CmiInterSyncSend` and friends) always use the
+  communication backend.
+* Messages to one destination can be reordered relative to each other, in two
+  ways. A message under the cutoff and one over it travel by different routes,
+  so they can cross. And a process has one receive queue, which every PE in it
+  drains, so when a process runs several PEs a block taken by a PE other than
+  the destination reaches that destination by a second hop and can arrive
+  after a block taken later. What does not happen is wholesale reversal: the
+  queue is FIFO, so a burst that goes entirely through the pool, from one PE
+  to a process running one PE, arrives in the order it was sent
+  (`tests/ipc_order` checks this), and no message has to wait for the queue to
+  drain before anything looks at it. Converse has never ordered messages
+  between PEs, so none of this breaks a guarantee, but a program that happened
+  to rely on the ordering the network backend gave it will notice. A one-sided
+  put is reordered against pool messages the same way, and there it *can*
+  break a program: see [Ordering a notification behind a one-sided
+  put](#ordering-a-notification-behind-a-one-sided-put).
+* A process killed outright (not `CmiExit`) leaves its POSIX shared memory
+  segment behind in `/dev/shm`; a clean exit unlinks it. `xpmem` has nothing
+  to leave behind.
 
 ## Example Steps to Build and Run Reconverse
 
