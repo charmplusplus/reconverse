@@ -480,10 +480,10 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
            "respected.\n",
            (unsigned long long)_Cmi_randomizedSeed);
     if (!_Cmi_randomizedSeedGiven && Cmi_numnodes > 1)
-      printf("Reconverse> That seed is process 0's, from its clock; the other "
-             "%d processes drew their own. Pass +randomized_seed <N> to use "
-             "one seed everywhere.\n",
-             Cmi_numnodes - 1);
+      printf("Reconverse> That seed is process 0's, from its clock; the %d "
+             "other process%s drew their own. Pass +randomized_seed <N> to "
+             "use one seed everywhere.\n",
+             Cmi_numnodes - 1, Cmi_numnodes == 2 ? "" : "es");
   }
 
   Cmi_argv = argv;
