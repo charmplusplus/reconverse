@@ -398,6 +398,11 @@ void CmiStartThreads() {
 // TODO: the input parsing, cmi_arg parsing is not done/robust
 void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
                   int initret) {
+  // Parsed on every platform so the flag never reaches the application's
+  // argv; it has an effect only with glibc.
+  bool glibcDefaultMalloc =
+      CmiGetArgFlagDesc(argv, "+glibc_default_malloc",
+                        "keep glibc's default malloc thresholds (glibc only)");
 #if defined(__GLIBC__)
   // Messages are allocated on one PE and freed on another. With glibc's
   // defaults, freed message memory is returned to the OS (munmap of large
@@ -413,8 +418,7 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
   int glibcMallocTuning = 0;
   {
     const char *tunables = getenv("GLIBC_TUNABLES");
-    if (CmiGetArgFlagDesc(argv, "+glibc_default_malloc",
-                          "keep glibc's default malloc thresholds"))
+    if (glibcDefaultMalloc)
       glibcMallocTuning = 1;
     else if (tunables && strstr(tunables, "glibc.malloc."))
       glibcMallocTuning = 2;
@@ -423,6 +427,8 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
              mallopt(M_TOP_PAD, 256L << 20) == 0)
       glibcMallocTuning = 3;
   }
+#else
+  (void)glibcDefaultMalloc;
 #endif
 
   // Run size options. Exactly one of these may be given:
