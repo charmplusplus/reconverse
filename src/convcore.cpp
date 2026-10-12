@@ -455,6 +455,9 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
       printf("Reconverse> Starting Reconverse with %d %s, %d %s (1 PE = 1 thread), and %d %s\n",
            Cmi_numnodes, processType.c_str(), Cmi_npes, peType.c_str(), Cmi_mynodesize, ppnType.c_str());
     CmiCheckCacheLineSize();
+#ifdef RECONVERSE_USE_JEMALLOC
+    printf("Reconverse> allocator: jemalloc\n");
+#endif
   }
   Cmi_nodestart = Cmi_mynode * Cmi_mynodesize;
   // register am handlers
