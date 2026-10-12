@@ -269,6 +269,12 @@ The mode is a separate scheduler loop chosen once when `CsdScheduler()` or
 `CsdSchedulePoll()` is entered; the default loop is unchanged and costs
 nothing extra when the flag is absent.
 
+With the flag, the loop itself gets slow at many PEs per process. Each
+iteration sizes the thread queue and checks it for emptiness before every
+take, and both walk every producer that has pushed to it (#271), so at
+64 PEs per process a backlog of N messages costs on the order of N µs per
+iteration. That is expected in this mode; it goes away when #271 is fixed.
+
 ## Example Steps to Build and Run Reconverse
 
 ### Build and run Reconverse on your own laptop with autofetched LCI backend
