@@ -43,12 +43,14 @@ bool pollConverseNodeQueue() {
 //poll converse-level thread queue
 bool pollConverseThreadQueue() {
   ConverseQueue<void *> *queue = CmiGetQueue(CmiMyRank());
-  if (!queue->empty()) {
-    // get next event (guaranteed to be there because only single consumer)
-    void *msg = queue->pop().value();
+  // pop() checks the queue's count first, so an empty queue costs one load;
+  // it can come back empty when a producer's count increment ran ahead of
+  // its enqueue, which just means the message is seen on the next poll
+  auto result = queue->pop();
+  if (result) {
     CmiSchedulerReleaseIdle();
     // process event
-    CmiHandleMessage(msg);
+    CmiHandleMessage(result.value());
     return true;
   }
   return false;
