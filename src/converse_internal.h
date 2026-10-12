@@ -66,7 +66,12 @@ typedef struct State {
 #define BACKEND_POLL_FREQ_DEFAULT 64
 extern int backend_poll_freq;
 extern int thread_queue_max;
+extern int node_queue_max; // registered scheduler: node messages in a row before local work gets a turn
 extern int backend_poll_thread; // every backend_poll_thread threads will call progress
+
+// Priority of the message QueueTop would return (smaller runs first), or
+// LLONG_MAX when the queue is empty. queueing.cpp.
+long long QueueTopPriority(Queue q);
 
 // state relevant functionality
 CmiState *CmiGetState(void);
