@@ -17,6 +17,9 @@
 #include <thread>
 #include <vector>
 #include <sys/time.h>
+#if defined(__GLIBC__)
+#include <malloc.h>
+#endif
 #include <unistd.h>
 #ifdef __APPLE__
 #include <sys/sysctl.h>
@@ -392,7 +395,39 @@ void CmiStartThreads() {
 // TODO: the input parsing, cmi_arg parsing is not done/robust
 void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
                   int initret) {
-
+  // Opt-in glibc malloc tuning. The flag is parsed on every platform so it
+  // never reaches the application's argv; it has an effect only with glibc.
+  bool glibcTunedMalloc = CmiGetArgFlagDesc(
+      argv, "+glibc_tuned_malloc",
+      "raise glibc's mmap/trim/top-pad malloc thresholds (glibc only)");
+#if defined(__GLIBC__)
+  // Messages are allocated on one PE and freed on another. With glibc's
+  // defaults, freed message memory is returned to the OS (munmap of large
+  // blocks, trimming of heap tops) and faulted back in on the next
+  // allocation; with many threads in one process the faults and munmaps
+  // serialize on the process's memory-map lock. These settings keep that
+  // memory inside the process, at the cost of a larger resident set.
+  // Setting M_MMAP_THRESHOLD also disables glibc's dynamic mmap threshold
+  // adjustment, which is intended. glibc rejects an mmap threshold above
+  // HEAP_MAX_SIZE/2 (32 MB on 64-bit). Done before any thread starts and
+  // before the first CmiAlloc.
+  // 0: not requested, 1: applied, 2: skipped (GLIBC_TUNABLES sets malloc
+  // tunables), 3: a mallopt call failed.
+  int glibcMallocTuning = 0;
+  if (glibcTunedMalloc) {
+    const char *tunables = getenv("GLIBC_TUNABLES");
+    if (tunables && strstr(tunables, "glibc.malloc."))
+      glibcMallocTuning = 2;
+    else if (mallopt(M_MMAP_THRESHOLD, 32L << 20) == 0 ||
+             mallopt(M_TRIM_THRESHOLD, 1L << 30) == 0 ||
+             mallopt(M_TOP_PAD, 256L << 20) == 0)
+      glibcMallocTuning = 3;
+    else
+      glibcMallocTuning = 1;
+  }
+#else
+  (void)glibcTunedMalloc;
+#endif
 
   // Run size options. Exactly one of these may be given:
   //   +pe <N>  : total number of PEs across all processes
@@ -455,6 +490,17 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
       printf("Reconverse> Starting Reconverse with %d %s, %d %s (1 PE = 1 thread), and %d %s\n",
            Cmi_numnodes, processType.c_str(), Cmi_npes, peType.c_str(), Cmi_mynodesize, ppnType.c_str());
     CmiCheckCacheLineSize();
+#if defined(__GLIBC__)
+    if (glibcMallocTuning == 1)
+      printf("Reconverse> glibc malloc (+glibc_tuned_malloc): mmap threshold "
+             "32 MB, trim 1 GB, top pad 256 MB\n");
+    else if (glibcMallocTuning == 2)
+      printf("Reconverse> glibc malloc: GLIBC_TUNABLES sets malloc tunables; "
+             "keeping the environment setting, +glibc_tuned_malloc ignored\n");
+    else if (glibcMallocTuning == 3)
+      fprintf(stderr, "Reconverse> WARNING: glibc mallopt rejected a malloc "
+                      "threshold setting; glibc defaults may be in effect\n");
+#endif
   }
   Cmi_nodestart = Cmi_mynode * Cmi_mynodesize;
   // register am handlers
