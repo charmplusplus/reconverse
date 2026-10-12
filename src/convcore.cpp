@@ -460,23 +460,41 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
     CmiCheckCacheLineSize();
 #ifdef RECONVERSE_USE_JEMALLOC
     {
-      // jemalloc is the active allocator when the malloc that global symbol
-      // lookup returns is defined in the same object as mallctl, which only
-      // jemalloc exports.
-      void *m = dlsym(RTLD_DEFAULT, "malloc");
-      void *ctl = dlsym(RTLD_DEFAULT, "mallctl");
-      Dl_info mInfo = {}, ctlInfo = {};
-      bool mFound = m && dladdr(m, &mInfo) && mInfo.dli_fname;
-      bool ctlFound = ctl && dladdr(ctl, &ctlInfo);
-      if (mFound && ctlFound && mInfo.dli_fbase == ctlInfo.dli_fbase) {
-        const char *base = strrchr(mInfo.dli_fname, '/');
+      // jemalloc is the active allocator when a malloc call made through the
+      // global symbol advances the thread.allocated counter of the jemalloc
+      // that global lookup finds (mallctl is exported only by jemalloc).
+      // An address comparison of malloc and mallctl is not used because a
+      // non-PIE executable that takes &malloc defines a canonical PLT entry
+      // for it, and dlsym then returns that entry in the executable.
+      typedef int (*mallctl_fn)(const char *, void *, size_t *, void *, size_t);
+      mallctl_fn ctl = (mallctl_fn)dlsym(RTLD_DEFAULT, "mallctl");
+      bool active = false;
+      if (ctl) {
+        uint64_t before = 0, after = 0;
+        size_t sz = sizeof(uint64_t);
+        void *(*volatile mallocFn)(size_t) = malloc;
+        if (ctl("thread.allocated", &before, &sz, nullptr, 0) == 0) {
+          void *p = mallocFn(4096);
+          sz = sizeof(uint64_t);
+          active = ctl("thread.allocated", &after, &sz, nullptr, 0) == 0 &&
+                   after - before >= 4096;
+          free(p);
+        }
+      }
+      Dl_info info = {};
+      if (active && dladdr((void *)ctl, &info) && info.dli_fname) {
+        const char *base = strrchr(info.dli_fname, '/');
         printf("Reconverse> allocator: jemalloc (malloc resolves to %s)\n",
-               base ? base + 1 : mInfo.dli_fname);
+               base ? base + 1 : info.dli_fname);
+      } else if (active) {
+        printf("Reconverse> allocator: jemalloc (malloc resolves to unknown)\n");
       } else {
+        void *m = dlsym(RTLD_DEFAULT, "malloc");
+        bool found = m && dladdr(m, &info) && info.dli_fname;
         fprintf(stderr,
                 "Reconverse> WARNING: built with RECONVERSE_USE_JEMALLOC but "
                 "malloc resolves to %s; jemalloc is not in use\n",
-                mFound ? mInfo.dli_fname : "unknown");
+                found ? info.dli_fname : "unknown");
       }
     }
 #endif
