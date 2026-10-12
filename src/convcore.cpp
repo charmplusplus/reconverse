@@ -13,6 +13,9 @@
 #include <pthread.h>
 #include <stdio.h>
 #include <sys/stat.h>
+#ifdef RECONVERSE_USE_JEMALLOC
+#include <dlfcn.h>
+#endif
 #include <stdlib.h>
 #include <thread>
 #include <vector>
@@ -456,7 +459,26 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
            Cmi_numnodes, processType.c_str(), Cmi_npes, peType.c_str(), Cmi_mynodesize, ppnType.c_str());
     CmiCheckCacheLineSize();
 #ifdef RECONVERSE_USE_JEMALLOC
-    printf("Reconverse> allocator: jemalloc\n");
+    {
+      // jemalloc is the active allocator when the malloc that global symbol
+      // lookup returns is defined in the same object as mallctl, which only
+      // jemalloc exports.
+      void *m = dlsym(RTLD_DEFAULT, "malloc");
+      void *ctl = dlsym(RTLD_DEFAULT, "mallctl");
+      Dl_info mInfo = {}, ctlInfo = {};
+      bool mFound = m && dladdr(m, &mInfo) && mInfo.dli_fname;
+      bool ctlFound = ctl && dladdr(ctl, &ctlInfo);
+      if (mFound && ctlFound && mInfo.dli_fbase == ctlInfo.dli_fbase) {
+        const char *base = strrchr(mInfo.dli_fname, '/');
+        printf("Reconverse> allocator: jemalloc (malloc resolves to %s)\n",
+               base ? base + 1 : mInfo.dli_fname);
+      } else {
+        fprintf(stderr,
+                "Reconverse> WARNING: built with RECONVERSE_USE_JEMALLOC but "
+                "malloc resolves to %s; jemalloc is not in use\n",
+                mFound ? mInfo.dli_fname : "unknown");
+      }
+    }
 #endif
   }
   Cmi_nodestart = Cmi_mynode * Cmi_mynodesize;
