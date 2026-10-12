@@ -149,7 +149,7 @@ CmiStartFn mymain(int argc, char *argv[]) {
   CpvInitialize(double, endTime);
 
   // Set runtime cpuaffinity
-  // CmiInitCPUAffinity(argv);
+  CmiInitCPUAffinity(argv);
 
   // Initialize CPU topology
   // CmiInitCPUTopology(argv);

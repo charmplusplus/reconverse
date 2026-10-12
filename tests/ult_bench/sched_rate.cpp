@@ -112,6 +112,8 @@ static void finishRep(void) {
 }
 
 static void bench_init(int argc, char **argv) {
+  // Bind this PE per +setcpuaffinity/+pemap; ConverseInit does not.
+  CmiInitCPUAffinity(argv);
   (void)argc;
 
   CpvInitialize(struct schedBench, bench);
