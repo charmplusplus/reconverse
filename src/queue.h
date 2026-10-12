@@ -50,41 +50,62 @@ public:
 // moodycamel keeps one sub-queue per producer thread, and its size_approx()
 // and try_dequeue() walk every sub-queue ever created, so on their own an
 // empty check costs O(producers): about 16 ns per producer, 1 us at 64 PEs
-// per process (issue #271). The count below makes the empty check one load,
-// the way classic Converse's PCQueue keeps a len field: producers add after
-// their enqueue is complete (release), the consumer reads it (acquire) and
-// only then asks moodycamel, so a positive count means the enqueue is visible.
-// A zero count can lag an enqueue by one increment, which only delays the
-// message to the next poll. The count is on its own cache line so that the
-// producers' RMWs do not share a line with the queue's own state.
-template<typename MessageType>
+// per process (issue #271). The counters below make the empty check one load
+// at most, the way classic Converse's PCQueue keeps a len field.
+//
+// Producers add to `pushed` after their enqueue is complete (release). The
+// consumer never writes that line: it keeps its own `taken` count and, with
+// a single consumer, a private `credit` of messages it has learned about,
+// so a stream of messages costs the consumer one acquire load of `pushed`
+// per batch rather than one per message, and the producers' line is never
+// pulled away by a consumer write. A positive credit means the enqueues are
+// visible, since the load that produced it acquired the producers' releases.
+// A zero credit can lag an enqueue by one increment, which only delays the
+// message to the next poll. With several consumers (the node queue) `taken`
+// is shared and there is no credit, so every pop reloads `pushed`.
+template<typename MessageType, bool kSingleConsumer = true>
 class AtomicAccessControl {
     // what default size?
     moodycamel::ConcurrentQueue<MessageType> q{8192};
-    alignas(CMI_CACHE_LINE_SIZE) std::atomic<long> count{0};
+    alignas(CMI_CACHE_LINE_SIZE) std::atomic<long> pushed{0};   // producers' line
+    alignas(CMI_CACHE_LINE_SIZE) std::atomic<long> taken{0};    // consumers' line
+    long credit = 0; // single consumer only: known pushed, not yet taken
+
+    long available() {
+        if (kSingleConsumer && credit > 0) return credit;
+        long n = pushed.load(std::memory_order_acquire) -
+                 taken.load(std::memory_order_relaxed);
+        if (kSingleConsumer) credit = n > 0 ? n : 0;
+        return n;
+    }
 
     public:
     void push(MessageType message) {
         q.enqueue(message);
-        count.fetch_add(1, std::memory_order_release);
+        pushed.fetch_add(1, std::memory_order_release);
     }
 
     QueueResult<MessageType> pop_result() {
-        if (count.load(std::memory_order_acquire) <= 0) return std::nullopt;
+        if (available() <= 0) return std::nullopt;
         MessageType message;
-        bool success = q.try_dequeue(message);
-        if (!success) return std::nullopt; // a producer's increment ran ahead
-        count.fetch_sub(1, std::memory_order_relaxed);
+        if (!q.try_dequeue(message)) {
+            // a producer's increment ran ahead of its enqueue (or another
+            // consumer took it): forget the credit and look again next time
+            if (kSingleConsumer) credit = 0;
+            return std::nullopt;
+        }
+        if (kSingleConsumer) { credit--; taken.store(taken.load(std::memory_order_relaxed) + 1, std::memory_order_relaxed); }
+        else taken.fetch_add(1, std::memory_order_relaxed);
         return QueueResult<MessageType>(message);
     }
 
     size_t size() {
-        long n = count.load(std::memory_order_acquire);
+        long n = available();
         return n > 0 ? (size_t)n : 0;
     }
 
     bool empty() {
-        return count.load(std::memory_order_acquire) <= 0;
+        return available() <= 0;
     }
 };
 
@@ -148,7 +169,7 @@ template <typename MessageType>
 using ConverseQueue = MPSCQueue<MessageType, AtomicAccessControl<MessageType>>;
 
 template <typename MessageType>
-using ConverseNodeQueue = MPMCQueue<MessageType, AtomicAccessControl<MessageType>>;
+using ConverseNodeQueue = MPMCQueue<MessageType, AtomicAccessControl<MessageType, false>>;
 
 #else
 template <typename MessageType>
