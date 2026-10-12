@@ -34,6 +34,18 @@ Some general options include:
   with the kernel module loaded) can use it. Requires an XPMEM installation;
   point CMake at it with `-DXPMEM_ROOT=<prefix>` if it is not in `/opt/xpmem`.
 
+* **`RECONVERSE_USE_JEMALLOC`** (`OFF` by default)
+  Links jemalloc's `libjemalloc_pic.a` into libreconverse (whole-archive), so
+  jemalloc's `malloc`/`free` replace libc's for the whole process; no change is
+  needed in Charm++ or the application. Messages are allocated on one PE and
+  freed on another, which glibc's malloc handles slowly with many threads
+  (reconverse#271). Point CMake at the install with `-DJEMALLOC_ROOT=<prefix>`.
+  Build jemalloc 5.4.0 from the release tarball with
+  `./configure --prefix=<prefix> && make -j && make install`; the default build
+  produces `libjemalloc_pic.a`. jemalloc keeps its metadata out of line, so the
+  header reconverse puts in front of each message is unaffected. Startup prints
+  `Reconverse> allocator: jemalloc` when this is on.
+
 * **`CMAKE_BUILD_TYPE`** (not set by default)
   Selects the build type and corresponding compiler flags. For example:
 
