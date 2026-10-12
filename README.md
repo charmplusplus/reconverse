@@ -46,6 +46,15 @@ Some general options include:
   header reconverse puts in front of each message is unaffected. Startup prints
   `Reconverse> allocator: jemalloc` when this is on.
 
+  Without jemalloc, on glibc systems reconverse tunes glibc's malloc at startup
+  (`mallopt`: mmap threshold 32 MB, trim threshold 1 GB, top pad 256 MB) and
+  prints `Reconverse> glibc malloc: ...`. Message memory is freed by a
+  different thread than the one that allocated it, and returning it to the OS
+  and re-faulting it serializes the process on its memory-map lock; the tuning
+  keeps that memory in the process. Run with `+glibc_default_malloc` to keep
+  glibc's defaults, e.g. for comparison. A `GLIBC_TUNABLES` setting containing
+  `glibc.malloc.` takes precedence and the calls are skipped.
+
 * **`CMAKE_BUILD_TYPE`** (not set by default)
   Selects the build type and corresponding compiler flags. For example:
 
