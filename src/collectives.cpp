@@ -375,9 +375,8 @@ static void CmiClearReduction(CmiReductionID id) {
   auto &reduction_ref = CpvAccess(_reduction_info)[CmiGetReductionIndex(id)];
   CmiReduction *red = reduction_ref;
   if (red != NULL) {
+    // the messages it held were freed after the merge (CmiSendReduce)
     free(red->remotebuffer);
-    // we assume the user is freeing the actual messages that the buffer is
-    // holding or is that something we do?
     free(red);
   }
   reduction_ref = NULL;
@@ -461,6 +460,10 @@ void CmiSendReduce(CmiReduction *red) {
   if (red->numChildren > 0) {
     mergedData = (red->ops.mergefn)(&msg_size, red->localbuffer,
                                     red->remotebuffer, red->numChildren);
+    // as in classic Converse, the children's messages belong to the runtime
+    // once merged; the merge function owns only the local one
+    for (int i = 0; i < red->numChildren; ++i)
+      CmiFree(red->remotebuffer[i]);
   }
   void *msg = mergedData;
   // if we have a parent
@@ -496,9 +499,8 @@ static void CmiClearNodeReduction(CmiReductionID id) {
       CsvAccess(_node_reduction_info)[CmiGetReductionIndex(id)].red;
   CmiReduction *red = reduction_ref;
   if (red != NULL) {
+    // the messages it held were freed after the merge (CmiSendNodeReduce)
     free(red->remotebuffer);
-    // we assume the user is freeing the actual messages that the buffer is
-    // holding or is that something we do?
     free(red);
   }
   reduction_ref = NULL;
@@ -589,6 +591,10 @@ void CmiSendNodeReduce(CmiReduction *red) {
   if (red->numChildren > 0) {
     mergedData = (red->ops.mergefn)(&msg_size, red->localbuffer,
                                     red->remotebuffer, red->numChildren);
+    // as in classic Converse, the children's messages belong to the runtime
+    // once merged; the merge function owns only the local one
+    for (int i = 0; i < red->numChildren; ++i)
+      CmiFree(red->remotebuffer[i]);
   }
   void *msg = mergedData;
   // if we have a parent

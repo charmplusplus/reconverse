@@ -45,7 +45,7 @@ static void *merge(int *size, void *local, void **remote, int n) {
     if (r->round != l->round || r->slot != l->slot)
       CmiAbort("reduction_many: merged round %d slot %d into round %d slot %d",
                r->round, r->slot, l->round, l->slot);
-    l->value += r->value;
+    l->value += r->value;  // the runtime frees r after the merge
   }
   return l;
 }
