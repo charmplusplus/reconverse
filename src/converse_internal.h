@@ -126,8 +126,8 @@ using CmiReductionID =
 using CmiBroadcastRoot =
     decltype(CmiMessageHeader::collectiveMetaInfo); // needs to match header
 typedef struct {
-  int ReductionID; // ID associated with the reduction. Different reductions
-                   // will correspond to different IDs
+  CmiReductionID ReductionID; // ID associated with the reduction. Different
+                              // reductions will correspond to different IDs
   int numChildren; // number of child PEs/chares in the spanning tree for the
                    // reduction
   int messagesReceived;  // used to keep track of how many contributions have

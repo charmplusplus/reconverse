@@ -1,6 +1,7 @@
 #include "converse_internal.h"
 #include <algorithm>
 #include <thread>
+#include <type_traits>
 #include <vector>
 
 int Cmi_bcastHandler;
@@ -333,38 +334,39 @@ void CmiSetRedID(void *msg, CmiReductionID redID) {
 }
 
 // get next ID with wraparound for creating new reductions
-static inline CmiReductionID getNextID(CmiReductionID &ctr) {
-  CmiReductionID old = ctr;
-  CmiReductionID next = old + 1;
-  if (next < old) {
-    next = 0;
-  }
-  ctr = next;
-  return old;
-}
+// CmiReductionID is unsigned, so the counters wrap to 0 on their own; the
+// wrap keeps the slot sequence (see CmiGetReductionIndex) unbroken
+static_assert(std::is_unsigned<CmiReductionID>::value,
+              "reduction ids must wrap to 0 on overflow");
+static inline CmiReductionID getNextID(CmiReductionID &ctr) { return ctr++; }
 
 // TODO: is this needed for node reductions?? old Converse uses locks and
 // atomics in SMP for node reductions
-// TODO: this overflow is not thread-safe
 static inline CmiReductionID getNextID(std::atomic<CmiReductionID> &ctr) {
-  CmiReductionID old =
-      ctr.fetch_add(1, std::memory_order_relaxed); // Increment atomically
-  CmiReductionID next = old + 1;
-  if (next < old) {                          // Check for overflow
-    ctr.store(0, std::memory_order_relaxed); // Reset to 0 on overflow
-  }
-  return old;
+  return ctr.fetch_add(1, std::memory_order_relaxed);
 }
 
+static_assert((CmiMaxReductions & (CmiMaxReductions - 1)) == 0,
+              "CmiMaxReductions must be a power of two that divides the id "
+              "range, so slots stay in sequence when an id counter wraps");
 
 unsigned CmiGetReductionIndex(CmiReductionID id) {
-  // treating the id as the index into the reduction table
-  // utilized in getCreateReduction and clearReduction to find the reduction
-  // struct associated with an ID
-  if (id >= CmiMaxReductions) {
-    CmiAbort("CmiGetReductionIndex: id >= CmiMaxReductions");
-  }
-  return id;
+  // The reduction table is a ring: id uses slot id mod CmiMaxReductions, so
+  // ids keep counting for the life of the program and at most
+  // CmiMaxReductions reductions can be in flight at once, as in classic
+  // Converse. Indexing by the id itself allowed only CmiMaxReductions
+  // reductions per PE (and node reductions per process) in total.
+  return id & (CmiMaxReductions - 1);
+}
+
+// a slot still held by an unfinished reduction CmiMaxReductions ids back
+static void CmiCheckReductionSlot(const CmiReduction *red, CmiReductionID id) {
+  if (red != NULL && red->ReductionID != id)
+    CmiAbort("Too many simultaneous reductions: reduction %u needs table slot "
+             "%u, still held by unfinished reduction %u (at most %d can be in "
+             "flight)",
+             (unsigned)id, CmiGetReductionIndex(id),
+             (unsigned)red->ReductionID, CmiMaxReductions);
 }
 
 
@@ -373,9 +375,8 @@ static void CmiClearReduction(CmiReductionID id) {
   auto &reduction_ref = CpvAccess(_reduction_info)[CmiGetReductionIndex(id)];
   CmiReduction *red = reduction_ref;
   if (red != NULL) {
+    // the messages it held were freed after the merge (CmiSendReduce)
     free(red->remotebuffer);
-    // we assume the user is freeing the actual messages that the buffer is
-    // holding or is that something we do?
     free(red);
   }
   reduction_ref = NULL;
@@ -397,6 +398,7 @@ static CmiReduction *CmiGetCreateReduction(CmiReductionID id) {
   // own contribution
   auto &reduction_ref = CpvAccess(_reduction_info)[CmiGetReductionIndex(id)];
   CmiReduction *red = reduction_ref;
+  CmiCheckReductionSlot(red, id);
   if (reduction_ref == NULL) {
     CmiReduction *newred = (CmiReduction *)malloc(sizeof(CmiReduction));
     newred->ReductionID = id;
@@ -458,6 +460,10 @@ void CmiSendReduce(CmiReduction *red) {
   if (red->numChildren > 0) {
     mergedData = (red->ops.mergefn)(&msg_size, red->localbuffer,
                                     red->remotebuffer, red->numChildren);
+    // as in classic Converse, the children's messages belong to the runtime
+    // once merged; the merge function owns only the local one
+    for (int i = 0; i < red->numChildren; ++i)
+      CmiFree(red->remotebuffer[i]);
   }
   void *msg = mergedData;
   // if we have a parent
@@ -493,9 +499,8 @@ static void CmiClearNodeReduction(CmiReductionID id) {
       CsvAccess(_node_reduction_info)[CmiGetReductionIndex(id)].red;
   CmiReduction *red = reduction_ref;
   if (red != NULL) {
+    // the messages it held were freed after the merge (CmiSendNodeReduce)
     free(red->remotebuffer);
-    // we assume the user is freeing the actual messages that the buffer is
-    // holding or is that something we do?
     free(red);
   }
   reduction_ref = NULL;
@@ -532,6 +537,7 @@ static CmiReduction *CmiGetCreateNodeReduction(CmiReductionID id) {
   auto &reduction_ref =
       CsvAccess(_node_reduction_info)[CmiGetReductionIndex(id)].red;
   CmiReduction *red = reduction_ref;
+  CmiCheckReductionSlot(red, id);
   if (reduction_ref == NULL) {
     CmiReduction *newred = (CmiReduction *)malloc(sizeof(CmiReduction));
     newred->ReductionID = id;
@@ -585,6 +591,10 @@ void CmiSendNodeReduce(CmiReduction *red) {
   if (red->numChildren > 0) {
     mergedData = (red->ops.mergefn)(&msg_size, red->localbuffer,
                                     red->remotebuffer, red->numChildren);
+    // as in classic Converse, the children's messages belong to the runtime
+    // once merged; the merge function owns only the local one
+    for (int i = 0; i < red->numChildren; ++i)
+      CmiFree(red->remotebuffer[i]);
   }
   void *msg = mergedData;
   // if we have a parent
