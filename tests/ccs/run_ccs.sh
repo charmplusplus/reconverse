@@ -1,12 +1,14 @@
 #!/bin/sh
-# run_ccs.sh SERVER CLIENT "LAUNCHER WORDS" [server args...]
+# Environment: CCS_SERVER, CCS_CLIENT (paths), CCS_SERVER_ARGS (e.g. "+pe 6").
+# Arguments: the launcher words for a multi-process run (e.g. mpirun -n 2),
+# none for a single process.
 # Starts the server on an OS-chosen port, reads the port from its output,
 # runs the client against it, and reports the client's verdict. The server
 # exits on the client's "quit" request; it is killed if it has not exited
 # 30 s after the client finished.
-server=$1; client=$2; launcher=$3; shift 3
+server=$CCS_SERVER; client=$CCS_CLIENT
 out=$(mktemp -t ccs_server.XXXXXX)
-$launcher "$server" "$@" ++server-port 0 > "$out" 2>&1 &
+"$@" "$server" $CCS_SERVER_ARGS ++server-port 0 > "$out" 2>&1 &
 spid=$!
 port=""
 i=0

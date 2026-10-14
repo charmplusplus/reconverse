@@ -333,10 +333,11 @@ void CmiReductionsInit(void) {
 
     // node reduction must be initialized with a valid lock
     nodered.lock = CmiCreateLock(); // in non-smp this would just be a nullptr
-  
-    CsvAccess(_node_reduction_info) = noderedinfo;
-    CsvAccess(_node_reduction_counter) = 0;
+    // an empty slot; the slot check reads this before the first reduction
+    nodered.red = NULL;
   }
+  CsvAccess(_node_reduction_info) = noderedinfo;
+  CsvAccess(_node_reduction_counter) = 0;
 
 }
 
