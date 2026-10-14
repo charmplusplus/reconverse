@@ -1,6 +1,7 @@
 //+pe <N> threads, each running a scheduler
 #include "barrier.h"
 #include "converse_internal.h"
+#include "conv-ccs.h"
 #include "queue.h"
 #include "taskqueue.h"
 #include "scheduler.h"
@@ -186,11 +187,13 @@ void converseRunPe(int rank, int everReturn) {
 
   CmiQueueRegisterInitThread();
 
-  // init things like cld module, ccs, etc
   CldModuleInit(CmiMyArgv);
 
   Cmi_exitHandler = CmiRegisterHandler(CmiExitHandler);
   collectiveInit();
+  // CCS: handler registration on every PE; PE 0 opens the server socket when
+  // ++server (or ++server-port / ++server-auth) is given.
+  CcsInit(CmiMyArgv);
   // Cmi_multicastHandler = CmiRegisterHandler(CmiMulticastHandler);
 
   // A global barrier to ensure all global structs are initialized

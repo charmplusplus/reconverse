@@ -14,8 +14,26 @@ thread_local int CmiGroupHandlerIndex;
 thread_local GroupDef *CmiGroupTable;
 thread_local int CmiGroupCounter;
 
-static constexpr unsigned int CmiLogMaxReductions = 4u;
+// 32 slots: 16 for each of the two id counters below, so the runtime's own
+// reductions keep the 16 in-flight limit of classic Converse.
+static constexpr unsigned int CmiLogMaxReductions = 5u;
 static constexpr int CmiMaxReductions = 1u << CmiLogMaxReductions;
+// Children a PE takes in a CmiListReduce tree, and the least number of
+// child slots a reduction record carries (a list reduction can give a PE
+// more children than the spanning tree does).
+static constexpr int CmiReductionsNumChildren = 4;
+// PE reduction ids come from two counters that must never meet in the
+// table: the runtime's own sequence (CmiReduce, offset 0) and the ids
+// programs request up front for list reductions (CmiGetGlobalReduction,
+// offset 1). Both step by the multiplier, so an id's residue names its
+// counter and each counter owns CmiMaxReductions / multiplier slots. The
+// multiplier is a power of two so the residues survive the counters
+// wrapping to 0.
+enum : CmiReductionID {
+  CmiReductionID_globalOffset = 0,
+  CmiReductionID_requestOffset = 1,
+  CmiReductionID_multiplier = 2
+};
 
 void collectiveInit(void) {
   // register special operation handlers
@@ -287,6 +305,7 @@ CmiBroadcastRoot CmiGetBcastRoot(void *msg) {
 void CmiReductionsInit(void) {
   CpvInitialize(CmiReduction **, _reduction_info);
   CpvInitialize(CmiReductionID, _reduction_counter);
+  CpvInitialize(CmiReductionID, _reduction_request_counter);
 
   // allocating memory for reduction info table
   auto redinfo =
@@ -295,8 +314,10 @@ void CmiReductionsInit(void) {
     redinfo[i] = NULL;
   CpvAccess(_reduction_info) = redinfo;
 
-  // each pe will have its own reduction counter, and sets it to 0
-  CpvAccess(_reduction_counter) = 0;
+  // each pe has its own counters; the ids they hand out agree across PEs
+  // because every PE makes the same calls in the same order
+  CpvAccess(_reduction_counter) = CmiReductionID_globalOffset;
+  CpvAccess(_reduction_request_counter) = CmiReductionID_requestOffset;
 
   // SETUP NODE-LEVEL REDUCTIONS
   if(CmiMyRank() == 0)
@@ -338,7 +359,12 @@ void CmiSetRedID(void *msg, CmiReductionID redID) {
 // wrap keeps the slot sequence (see CmiGetReductionIndex) unbroken
 static_assert(std::is_unsigned<CmiReductionID>::value,
               "reduction ids must wrap to 0 on overflow");
-static inline CmiReductionID getNextID(CmiReductionID &ctr) { return ctr++; }
+static inline CmiReductionID getNextID(CmiReductionID &ctr,
+                                       CmiReductionID step = 1) {
+  CmiReductionID old = ctr;
+  ctr += step;
+  return old;
+}
 
 // TODO: is this needed for node reductions?? old Converse uses locks and
 // atomics in SMP for node reductions
@@ -349,6 +375,10 @@ static inline CmiReductionID getNextID(std::atomic<CmiReductionID> &ctr) {
 static_assert((CmiMaxReductions & (CmiMaxReductions - 1)) == 0,
               "CmiMaxReductions must be a power of two that divides the id "
               "range, so slots stay in sequence when an id counter wraps");
+static_assert((CmiReductionID_multiplier & (CmiReductionID_multiplier - 1)) == 0 &&
+                  CmiReductionID_multiplier < CmiMaxReductions,
+              "the id multiplier must be a power of two below the table size, "
+              "so each counter keeps its own slots when it wraps");
 
 unsigned CmiGetReductionIndex(CmiReductionID id) {
   // The reduction table is a ring: id uses slot id mod CmiMaxReductions, so
@@ -363,10 +393,11 @@ unsigned CmiGetReductionIndex(CmiReductionID id) {
 static void CmiCheckReductionSlot(const CmiReduction *red, CmiReductionID id) {
   if (red != NULL && red->ReductionID != id)
     CmiAbort("Too many simultaneous reductions: reduction %u needs table slot "
-             "%u, still held by unfinished reduction %u (at most %d can be in "
-             "flight)",
+             "%u, still held by unfinished reduction %u (at most %d of its "
+             "kind can be in flight)",
              (unsigned)id, CmiGetReductionIndex(id),
-             (unsigned)red->ReductionID, CmiMaxReductions);
+             (unsigned)red->ReductionID,
+             CmiMaxReductions / CmiReductionID_multiplier);
 }
 
 
@@ -383,11 +414,16 @@ static void CmiClearReduction(CmiReductionID id) {
 }
 
 CmiReductionID CmiGetNextReductionID() {
-  return getNextID(CpvAccess(_reduction_counter));
+  return getNextID(CpvAccess(_reduction_counter), CmiReductionID_multiplier);
+}
+
+CmiReductionID CmiGetGlobalReduction(void) {
+  return getNextID(CpvAccess(_reduction_request_counter),
+                   CmiReductionID_multiplier);
 }
 
 void CmiResetGlobalReduceSeqID(void) {
-  CpvAccess(_reduction_counter) = 0;
+  CpvAccess(_reduction_counter) = CmiReductionID_globalOffset;
 }
 
 static CmiReduction *CmiGetCreateReduction(CmiReductionID id) {
@@ -411,8 +447,12 @@ static CmiReduction *CmiGetCreateReduction(CmiReductionID id) {
     newred->localContributed = false;
     newred->localbuffer = NULL;
     newred->localbufferSize = 0;
-    newred->remotebuffer =
-        (void **)malloc(newred->numChildren * sizeof(void *));
+    // room for a list reduction's children too, which can reach this PE
+    // before CmiListReduce sets numChildren
+    int slots = newred->numChildren > CmiReductionsNumChildren
+                    ? newred->numChildren
+                    : CmiReductionsNumChildren;
+    newred->remotebuffer = (void **)malloc(slots * sizeof(void *));
 
     newred->ops.desthandler = NULL;
     newred->ops.mergefn = NULL;
@@ -422,6 +462,32 @@ static CmiReduction *CmiGetCreateReduction(CmiReductionID id) {
   }
 
   return red;
+}
+
+// A reduction over the PEs in pes[], all of which call this with the same
+// list and id. The tree is 4-ary over the list order: pes[i]'s children are
+// pes[4i+1 .. 4i+4] and its parent pes[(i-1)/4]; pes[0] runs the handler.
+// Contributions from children may already be in the record (received under
+// the spanning-tree shape CmiGetCreateReduction assumed), so only the shape
+// is set here, then the usual send path runs.
+void CmiListReduce(int npes, const int *pes, void *msg, int size,
+                   CmiReduceMergeFn mergeFn, CmiReductionID id) {
+  CmiReduction *red = CmiGetCreateReduction(id);
+  int myPos;
+  for (myPos = 0; myPos < npes; ++myPos)
+    if (pes[myPos] == CmiMyPe())
+      break;
+  if (myPos == npes)
+    CmiAbort("CmiListReduce: PE %d is not in the list of %d PEs", CmiMyPe(),
+             npes);
+  int numChildren = npes - (myPos << 2) - 1;
+  if (numChildren > CmiReductionsNumChildren)
+    numChildren = CmiReductionsNumChildren;
+  if (numChildren < 0)
+    numChildren = 0;
+  red->numChildren = numChildren;
+  red->parent = (myPos == 0) ? -1 : pes[(myPos - 1) >> 2];
+  CmiInternalReduce(msg, size, mergeFn, red);
 }
 
 // gets called by every PE pariticapting in the reduction
