@@ -287,6 +287,32 @@ take, and both walk every producer that has pushed to it (#271), so at
 64 PEs per process a backlog of N messages costs on the order of N µs per
 iteration. That is expected in this mode; it goes away when #271 is fixed.
 
+## CCS (Converse Client-Server)
+
+CCS lets a program outside the parallel job send requests to handlers
+registered inside it and read their replies over a TCP socket; Charm++'s
+liveViz, PythonCCS and the CCS builtins use it. It is part of
+libreconverse: `conv-ccs.h` for the server side (`CcsRegisterHandler`,
+`CcsSendReply`, `CcsDelayReply`, `CcsSetMergeFn`), `ccs-client.h` plus the
+`ccs-client` static library for the client side, which needs no Converse.
+`ConverseInit` initializes CCS on every PE; a program registers its
+handlers in its start function and never calls `CcsInit`.
+
+Nothing listens unless the run is started with `++server` (an OS-chosen
+port), `++server-port <port>` or `++server-auth <file>`. PE 0 then opens
+the socket and prints `ccs: Server IP = ..., Server port = ...`, polls it
+from the `CcdPERIODIC` condition, forwards each request to its PE as a
+Converse message, and sends every reply. A request addressed to PE -1 is a
+broadcast: every PE's reply is combined by the handler's merge function
+(`CcsSetMergeFn`; `CcsMerge_concat` and the sum/max/min families are
+provided) in a `CmiReduce`. A request with a PE list is a multicast,
+combined the same way with `CmiListReduce` over that list, under the
+reduction id `CcsSetMergeFn` took from `CmiGetGlobalReduction`.
+`tests/ccs` runs all three through the client library.
+
+Not carried over from classic Converse: CharmDebug's conditional delivery
+and stdio forwarding, which depend on the Converse debugger.
+
 ## Example Steps to Build and Run Reconverse
 
 ### Build and run Reconverse on your own laptop with autofetched LCI backend
