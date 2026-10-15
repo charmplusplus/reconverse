@@ -5,6 +5,7 @@
 
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 #include "converse.h"
 #include "conv-ccs.h"
@@ -402,17 +403,66 @@ Closes it.
  * This is the entrance point of a CCS request into the server.
  * It is executed only on proc 0, and it forwards the request to the appropriate PE.
  */
+/* Turn a request down on PE 0 before it is forwarded: its socket is closed
+   without a reply, as for any empty reply. This goes to CcsImpl_reply
+   directly, not through CcsSendReply, because CcsReply would start the
+   reply reduction of a broadcast or multicast request, which a request
+   that never reaches the other PEs cannot finish. */
+static void CcsRejectRequest(CcsImplHeader *hdr,const char *why)
+{
+  CmiPrintf("CCS: request for handler '%.*s' to PE %d rejected: %s\n",
+            CCS_MAXHANDLER, hdr->handler, (int)ChMessageInt(hdr->pe), why);
+  CcsImpl_reply(hdr,0,NULL);
+}
+
 void CcsImpl_netRequest(CcsImplHeader *hdr,const void *reqData)
 {
   char *msg;
   int len,repPE=ChMessageInt(hdr->pe);
+  /* The handler name comes off the wire; the lookups below need it to end
+     within the field. */
+  if (memchr(hdr->handler, 0, CCS_MAXHANDLER) == NULL) {
+    CcsRejectRequest(hdr, "handler name too long");
+    return;
+  }
   if (repPE<=-CmiNumPes() || repPE>=CmiNumPes()) {
     /*Treat out of bound values as errors. Helps detecting bugs*/
-    if (repPE==-CmiNumPes()) CmiPrintf("Invalid processor index in CCS request: are you trying to do a broadcast instead?");
-    else CmiPrintf("Invalid processor index in CCS request.");
-    CpvAccess(ccsReq)=hdr;
-    CcsSendReply(0,NULL); /*Send an empty reply to the possibly waiting client*/
+    CcsRejectRequest(hdr, repPE==-CmiNumPes()
+        ? "invalid processor index (a multicast to every PE is a broadcast, pe -1)"
+        : "invalid processor index");
     return;
+  }
+  if (repPE <= -1) {
+    /* Every PE's reply is merged with the handler's merge function. The
+       handler table is the same on every PE, so PE 0 can check it here. */
+    CcsHandlerRec *rec = getHandlerRec(hdr->handler);
+    if (rec == NULL) {
+      CcsRejectRequest(hdr, "unknown handler");
+      return;
+    }
+    if (rec->mergeFn == NULL) {
+      CcsRejectRequest(hdr, "broadcast or multicast to a handler without a merge function (CcsSetMergeFn)");
+      return;
+    }
+  }
+  if (repPE < -1) {
+    /* The multicast's PE list, at the start of reqData in network byte
+       order: each PE must exist and appear once, or the requests and the
+       reply reduction would go astray. */
+    const ChMessageInt_t *list = (const ChMessageInt_t *)reqData;
+    std::vector<char> listed(CmiNumPes(), 0);
+    for (int i = 0; i < -repPE; ++i) {
+      int pe = (int)ChMessageInt(list[i]);
+      if (pe < 0 || pe >= CmiNumPes()) {
+        CcsRejectRequest(hdr, "multicast lists an invalid processor index");
+        return;
+      }
+      if (listed[pe]) {
+        CcsRejectRequest(hdr, "multicast lists a processor twice");
+        return;
+      }
+      listed[pe] = 1;
+    }
   }
 
   msg=CcsImpl_ccs2converse(hdr,reqData,&len);

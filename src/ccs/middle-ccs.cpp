@@ -75,7 +75,14 @@ int CcsReply(CcsImplHeader *rep,int repLen,const void *repData) {
     CmiSetHandler(msg,rep_fw_handler_idx);
     handlerStr=rep->handler;
     fn=(CcsHandlerRec *)CcsGetHandler(handlerStr);
-    if (fn->mergeFn == NULL) CmiAbort("Called CCS broadcast with NULL merge function!\n");
+    /* PE 0 checked the handler and its merge function before forwarding
+       (CcsImpl_netRequest); a miss here means this PE's handler table differs
+       from PE 0's */
+    if (fn == NULL || fn->mergeFn == NULL)
+      CmiAbort("CCS: broadcast or multicast reply for handler '%s' on PE %d, "
+               "which has no such handler or no merge function: register "
+               "handlers and merge functions on every PE\n",
+               handlerStr, CmiMyPe());
     if (repPE == -1) {
       /* CCS Broadcast */
       CmiReduce(msg, len, fn->mergeFn);

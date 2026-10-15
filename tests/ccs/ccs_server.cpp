@@ -56,6 +56,8 @@ static void start(int argc, char **argv) {
   dpingAnswerIdx = CmiRegisterHandler((CmiHandler)dping_answer);
   CcsRegisterHandler("dping", (CmiHandler)dping_handler);
   CcsSetMergeFn("dping", CcsMerge_concat);
+  // no merge function: broadcasts and multicasts to it must be turned down
+  CcsRegisterHandler("nomerge", (CmiHandler)ping_handler);
   CcsRegisterHandler("quit", (CmiHandler)quit_handler);
   if (CmiMyPe() == 0) {
     printf("ccs_server: %d PEs, handlers registered\n", CmiNumPes());
