@@ -1,6 +1,7 @@
 # CCS end to end: a Converse program with ++server-port answers a client
 # linked against libccs-client only. Covers single-PE, broadcast (CmiReduce)
-# and multicast (CmiListReduce) requests, in one process and in two. The
+# and multicast (CmiListReduce) requests, and delayed replies (CcsDelayReply),
+# in one process and in two. The
 # launcher may be a list ("mpirun;--oversubscribe"), so it is passed to the
 # script as separate arguments, not inside a quoted string.
 add_reconverse_executable(ccs_server ccs_server.cpp)

@@ -212,8 +212,11 @@ CcsDelayedReply CcsDelayReply(void)
 {
   CcsDelayedReply ret;
   int len = sizeof(CcsImplHeader);
-  if (ChMessageInt(CpvAccess(ccsReq)->pe) < -1)
-    len += ChMessageInt(CpvAccess(ccsReq)->pe) * sizeof(int);
+  /* ChMessageInt is unsigned: compare the PE as an int. A multicast header
+     (pe < -1) is followed by its list of -pe PEs, which CcsReply reads. */
+  int pe = (int)ChMessageInt(CpvAccess(ccsReq)->pe);
+  if (pe < -1)
+    len += -pe * (int)sizeof(int);
   ret.hdr = (CcsImplHeader*)malloc(len);
   memcpy(ret.hdr, CpvAccess(ccsReq), len);
   CpvAccess(ccsReq)=NULL;

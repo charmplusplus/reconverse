@@ -251,18 +251,23 @@ int CcsSendRequestGeneric(CcsServer *svr, const char *hdlrID, int pe, int *pes, 
   /*Send the CCS header*/
   bufs[nBuffers]=&hdr; lens[nBuffers]=sizeof(hdr); nBuffers++;
   
-  /*Send the processors list*/
+  /*Send the processors list, converted in a copy so the caller's pes[]
+    stays in host byte order and can be sent again*/
+  ChMessageInt_t *pes_nbo = NULL;
   if (pe < -1) {
     int i;
-    ChMessageInt_t *pes_nbo = (ChMessageInt_t *)pes;
+    pes_nbo = (ChMessageInt_t *)malloc(-pe*sizeof(ChMessageInt_t));
+    if (pes_nbo == NULL) return -1;
     for (i=0; i<-pe; ++i) pes_nbo[i] = ChMessageInt_new(pes[i]);
-    bufs[nBuffers]=pes; lens[nBuffers]=-pe*sizeof(ChMessageInt_t); nBuffers++;
+    bufs[nBuffers]=pes_nbo; lens[nBuffers]=-pe*sizeof(ChMessageInt_t); nBuffers++;
   }
-  
+
   /*Send the request data*/
   if (size>0) {bufs[nBuffers]=msg; lens[nBuffers]=size; nBuffers++;}
-  
-  if (-1==skt_sendV(svr->replyFd, nBuffers, bufs,lens)) return -1;
+
+  int sent = skt_sendV(svr->replyFd, nBuffers, bufs,lens);
+  free(pes_nbo);
+  if (-1==sent) return -1;
   DEBUGF(("[%.3f] Request sent\n",CmiWallTimer()));
   /*Leave socket open for reply*/
   return 0;

@@ -1,6 +1,7 @@
 // CCS client side of the test, linked against libccs-client only (no
 // Converse). Sends a "ping" to every PE, one broadcast and one multicast,
-// checks every expected PE answered, then tells the server to quit.
+// then a delayed-reply "dping" to one PE and as a multicast, checks every
+// expected PE answered, then tells the server to quit.
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -70,6 +71,31 @@ int main(int argc, char **argv) {
                   reply);
   }
   printf("ccs_client: multicast answered by exactly the %d listed PEs\n", n);
+
+  // delayed replies (CcsDelayReply), which copy the request header and, for
+  // a multicast, the PE list after it: one to the highest PE, then the
+  // multicast above again
+  CcsSendRequest(&svr, "dping", npes - 1, 0, NULL);
+  len = CcsRecvResponse(&svr, sizeof(reply) - 1, reply, 60);
+  if (len < 0) return fail("delayed single-PE reply timed out", "");
+  reply[len] = 0;
+  if (!answered(reply, npes - 1)) return fail("delayed single-PE reply", reply);
+  // the same pes[] again: CcsSendMulticastRequest must not have changed it
+  for (int i = 0; i < n; ++i)
+    if (pes[i] != npes - 1 - 2 * i)
+      return fail("CcsSendMulticastRequest changed the caller's PE list", "");
+  CcsSendMulticastRequest(&svr, "dping", n, pes, 0, NULL);
+  len = CcsRecvResponse(&svr, sizeof(reply) - 1, reply, 60);
+  if (len < 0) return fail("delayed multicast reply timed out", "");
+  reply[len] = 0;
+  for (int pe = 0; pe < npes; ++pe) {
+    int inList = ((npes - 1 - pe) % 2 == 0);
+    if (answered(reply, pe) != inList)
+      return fail(inList ? "delayed multicast reply misses a listed PE"
+                         : "delayed multicast reply includes an unlisted PE",
+                  reply);
+  }
+  printf("ccs_client: delayed replies answered, single-PE and multicast\n");
   free(pes);
 
   // The server exits right after answering; the reply may or may not reach
