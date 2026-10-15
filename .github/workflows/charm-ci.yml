@@ -46,7 +46,7 @@ permissions:
   pull-requests: write
 
 env:
-  CHARM_REF: ${{ vars.CHARM_REF || 'reviewed-with-reconverse' }}
+  CHARM_REF: ${{ vars.CHARM_REF || 'recharm' }}
   # Pin the OFI provider, as charm's job does: LCI takes the first
   # fi_getinfo() match, and a hosted runner that exposes an RDMA-capable
   # NIC ranks a hardware provider ahead of tcp, which then fails to enable.
