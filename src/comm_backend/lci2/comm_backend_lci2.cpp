@@ -1,6 +1,7 @@
 #include "mempool.h"
 #include "lci.hpp"
 #include "comm_backend/lci2/comm_backend_lci2.h"
+#include <cstdlib>
 #include <vector>
 
 CpvDeclare(mempool_type*, mempool);
@@ -188,8 +189,19 @@ void CommBackendLCI2::init(char **argv) {
   CmiGetArgInt(argv, "+lci_ndevices", (int *)&num_devices);
   CmiAssert(num_devices >= 1);
 
+  // Slingshot (cxi): hardware RX matching aborts once NIC list entries run out
+  // ("LE resources not recovered"); hybrid falls back to software matching.
+  setenv("FI_CXI_RX_MATCH_MODE", "hybrid", 0);
+
   lci::global_initialize();
   auto g_attr = lci::get_g_default_attr();
+  // On OFI, libfabric caches registrations itself, and its memhooks monitor
+  // replaces the munmap/madvise hooks LCI's cache relies on, so that cache
+  // keeps stale registrations (cxil_map failures, ENOSPC). LCI_ATTR_USE_REG_CACHE
+  // still overrides this.
+  if (g_attr.backend == lci::attr_backend_t::ofi && g_attr.use_reg_cache &&
+      getenv("LCI_ATTR_USE_REG_CACHE") == nullptr)
+    g_attr.use_reg_cache = false;
   // We will make sure the total packet number is always at least twice as large as the total preposted receives.
   // We also set a minimum of 1024 preposted receives per device and increase the total number of packets if needed.
   if (g_attr.net_max_recvs * num_devices > g_attr.npackets / 2) {

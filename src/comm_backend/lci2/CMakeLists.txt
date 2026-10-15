@@ -52,7 +52,8 @@ if(RECONVERSE_TRY_ENABLE_COMM_LCI2)
     # send every lookup hits. Without it, a long-running job can also exhaust
     # the NIC's registration table outright (ENOSPC from fi_mr_regattr).
     # Not available on Apple, where LCI cannot build the cache.
-    # LCI_ATTR_USE_REG_CACHE=OFF still disables it at run time.
+    # LCI_ATTR_USE_REG_CACHE=OFF still disables it at run time; on OFI it is
+    # off by default (see CommBackendLCI2::init).
     if(NOT APPLE)
       set(LCI_USE_REG_CACHE ON CACHE BOOL
           "Enable LCI's memory registration cache" FORCE)
