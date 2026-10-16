@@ -197,8 +197,8 @@ void CommBackendLCI2::init(char **argv) {
   auto g_attr = lci::get_g_default_attr();
   // On OFI, libfabric caches registrations itself, and its memhooks monitor
   // replaces the munmap/madvise hooks LCI's cache relies on, so that cache
-  // keeps stale registrations (cxil_map failures, ENOSPC). LCI_ATTR_USE_REG_CACHE
-  // still overrides this.
+  // keeps stale registrations (cxil_map failures, stalled transfers).
+  // LCI_ATTR_USE_REG_CACHE still overrides this.
   if (g_attr.backend == lci::attr_backend_t::ofi && g_attr.use_reg_cache &&
       getenv("LCI_ATTR_USE_REG_CACHE") == nullptr)
     g_attr.use_reg_cache = false;

@@ -45,15 +45,11 @@ if(RECONVERSE_TRY_ENABLE_COMM_LCI2)
     if(RECONVERSE_ENABLE_HIP)
       set(LCI_USE_HIP ON CACHE BOOL "Enable HIP support in LCI" FORCE)
     endif()
-    # LCI registers a buffer on every send above the eager threshold, at a
-    # per-message cost of tens of microseconds, and its registration cache is
-    # off by default. Reconverse's traffic is the case the cache exists for: a
-    # bounded set of long-lived buffers sent repeatedly, so after the first
-    # send every lookup hits. Without it, a long-running job can also exhaust
-    # the NIC's registration table outright (ENOSPC from fi_mr_regattr).
-    # Not available on Apple, where LCI cannot build the cache.
-    # LCI_ATTR_USE_REG_CACHE=OFF still disables it at run time; on OFI it is
-    # off by default (see CommBackendLCI2::init).
+    # Compile in LCI's registration cache (LCI cannot build it on Apple).
+    # At run time it is on for ibv, where repeated sends of long-lived buffers
+    # hit it instead of re-registering, and off on OFI, where libfabric caches
+    # registrations itself (see CommBackendLCI2::init).
+    # LCI_ATTR_USE_REG_CACHE overrides either default.
     if(NOT APPLE)
       set(LCI_USE_REG_CACHE ON CACHE BOOL
           "Enable LCI's memory registration cache" FORCE)
