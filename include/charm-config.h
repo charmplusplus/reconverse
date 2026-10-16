@@ -15,6 +15,10 @@
 
 #define CMK_LBDB_ON 1
 
+/* CCS (Converse Client-Server) is part of libreconverse: conv-ccs.h,
+ * ccs-server.h, sockRoutines.h and the ccs-client library. */
+#define CMK_CCS_AVAILABLE 1
+
 // Size of the machine-layer buffer in CmiNcpyBuffer::layerInfo.
 // Reconverse uses 8 bytes for mr_t + 16 bytes for rmr + 8 bytes spare = 32.
 // This must match CMK_NOCOPY_DIRECT_BYTES in reconverse/include/conv-rdma.h.

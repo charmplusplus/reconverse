@@ -30,11 +30,12 @@ inline void *CmiTakeNodeQueue() {
 // converse-level thread queue
 inline void *CmiTakeThreadQueue() {
   ConverseQueue<void *> *queue = CmiGetQueue(CmiMyRank());
-  if (!queue->empty()) {
-    // guaranteed to be there because this PE is the only consumer
-    return queue->pop().value();
-  }
-  return nullptr;
+  // pop() checks the queue's count itself, so an empty queue costs one load.
+  // It can come back empty even when the count was positive, when a
+  // producer's count increment ran ahead of its enqueue; the message is then
+  // taken on a later call.
+  auto r = queue->pop();
+  return r ? *r : nullptr;
 }
 
 // node priority queue (CsdNodeQueue)

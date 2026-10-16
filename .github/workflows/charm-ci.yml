@@ -11,13 +11,18 @@
 # reconverse and Charm++ together cannot pass this job before the Charm++
 # half is merged, and the Charm++ half cannot be tested before the
 # reconverse half is merged; making the job a merge requirement would leave
-# both stuck. So every test step continues on error, the job itself always
-# reports success, and the outcome is delivered as a warning annotation, a
-# job summary, and a pull-request comment that says plainly that Charm++
-# breaks under this change. Reviewers read that and decide.
+# both stuck. So every test step continues on error, the job reports
+# success whatever Charm++ does, and the outcome is delivered as a warning
+# annotation, a job summary, and a pull-request comment that says plainly
+# that Charm++ breaks under this change. Reviewers read that and decide.
+# The one exception is a Charm++ ref that cannot be cloned: then nothing
+# was tested, the job fails, and the comment says the job is misconfigured
+# rather than that Charm++ breaks. (Until 2026-10 a stale default ref,
+# a renamed branch, left the job green without building Charm++.)
 #
 # Which Charm++ to pair with is the repository variable CHARM_REF (a branch
-# or SHA), defaulting to the reconverse integration branch. A pull request
+# or SHA), defaulting to recharm, the branch whose contrib/reconverse
+# submodule tracks this repository. A pull request
 # that pairs with a specific Charm++ branch (the other half of a coupled
 # change) can say so in its description with a line
 #     CHARM_REF: <branch-or-sha>
@@ -46,7 +51,7 @@ permissions:
   pull-requests: write
 
 env:
-  CHARM_REF: ${{ vars.CHARM_REF || 'reviewed-with-reconverse' }}
+  CHARM_REF: ${{ vars.CHARM_REF || 'recharm' }}
   # Pin the OFI provider, as charm's job does: LCI takes the first
   # fi_getinfo() match, and a hosted runner that exposes an RDMA-capable
   # NIC ranks a hardware provider ahead of tcp, which then fails to enable.
@@ -136,7 +141,8 @@ jobs:
         run: |
           for d in $TEST_DIRS; do TESTRUN_PROCS=2 make -C $d test; done
 
-      # Always succeeds. Turns the outcomes above into the advisory.
+      # Turns the outcomes above into the advisory. Succeeds whatever Charm++
+      # did, unless Charm++ could not be cloned: then nothing was tested.
       - name: Report (advisory)
         if: always()
         env:
@@ -150,12 +156,19 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           failed=""
-          for s in "clone Charm++:$O_CLONE" "build Charm++:$O_BUILD" "build test tier:$O_TIER" \
+          for s in "build Charm++:$O_BUILD" "build test tier:$O_TIER" \
                    "tests, 1 process:$O_TEST1" "tests, 2 processes:$O_TEST2"; do
             case "${s##*:}" in failure) failed="$failed ${s%:*};";; esac
           done
           marker='<!-- charm-ci-advisory -->'
-          if [ -z "$failed" ]; then
+          status=0
+          if [ "$O_CLONE" = failure ]; then
+            # Not a verdict on this change: nothing was built or run.
+            verdict="Charm++ was NOT tested: cloning Charm++ at '$CHARM_REF' failed, so this job is misconfigured; it says nothing about this change. Point the repository variable CHARM_REF (or this pull request's CHARM_REF: line) at an existing Charm++ branch or SHA. Details: $RUN_URL"
+            echo "::error title=Charm++ was not tested::$verdict"
+            { echo "### Charm++ on this reconverse: NOT TESTED"; echo; echo "$verdict"; } >> "$GITHUB_STEP_SUMMARY"
+            status=1
+          elif [ -z "$failed" ]; then
             verdict="Charm++ ($CHARM_REF) builds and its reconverse test tier passes against this tree."
             echo "$verdict"
             { echo "### Charm++ on this reconverse: pass"; echo; echo "$verdict"; } >> "$GITHUB_STEP_SUMMARY"
@@ -176,4 +189,4 @@ jobs:
               gh api "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" -f body="$body" >/dev/null 2>&1 || true
             fi
           fi
-          exit 0
+          exit $status

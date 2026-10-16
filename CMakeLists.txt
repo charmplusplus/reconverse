@@ -74,6 +74,13 @@ option(CMK_TASKQUEUE "use the task queue for work stealing" OFF)
 
 option(RECONVERSE_ATOMIC_QUEUE "whether to use atomic queue" ON)
 
+# Every message is allocated by the sending PE and freed by the receiving PE;
+# glibc's malloc handles those cross-thread frees poorly (reconverse#271).
+option(RECONVERSE_USE_JEMALLOC
+  "Link jemalloc (libjemalloc_pic.a) into libreconverse, whole-archive, so its malloc/free replace libc's for the process. With a static libreconverse the final link must also use whole-archive."
+  OFF)
+set(JEMALLOC_ROOT "" CACHE PATH "jemalloc install prefix (used when RECONVERSE_USE_JEMALLOC=ON)")
+
 set(RECONVERSE_TEST_LAUNCHER
     "mpirun"
     CACHE STRING "The executable to run multiple processes in CTest")
@@ -227,6 +234,37 @@ endif()
 
 if(RECONVERSE_ENABLE_CPU_AFFINITY)
   target_link_libraries(reconverse PUBLIC HWLOC::HWLOC)
+endif()
+
+if(RECONVERSE_USE_JEMALLOC)
+  find_library(JEMALLOC_PIC_LIBRARY NAMES jemalloc_pic
+               HINTS ${JEMALLOC_ROOT} PATH_SUFFIXES lib lib64)
+  if(NOT JEMALLOC_PIC_LIBRARY)
+    find_package(PkgConfig QUIET)
+    if(PKG_CONFIG_FOUND)
+      pkg_check_modules(JEMALLOC_PC QUIET jemalloc)
+      if(JEMALLOC_PC_FOUND)
+        find_library(JEMALLOC_PIC_LIBRARY NAMES jemalloc_pic
+                     HINTS ${JEMALLOC_PC_LIBRARY_DIRS} NO_DEFAULT_PATH)
+      endif()
+    endif()
+  endif()
+  if(NOT JEMALLOC_PIC_LIBRARY)
+    message(FATAL_ERROR
+      "RECONVERSE_USE_JEMALLOC=ON but libjemalloc_pic.a was not found "
+      "(JEMALLOC_ROOT='${JEMALLOC_ROOT}'). Build jemalloc with "
+      "'./configure --prefix=<prefix> && make -j && make install' and pass "
+      "-DJEMALLOC_ROOT=<prefix>.")
+  endif()
+  message(STATUS "Linking jemalloc into reconverse: ${JEMALLOC_PIC_LIBRARY}")
+  if(APPLE)
+    target_link_libraries(reconverse PRIVATE "-Wl,-force_load,${JEMALLOC_PIC_LIBRARY}")
+  else()
+    target_link_libraries(reconverse PRIVATE
+      "-Wl,--whole-archive" "${JEMALLOC_PIC_LIBRARY}" "-Wl,--no-whole-archive"
+      ${CMAKE_DL_LIBS} m)
+  endif()
+  target_compile_definitions(reconverse PRIVATE RECONVERSE_USE_JEMALLOC)
 endif()
 
 if(NOT RECONVERSE_ROOT_PROJECT)

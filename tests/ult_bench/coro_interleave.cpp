@@ -195,6 +195,8 @@ static void coroHandler(void *msg) {
 }
 
 static void test_init(int argc, char **argv) {
+  // Bind this PE per +setcpuaffinity/+pemap; ConverseInit does not.
+  CmiInitCPUAffinity(argv);
   (void)argc;
 
   CpvInitialize(struct interleaveState, st);

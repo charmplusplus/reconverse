@@ -124,15 +124,16 @@ extern int CmiSetCPUAffinity(int);
 
 #define CMI_REDUCTION_ID_MULTIPLIER 4
 
-using CmiReductionID =
-    decltype(CmiMessageHeader::collectiveMetaInfo); // needs to match header
+static_assert(std::is_same<CmiReductionID,
+                           decltype(CmiMessageHeader::collectiveMetaInfo)>::value,
+              "CmiReductionID (converse.h) rides in the header's collectiveMetaInfo");
 // The node a broadcast originated from. The spanning tree is rooted there, so
 // intermediate nodes need it to work out their position in the tree.
 using CmiBroadcastRoot =
     decltype(CmiMessageHeader::collectiveMetaInfo); // needs to match header
 typedef struct {
-  int ReductionID; // ID associated with the reduction. Different reductions
-                   // will correspond to different IDs
+  CmiReductionID ReductionID; // ID associated with the reduction. Different
+                              // reductions will correspond to different IDs
   int numChildren; // number of child PEs/chares in the spanning tree for the
                    // reduction
   int messagesReceived;  // used to keep track of how many contributions have
@@ -161,9 +162,9 @@ typedef struct {
 } CmiNodeReduction;
 
 CpvStaticDeclare(CmiReductionID, _reduction_counter);
+CpvStaticDeclare(CmiReductionID, _reduction_request_counter);
 CpvStaticDeclare(CmiReduction **,
                  _reduction_info); // an array of pointers to reduction structs
-CpvStaticDeclare(CmiReductionID, _reduce_seqID_global);
 
 // atomics used here to support SMP
 using CmiNodeReductionID = std::atomic<CmiReductionID>;

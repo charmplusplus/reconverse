@@ -1,6 +1,7 @@
 //+pe <N> threads, each running a scheduler
 #include "barrier.h"
 #include "converse_internal.h"
+#include "conv-ccs.h"
 #include "queue.h"
 #include "taskqueue.h"
 #include "scheduler.h"
@@ -13,6 +14,9 @@
 #include <pthread.h>
 #include <stdio.h>
 #include <sys/stat.h>
+#ifdef RECONVERSE_USE_JEMALLOC
+#include <dlfcn.h>
+#endif
 #include <stdlib.h>
 #include <thread>
 #include <vector>
@@ -184,11 +188,13 @@ void converseRunPe(int rank, int everReturn) {
 
   CmiQueueRegisterInitThread();
 
-  // init things like cld module, ccs, etc
   CldModuleInit(CmiMyArgv);
 
   Cmi_exitHandler = CmiRegisterHandler(CmiExitHandler);
   collectiveInit();
+  // CCS: handler registration on every PE; PE 0 opens the server socket when
+  // ++server (or ++server-port / ++server-auth) is given.
+  CcsInit(CmiMyArgv);
   // Cmi_multicastHandler = CmiRegisterHandler(CmiMulticastHandler);
 
   // A global barrier to ensure all global structs are initialized
@@ -456,6 +462,46 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
       printf("Reconverse> Starting Reconverse with %d %s, %d %s (1 PE = 1 thread), and %d %s\n",
            Cmi_numnodes, processType.c_str(), Cmi_npes, peType.c_str(), Cmi_mynodesize, ppnType.c_str());
     CmiCheckCacheLineSize();
+#ifdef RECONVERSE_USE_JEMALLOC
+    {
+      // jemalloc is the active allocator when a malloc call made through the
+      // global symbol advances the thread.allocated counter of the jemalloc
+      // that global lookup finds (mallctl is exported only by jemalloc).
+      // An address comparison of malloc and mallctl is not used because a
+      // non-PIE executable that takes &malloc defines a canonical PLT entry
+      // for it, and dlsym then returns that entry in the executable.
+      typedef int (*mallctl_fn)(const char *, void *, size_t *, void *, size_t);
+      mallctl_fn ctl = (mallctl_fn)dlsym(RTLD_DEFAULT, "mallctl");
+      bool active = false;
+      if (ctl) {
+        uint64_t before = 0, after = 0;
+        size_t sz = sizeof(uint64_t);
+        void *(*volatile mallocFn)(size_t) = malloc;
+        if (ctl("thread.allocated", &before, &sz, nullptr, 0) == 0) {
+          void *p = mallocFn(4096);
+          sz = sizeof(uint64_t);
+          active = ctl("thread.allocated", &after, &sz, nullptr, 0) == 0 &&
+                   after - before >= 4096;
+          free(p);
+        }
+      }
+      Dl_info info = {};
+      if (active && dladdr((void *)ctl, &info) && info.dli_fname) {
+        const char *base = strrchr(info.dli_fname, '/');
+        printf("Reconverse> allocator: jemalloc (malloc resolves to %s)\n",
+               base ? base + 1 : info.dli_fname);
+      } else if (active) {
+        printf("Reconverse> allocator: jemalloc (malloc resolves to unknown)\n");
+      } else {
+        void *m = dlsym(RTLD_DEFAULT, "malloc");
+        bool found = m && dladdr(m, &info) && info.dli_fname;
+        fprintf(stderr,
+                "Reconverse> WARNING: built with RECONVERSE_USE_JEMALLOC but "
+                "malloc resolves to %s; jemalloc is not in use\n",
+                found ? info.dli_fname : "unknown");
+      }
+    }
+#endif
   }
   Cmi_nodestart = Cmi_mynode * Cmi_mynodesize;
   // register am handlers
