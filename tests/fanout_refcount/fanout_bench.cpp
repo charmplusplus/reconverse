@@ -198,6 +198,9 @@ static void finish(void) {
 }
 
 static void mymain(int argc, char **argv) {
+  // Bind this PE per +setcpuaffinity/+pemap; ConverseInit does not.
+  CmiInitCPUAffinity(argv);
+  argc = CmiGetArgc(argv);
   CpvInitialize(int, recvIdx);
   CpvInitialize(int, ackIdx);
   CpvInitialize(int, exitIdx);

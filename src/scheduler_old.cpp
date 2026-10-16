@@ -72,11 +72,13 @@ void CsdSchedulerOld() {
     // priority queue branch below ran something. The registered scheduler has
     // the same bound from its 16:16 slot weights.
     else if (!queue->empty()) {
-      void *msg;
+      void *msg = nullptr;
       if (tq_streak < thread_queue_max || QueueEmpty(CpvAccess(CsdSchedQueue))) {
-        tq_streak++;
-        // get next event (guaranteed to be there because only single consumer)
-        msg = queue->pop().value();
+        // the count said non-empty; pop() can still come back empty when a
+        // producer's count increment ran ahead of its enqueue, in which case
+        // the message is seen on the next iteration
+        auto result = queue->pop();
+        if (result) { tq_streak++; msg = result.value(); }
       } else {
         tq_streak = 0;
         msg = QueueTop(CpvAccess(CsdSchedQueue));
@@ -84,13 +86,13 @@ void CsdSchedulerOld() {
       }
 
       // release idle if necessary
-      if (CmiGetIdle()) {
+      if (msg != nullptr && CmiGetIdle()) {
         CmiSetIdle(false);
         CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
       }
         
       // process event
-      CmiHandleMessage(msg);
+      if (msg != nullptr) CmiHandleMessage(msg);
     }
 
         // poll node prio queue
@@ -278,11 +280,13 @@ void CsdSchedulePollOld() {
     // priority queue branch below ran something. The registered scheduler has
     // the same bound from its 16:16 slot weights.
     else if (!queue->empty()) {
-      void *msg;
+      void *msg = nullptr;
       if (tq_streak < thread_queue_max || QueueEmpty(CpvAccess(CsdSchedQueue))) {
-        tq_streak++;
-        // get next event (guaranteed to be there because only single consumer)
-        msg = queue->pop().value();
+        // the count said non-empty; pop() can still come back empty when a
+        // producer's count increment ran ahead of its enqueue, in which case
+        // the message is seen on the next iteration
+        auto result = queue->pop();
+        if (result) { tq_streak++; msg = result.value(); }
       } else {
         tq_streak = 0;
         msg = QueueTop(CpvAccess(CsdSchedQueue));
@@ -290,13 +294,13 @@ void CsdSchedulePollOld() {
       }
 
       // release idle if necessary
-      if (CmiGetIdle()) {
+      if (msg != nullptr && CmiGetIdle()) {
         CmiSetIdle(false);
         CcdRaiseCondition(CcdPROCESSOR_END_IDLE);
       }
 
       // process event
-      CmiHandleMessage(msg);
+      if (msg != nullptr) CmiHandleMessage(msg);
 
     }
 

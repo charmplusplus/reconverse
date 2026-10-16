@@ -34,6 +34,18 @@ Some general options include:
   with the kernel module loaded) can use it. Requires an XPMEM installation;
   point CMake at it with `-DXPMEM_ROOT=<prefix>` if it is not in `/opt/xpmem`.
 
+* **`RECONVERSE_USE_JEMALLOC`** (`OFF` by default)
+  Links jemalloc's `libjemalloc_pic.a` into libreconverse (whole-archive), so
+  jemalloc's `malloc`/`free` replace libc's for the whole process; no change is
+  needed in Charm++ or the application. Messages are allocated on one PE and
+  freed on another, which glibc's malloc handles slowly with many threads
+  (reconverse#271). Point CMake at the install with `-DJEMALLOC_ROOT=<prefix>`.
+  Build jemalloc 5.4.0 from the release tarball with
+  `./configure --prefix=<prefix> && make -j && make install`; the default build
+  produces `libjemalloc_pic.a`. jemalloc keeps its metadata out of line, so the
+  header reconverse puts in front of each message is unaffected. Startup prints
+  `Reconverse> allocator: jemalloc` when this is on.
+
 * **`CMAKE_BUILD_TYPE`** (not set by default)
   Selects the build type and corresponding compiler flags. For example:
 
@@ -280,7 +292,7 @@ run deterministic, because message arrival timing still varies. Without
 `+randomized_seed`, each process takes its own seed from its clock and the
 banner shows process 0's, so pass the flag to repeat a multi-process run.
 
-Charm++ under this mode (`reviewed-with-reconverse`, 2026-10-10): megatest
+Charm++ under this mode (branch `recharm`, 2026-10-10): megatest
 passes except its `priotest` module, which checks priority order; the
 Charm++ CI test set and `sdag`, `load_balancing`, `reductionTesting`,
 `chkpt` and `demand_creation` pass; `tests/charm++/delegation/multicast`
@@ -296,6 +308,32 @@ iteration sizes the thread queue and checks it for emptiness before every
 take, and both walk every producer that has pushed to it (#271), so at
 64 PEs per process a backlog of N messages costs on the order of N µs per
 iteration. That is expected in this mode; it goes away when #271 is fixed.
+
+## CCS (Converse Client-Server)
+
+CCS lets a program outside the parallel job send requests to handlers
+registered inside it and read their replies over a TCP socket; Charm++'s
+liveViz, PythonCCS and the CCS builtins use it. It is part of
+libreconverse: `conv-ccs.h` for the server side (`CcsRegisterHandler`,
+`CcsSendReply`, `CcsDelayReply`, `CcsSetMergeFn`), `ccs-client.h` plus the
+`ccs-client` static library for the client side, which needs no Converse.
+`ConverseInit` initializes CCS on every PE; a program registers its
+handlers in its start function and never calls `CcsInit`.
+
+Nothing listens unless the run is started with `++server` (an OS-chosen
+port), `++server-port <port>` or `++server-auth <file>`. PE 0 then opens
+the socket and prints `ccs: Server IP = ..., Server port = ...`, polls it
+from the `CcdPERIODIC` condition, forwards each request to its PE as a
+Converse message, and sends every reply. A request addressed to PE -1 is a
+broadcast: every PE's reply is combined by the handler's merge function
+(`CcsSetMergeFn`; `CcsMerge_concat` and the sum/max/min families are
+provided) in a `CmiReduce`. A request with a PE list is a multicast,
+combined the same way with `CmiListReduce` over that list, under the
+reduction id `CcsSetMergeFn` took from `CmiGetGlobalReduction`.
+`tests/ccs` runs all three through the client library.
+
+Not carried over from classic Converse: CharmDebug's conditional delivery
+and stdio forwarding, which depend on the Converse debugger.
 
 ## Example Steps to Build and Run Reconverse
 

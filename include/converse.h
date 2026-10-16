@@ -636,8 +636,18 @@ void CmiAssignOnce(int *variable, int value);
 
 // Reduction functions
 typedef void *(*CmiReduceMergeFn)(int *, void *, void **, int);
+typedef CmiUInt4 CmiReductionID;
 void CmiReduce(void *msg, int size, CmiReduceMergeFn mergeFn);
 void CmiNodeReduce(void *msg, int size, CmiReduceMergeFn mergeFn);
+/* A reduction over an explicit PE list, under an id every participant
+ * obtained from CmiGetGlobalReduction() (same call sequence on every PE).
+ * pes[0] receives the result; the list defines a 4-ary tree over the PEs. */
+void CmiListReduce(int npes, const int *pes, void *msg, int size,
+                   CmiReduceMergeFn mergeFn, CmiReductionID id);
+/* An id for a reduction that only some PEs join (CmiListReduce). Every PE
+ * must call this the same number of times in the same order, as at startup,
+ * so that the ids agree. */
+CmiReductionID CmiGetGlobalReduction(void);
 void CmiResetGlobalReduceSeqID();
 void CmiResetGlobalNodeReduceSeqID();
 
