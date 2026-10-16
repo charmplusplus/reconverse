@@ -60,6 +60,32 @@ inline void *CmiTakeNodePrioQueue() {
   return nullptr;
 }
 
+// node priority queue, but only a message that would not run after this
+// PE's own queued work: its priority is at least as high as the head of
+// CsdSchedQueue, or CsdSchedQueue is empty. Classic Converse took a node
+// priority message ahead of local work only when strictly higher (ties went
+// to local work); ties go to the node message here, because a node message
+// is node-level work placed there to be done soonest by whichever PE is free
+// (issue #268). A lower-priority node message is left for CmiTakeNodePrioQueue.
+inline void *CmiTakeNodePrioQueueIfAhead() {
+  // same length check before the lock as CmiTakeNodePrioQueue
+  if (CsdNodeQueueLenGet() > 0 &&
+      CmiTryLock(CsvAccess(CsdNodeQueueLock)) == 0) {
+    Queue nodeQ = CsvAccess(CsdNodeQueue);
+    Queue localQ = CpvAccess(CsdSchedQueue);
+    void *msg = nullptr;
+    if (!QueueEmpty(nodeQ) &&
+        QueueTopPriority(nodeQ) <= QueueTopPriority(localQ)) {
+      msg = QueueTop(nodeQ);
+      QueuePop(nodeQ);
+      CsdNodeQueueLenAdd(-1);
+    }
+    CmiUnlock(CsvAccess(CsdNodeQueueLock));
+    return msg;
+  }
+  return nullptr;
+}
+
 // this PE's thread priority queue (CsdSchedQueue)
 inline void *CmiTakeThreadPrioQueue() {
   if (!QueueEmpty(CpvAccess(CsdSchedQueue))) {

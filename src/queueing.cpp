@@ -39,6 +39,7 @@
  */
 #include "converse.h"
 #include "converse_internal.h"
+#include <climits>
 #include <deque>
 #include <map>
 
@@ -135,6 +136,23 @@ void *QueueTop(Queue q) {
     return nullptr;
   Level *l = front_level(q);
   return l ? l->front() : nullptr;
+}
+
+long long QueueTopPriority(Queue q) {
+  if (!q || q->size == 0)
+    return LLONG_MAX;
+  // the same walk as front_level, returning the level's key
+  Levels &lv = levels(q);
+  Levels::iterator it = lv.begin();
+  for (; it != lv.end() && it->first < 0; ++it)
+    if (!it->second.empty())
+      return it->first;
+  if (!zero(q).empty())
+    return 0;
+  for (; it != lv.end(); ++it)
+    if (!it->second.empty())
+      return it->first;
+  return LLONG_MAX;
 }
 
 void QueuePop(Queue q) {

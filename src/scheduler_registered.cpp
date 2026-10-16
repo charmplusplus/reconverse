@@ -5,12 +5,26 @@
 // according to a relative frequency, and the loop sweeps that table. Adding a
 // queue means registering a handler here rather than editing the loop.
 //
-// One ordering rule sits outside the table: the converse thread queue is
-// drained before the sweep. It holds every message delivered to this PE,
+// Two ordering rules sit outside the table. First, the converse thread queue
+// is drained before the sweep. It holds every message delivered to this PE,
 // including the ones Charm++'s _skipCldHandler still has to move into the
 // prioritized CsdSchedQueue, and [expedited] entries that run straight from
 // it. Running CsdSchedQueue while it is non-empty picks the "highest
 // priority" message from an incomplete set (issue #258).
+//
+// Second, node-level work comes before the PE's own queued work (issue
+// #268). The node queue holds work that any PE of the process may run, put
+// there so that whichever PE is free does it soonest. In the slot table, at
+// weight 1 against 16, it waited behind up to 16 local messages per sweep on
+// every PE, so on a process whose PEs all had local work a node request
+// waited for many work items instead of one. Classic Converse also took
+// incoming node messages ahead of all local Charm++ work. So after the thread
+// queue, each iteration takes a message from the node queue, or from the
+// node priority queue if its priority is at least as high as the PE's own
+// next message. After +node_queue_max node messages in a row (default 16),
+// one iteration skips this step if the PE has local work, so a stream of
+// node messages cannot starve it. The node priority queue keeps a slot in
+// the table for messages of lower priority than the local work.
 //
 // The original hardcoded loop is in scheduler_old.cpp (+old-scheduler), and
 // the randomized loop in scheduler_randomized.cpp (+randomized_msgq).
@@ -30,9 +44,6 @@ static inline bool runTaken(void *msg) {
   return true;
 }
 
-//poll converse-level node queue
-bool pollConverseNodeQueue() { return runTaken(CmiTakeNodeQueue()); }
-
 //poll converse-level thread queue
 bool pollConverseThreadQueue() { return runTaken(CmiTakeThreadQueue()); }
 
@@ -42,9 +53,31 @@ bool pollNodePrioQueue() { return runTaken(CmiTakeNodePrioQueue()); }
 //poll thread priority queue
 bool pollThreadPrioQueue() { return runTaken(CmiTakeThreadPrioQueue()); }
 
+// node-level work before the PE's own (see top); runs ahead of the slot table
+// node messages taken in a row, per PE
+static thread_local int t_nodeStreak = 0;
+static bool pollNodeQueuesFirst() {
+  if (t_nodeStreak >= node_queue_max &&
+      !QueueEmpty(CpvAccess(CsdSchedQueue))) {
+    t_nodeStreak = 0; // local work's turn
+    return false;
+  }
+  if (runTaken(CmiTakeNodeQueue()) ||
+      runTaken(CmiTakeNodePrioQueueIfAhead())) {
+    t_nodeStreak++;
+    return true;
+  }
+  t_nodeStreak = 0;
+  return false;
+}
+
 bool pollProgress()
 {
-  if(CmiMyRank() % backend_poll_thread == 0) comm_backend::progress();
+  //progress can deliver messages in the middle of a sweep; run them by the
+  //two rules at the top instead of after the local message the sweep would
+  //reach next
+  if (CmiMyRank() % backend_poll_thread == 0 && comm_backend::progress())
+    return pollConverseThreadQueue() || pollNodeQueuesFirst();
   return false; //polling progress doesn't count
 }
 
@@ -57,7 +90,6 @@ void CmiQueueRegisterInitThread() {
   //+old-scheduler and +randomized_msgq poll queues directly
   if (CmiSchedulerIsOld() || CmiSchedulerIsRandomized()) return;
   std::vector<std::pair<QueuePollHandlerFn, unsigned int>> handlers;
-  handlers.push_back(std::make_pair(pollConverseNodeQueue, 1));
   handlers.push_back(std::make_pair(pollConverseThreadQueue, 16));
   handlers.push_back(std::make_pair(pollNodePrioQueue, 1));
   handlers.push_back(std::make_pair(pollThreadPrioQueue, 16));
@@ -73,7 +105,6 @@ void CmiQueueRegisterInitThread() {
 void CmiQueueRegisterInit() {
   //+old-scheduler and +randomized_msgq poll queues directly
   if (CmiSchedulerIsOld() || CmiSchedulerIsRandomized()) return;
-  add_handler(pollConverseNodeQueue, 1);
   add_handler(pollConverseThreadQueue, 16);
   add_handler(pollNodePrioQueue, 1);
   add_handler(pollThreadPrioQueue, 16);
@@ -97,11 +128,9 @@ void CsdSchedulerRegistered() {
     //than from a slot, as the old scheduler does: the drain only moves a
     //block onto a local queue, and the sweep below then handles it
     bool ipcDone = CmiSchedulerPollIpc();
-    //poll queues: sweep forward from idx until work is found or a full
-    //cycle of the table has been checked, so a message doesn't have to
-    //wait for loop_counter to rotate back around to its slot
-    //the thread queue feeds CsdSchedQueue, so drain it first (see top)
     bool workDone = pollConverseThreadQueue();
+    //then node-level work, ahead of the PE's own (see top)
+    if (!workDone) workDone = pollNodeQueuesFirst();
     for (unsigned t = 0; t < SCHED_TABLE_SIZE && !workDone; ++t) {
       unsigned idx = static_cast<unsigned>((loop_counter + t) & SCHED_TABLE_MASK);
       workDone = CpvAccess(poll_handlers)[idx]();
@@ -128,11 +157,9 @@ void CsdSchedulePollRegistered() {
     //same shmem drain as CsdSchedulerRegistered; a block handed to a
     //queue counts as work, so we don't return before it is handled
     bool ipcDone = CmiSchedulerPollIpc();
-    //poll queues: sweep the full table before concluding it's empty, so
-    //a message doesn't have to wait for loop_counter to rotate back
-    //around to its slot
-    //the thread queue feeds CsdSchedQueue, so drain it first (see top)
     bool workDone = pollConverseThreadQueue();
+    //then node-level work, ahead of the PE's own (see top)
+    if (!workDone) workDone = pollNodeQueuesFirst();
     for (unsigned t = 0; t < SCHED_TABLE_SIZE && !workDone; ++t) {
       unsigned idx = static_cast<unsigned>((loop_counter + t) & SCHED_TABLE_MASK);
       workDone = CpvAccess(poll_handlers)[idx]();
