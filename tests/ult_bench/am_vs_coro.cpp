@@ -249,6 +249,8 @@ static void startPhaseRep(void) {
 /* -------------------------------- setup -------------------------------- */
 
 static void bench_init(int argc, char **argv) {
+  // Bind this PE per +setcpuaffinity/+pemap; ConverseInit does not.
+  CmiInitCPUAffinity(argv);
   (void)argc;
 
   CpvInitialize(struct amBench, bench);

@@ -40,6 +40,9 @@ static void goHandler(void *msg) {
 }
 
 static void moduleInit(int argc, char **argv) {
+  // Bind this PE per +setcpuaffinity/+pemap; ConverseInit does not.
+  CmiInitCPUAffinity(argv);
+  argc = CmiGetArgc(argv);
   msg_idx = CmiRegisterHandler(msgHandler);
   go_idx = CmiRegisterHandler(goHandler);
   if (argc > 1) count = atol(argv[1]);
