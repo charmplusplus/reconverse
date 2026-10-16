@@ -270,7 +270,7 @@ run deterministic, because message arrival timing still varies. Without
 `+randomized_seed`, each process takes its own seed from its clock and the
 banner shows process 0's, so pass the flag to repeat a multi-process run.
 
-Charm++ under this mode (`reviewed-with-reconverse`, 2026-10-10): megatest
+Charm++ under this mode (branch `recharm`, 2026-10-10): megatest
 passes except its `priotest` module, which checks priority order; the
 Charm++ CI test set and `sdag`, `load_balancing`, `reductionTesting`,
 `chkpt` and `demand_creation` pass; `tests/charm++/delegation/multicast`
