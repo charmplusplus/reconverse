@@ -21,6 +21,9 @@
 #include <thread>
 #include <vector>
 #include <sys/time.h>
+#if defined(__GLIBC__)
+#include <malloc.h>
+#endif
 #include <unistd.h>
 #ifdef __APPLE__
 #include <sys/sysctl.h>
@@ -398,7 +401,31 @@ void CmiStartThreads() {
 // TODO: the input parsing, cmi_arg parsing is not done/robust
 void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
                   int initret) {
-
+  // Opt-in glibc malloc tuning. The flag is parsed on every platform so it
+  // never reaches the application's argv; it has an effect only with glibc.
+  bool glibcTunedMalloc = CmiGetArgFlagDesc(
+      argv, "+glibc_tuned_malloc",
+      "raise glibc's mmap/trim/top-pad malloc thresholds (glibc only)");
+#if defined(__GLIBC__)
+  // Keep glibc freed memory inside the process to avoid serialization
+  // on the process memory-map lock
+  // 0: not requested, 1: applied, 2: skipped (GLIBC_TUNABLES sets malloc
+  // tunables), 3: a mallopt call failed.
+  int glibcMallocTuning = 0;
+  if (glibcTunedMalloc) {
+    const char *tunables = getenv("GLIBC_TUNABLES");
+    if (tunables && strstr(tunables, "glibc.malloc."))
+      glibcMallocTuning = 2;
+    else if (mallopt(M_MMAP_THRESHOLD, 32L << 20) == 0 ||
+             mallopt(M_TRIM_THRESHOLD, 1L << 30) == 0 ||
+             mallopt(M_TOP_PAD, 256L << 20) == 0)
+      glibcMallocTuning = 3;
+    else
+      glibcMallocTuning = 1;
+  }
+#else
+  (void)glibcTunedMalloc;
+#endif
 
   // Run size options. Exactly one of these may be given:
   //   +pe <N>  : total number of PEs across all processes
@@ -500,6 +527,17 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
                 found ? info.dli_fname : "unknown");
       }
     }
+#endif
+#if defined(__GLIBC__)
+    if (glibcMallocTuning == 1)
+      printf("Reconverse> glibc malloc (+glibc_tuned_malloc): mmap threshold "
+             "32 MB, trim 1 GB, top pad 256 MB\n");
+    else if (glibcMallocTuning == 2)
+      printf("Reconverse> glibc malloc: GLIBC_TUNABLES sets malloc tunables; "
+             "keeping the environment setting, +glibc_tuned_malloc ignored\n");
+    else if (glibcMallocTuning == 3)
+      fprintf(stderr, "Reconverse> WARNING: glibc mallopt rejected a malloc "
+                      "threshold setting; glibc defaults may be in effect\n");
 #endif
   }
   Cmi_nodestart = Cmi_mynode * Cmi_mynodesize;

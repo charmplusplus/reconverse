@@ -105,6 +105,28 @@ The example executables are located in the build/test/<program_name> folders. Yo
 - **`++ipccutoff <bytes>`**: largest message the pool will carry. Messages above it go over the communication backend. Defaults to 32 KiB, or to a bin below `poolsize / 25` when that is smaller.
 - **`+randomized_msgq`**: run messages in a uniformly random order, for shaking out message-order races. See [Randomized message order](#randomized-message-order-randomized_msgq). Cannot be combined with `+old-scheduler`.
 - **`+randomized_seed <N>`**: base seed for `+randomized_msgq`. Defaults to a value taken from the wall clock; the startup banner prints the seed in use.
+- **`+glibc_tuned_malloc`**: on glibc systems, raise glibc's malloc thresholds at startup (`mallopt`: mmap threshold 32 MB, trim threshold 1 GB, top pad 256 MB) and print `Reconverse> glibc malloc (+glibc_tuned_malloc): ...`. Off by default; accepted and ignored on other C libraries. See [glibc malloc tuning](#glibc-malloc-tuning-glibc_tuned_malloc).
+
+### glibc malloc tuning (`+glibc_tuned_malloc`)
+
+Messages are allocated by one thread and freed by another. With glibc's
+default thresholds, freed message memory is returned to the OS (munmap of
+large blocks, trimming of heap tops) and faulted back in on the next
+allocation, and with many PEs in one process the faults and munmaps serialize
+on the process's memory-map lock. `+glibc_tuned_malloc` keeps that memory in
+the process instead. It is opt-in because the retained memory raises the
+resident set. Measured on Anvil, 2 nodes, one process per node, against
+reconverse main without the flag:
+
+| Application | Speedup | Peak RSS |
+|---|---|---|
+| FoF3 | 1.65x | 1.07x |
+| ChaNGa | 1.31x | 1.05x |
+| Task Bench | 1.14x | 1.02x |
+| SSSP | 1.36x | 2.19x |
+
+A `GLIBC_TUNABLES` setting containing `glibc.malloc.` takes precedence: the
+`mallopt` calls are skipped and startup says so.
 
 ## Shared-memory IPC (`+ipc`)
 
