@@ -407,16 +407,8 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
       argv, "+glibc_tuned_malloc",
       "raise glibc's mmap/trim/top-pad malloc thresholds (glibc only)");
 #if defined(__GLIBC__)
-  // Messages are allocated on one PE and freed on another. With glibc's
-  // defaults, freed message memory is returned to the OS (munmap of large
-  // blocks, trimming of heap tops) and faulted back in on the next
-  // allocation; with many threads in one process the faults and munmaps
-  // serialize on the process's memory-map lock. These settings keep that
-  // memory inside the process, at the cost of a larger resident set.
-  // Setting M_MMAP_THRESHOLD also disables glibc's dynamic mmap threshold
-  // adjustment, which is intended. glibc rejects an mmap threshold above
-  // HEAP_MAX_SIZE/2 (32 MB on 64-bit). Done before any thread starts and
-  // before the first CmiAlloc.
+  // Keep glibc freed memory inside the process to avoid serialization
+  // on the process memory-map lock
   // 0: not requested, 1: applied, 2: skipped (GLIBC_TUNABLES sets malloc
   // tunables), 3: a mallopt call failed.
   int glibcMallocTuning = 0;
