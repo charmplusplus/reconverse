@@ -128,10 +128,6 @@ void CsdSchedulerRegistered() {
     //than from a slot, as the old scheduler does: the drain only moves a
     //block onto a local queue, and the sweep below then handles it
     bool ipcDone = CmiSchedulerPollIpc();
-    //poll queues: sweep forward from idx until work is found or a full
-    //cycle of the table has been checked, so a message doesn't have to
-    //wait for loop_counter to rotate back around to its slot
-    //the thread queue feeds CsdSchedQueue, so drain it first (see top)
     bool workDone = pollConverseThreadQueue();
     //then node-level work, ahead of the PE's own (see top)
     if (!workDone) workDone = pollNodeQueuesFirst();
@@ -161,10 +157,6 @@ void CsdSchedulePollRegistered() {
     //same shmem drain as CsdSchedulerRegistered; a block handed to a
     //queue counts as work, so we don't return before it is handled
     bool ipcDone = CmiSchedulerPollIpc();
-    //poll queues: sweep the full table before concluding it's empty, so
-    //a message doesn't have to wait for loop_counter to rotate back
-    //around to its slot
-    //the thread queue feeds CsdSchedQueue, so drain it first (see top)
     bool workDone = pollConverseThreadQueue();
     //then node-level work, ahead of the PE's own (see top)
     if (!workDone) workDone = pollNodeQueuesFirst();
