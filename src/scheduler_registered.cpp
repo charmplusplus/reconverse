@@ -71,13 +71,29 @@ static bool pollNodeQueuesFirst() {
   return false;
 }
 
+// Set once a sweep's progress poll has found nothing, and cleared at the
+// start of every sweep. pollProgress holds about 40 of the 64 slots, so a
+// sweep that finds no work used to poll the network that many times before
+// the loop could go idle. On some backends each poll is a system call (the
+// libfabric TCP provider's is a kevent), and everything that waits for the PE
+// to be idle -- quiescence detection, CcdPROCESSOR_*_IDLE callbacks -- waited
+// for a whole sweep of them: a QD round across two one-PE processes took
+// 10.6 ms instead of 0.4 ms on macOS. One empty poll per sweep is as
+// often as the old scheduler polls; a sweep that finds work stops there, so
+// busy loops still poll at the full +backend_poll_freq rate.
+static thread_local bool t_progressFoundNothing = false;
+
 bool pollProgress()
 {
+  if (t_progressFoundNothing) return false;
   //progress can deliver messages in the middle of a sweep; run them by the
   //two rules at the top instead of after the local message the sweep would
   //reach next
-  if (CmiMyRank() % backend_poll_thread == 0 && comm_backend::progress())
-    return pollConverseThreadQueue() || pollNodeQueuesFirst();
+  if (CmiMyRank() % backend_poll_thread == 0) {
+    if (comm_backend::progress())
+      return pollConverseThreadQueue() || pollNodeQueuesFirst();
+    t_progressFoundNothing = true;
+  }
   return false; //polling progress doesn't count
 }
 
@@ -124,6 +140,7 @@ void CsdSchedulerRegistered() {
   while (CmiStopFlag() == 0) {
 
     CcdRaiseCondition(CcdSCHEDLOOP);
+    t_progressFoundNothing = false; //a new sweep may poll progress again
     //always deliver shmem messages (+ipc) first, every iteration rather
     //than from a slot, as the old scheduler does: the drain only moves a
     //block onto a local queue, and the sweep below then handles it
@@ -154,6 +171,7 @@ void CsdSchedulePollRegistered() {
   while(1){
 
     CcdRaiseCondition(CcdSCHEDLOOP);
+    t_progressFoundNothing = false; //a new sweep may poll progress again
     //same shmem drain as CsdSchedulerRegistered; a block handed to a
     //queue counts as work, so we don't return before it is handled
     bool ipcDone = CmiSchedulerPollIpc();
