@@ -407,6 +407,11 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
   bool glibcTunedMalloc = CmiGetArgFlagDesc(
       argv, "+glibc_tuned_malloc",
       "raise glibc's mmap/trim/top-pad malloc thresholds (glibc only)");
+  // ++quiet suppresses CmiPrintf output and the Charm++ startup banners
+  // (charm reads quietModeRequested). The flag is removed from argv here so
+  // it never reaches the application.
+  if (CmiGetArgFlagDesc(argv, "++quiet", "Omit non-error runtime messages"))
+    quietModeRequested = quietMode = 1;
 #if defined(__GLIBC__)
   // Keep glibc freed memory inside the process to avoid serialization
   // on the process memory-map lock
@@ -486,7 +491,7 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
     std::string processType = (Cmi_numnodes == 1) ? "process" : "processes";
     std::string peType = (Cmi_npes == 1) ? "PE" : "PEs";
     std::string ppnType = (Cmi_mynodesize == 1) ? "PE per process" : "PEs per process";
-      printf("Reconverse> Starting Reconverse with %d %s, %d %s (1 PE = 1 thread), and %d %s\n",
+      CmiPrintf("Reconverse> Starting Reconverse with %d %s, %d %s (1 PE = 1 thread), and %d %s\n",
            Cmi_numnodes, processType.c_str(), Cmi_npes, peType.c_str(), Cmi_mynodesize, ppnType.c_str());
     CmiCheckCacheLineSize();
 #ifdef RECONVERSE_USE_JEMALLOC
@@ -515,10 +520,10 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
       Dl_info info = {};
       if (active && dladdr((void *)ctl, &info) && info.dli_fname) {
         const char *base = strrchr(info.dli_fname, '/');
-        printf("Reconverse> allocator: jemalloc (malloc resolves to %s)\n",
+        CmiPrintf("Reconverse> allocator: jemalloc (malloc resolves to %s)\n",
                base ? base + 1 : info.dli_fname);
       } else if (active) {
-        printf("Reconverse> allocator: jemalloc (malloc resolves to unknown)\n");
+        CmiPrintf("Reconverse> allocator: jemalloc (malloc resolves to unknown)\n");
       } else {
         void *m = dlsym(RTLD_DEFAULT, "malloc");
         bool found = m && dladdr(m, &info) && info.dli_fname;
@@ -1239,6 +1244,7 @@ void CmiHandleMessage(void *msg) {
 }
 // TODO: implement CmiPrintf
 int CmiPrintf(const char *format, ...) {
+  if (quietMode) return 0;
   va_list args;
   va_start(args, format);
 
@@ -1270,13 +1276,11 @@ int CmiTimerAbsolute() {
 void CmiAbortHelper(const char *source, const char *message,
                     const char *suggestion, int tellDebugger,
                     int framesToSkip) {
-  CmiPrintf("------- Processor %d Exiting: %s ------\n"
-            "Reason: %s\n",
-            CmiMyPe(), source, message);
-  /* CmiPrintf leaves this in stdout's buffer, and the abort() that follows does
-     not flush it, so without this the reason is lost whenever stdout is a pipe
-     rather than a terminal -- which is how CTest and most job schedulers run. */
-  fflush(stdout);
+  /* CmiError, as in classic: stderr is never suppressed by ++quiet and is
+     flushed before the abort() that follows. */
+  CmiError("------- Processor %d Exiting: %s ------\n"
+           "Reason: %s\n",
+           CmiMyPe(), source, message);
 }
 
 void CmiAbort(const char *format, ...) {
