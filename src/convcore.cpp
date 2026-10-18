@@ -247,6 +247,13 @@ void converseRunPe(int rank, int everReturn) {
   * in startfn, then exits
   * usched=1, initret/everReturn=1: ConverseInit returns without calling startfn
   * on rank 0, still calls startfn on other ranks (used by namd)
+  *
+  * Interop (CharmLibInterOperate, set by CharmBeginInit before ConverseInit):
+  * after startfn, rank 0 returns from ConverseInit to the user's main, and the
+  * other ranks return to converseRunPeThread, which runs one scheduler pass per
+  * StartCharmScheduler phase (see interopWorkerLoop). Nobody calls
+  * ConverseExit here; CharmLibExit ends the run. argv stays allocated because
+  * Charm keeps pointers into it.
   */
 
   if(!everReturn)
@@ -255,8 +262,9 @@ void converseRunPe(int rank, int everReturn) {
     if (Cmi_usched == 0) {
       CsdScheduler();
     }
+    if (CharmLibInterOperate)
+      return;
     CmiFreeArgs(CmiMyArgv);
-    //todo: add interoperate condition
     ConverseExit();
   }
   else CmiFreeArgs(CmiMyArgv);
@@ -337,11 +345,33 @@ void ConverseExit(int exitcode)
   }
 }
 
+void StartInteropScheduler();
+
+// Interop on ranks > 0, as in classic machine-smp.C's call_startfn. Rank 0
+// runs the user's main, which calls StartCharmScheduler once per phase
+// (barrier, scheduler, barrier); each iteration here is the matching
+// (scheduler, barrier, barrier), with the trailing barrier pairing with the
+// next phase's leading one. CharmLibExit sets _cleanUp before its own
+// barrier, so the loop sees it at the right iteration and joins the final
+// scheduler pass, where the exit broadcast reaches ConverseExit.
+static void interopWorkerLoop() {
+  while (!_cleanUp.load()) {
+    StartInteropScheduler();
+    CmiNodeAllBarrier();
+  }
+  CsdScheduler(-1);
+  CmiNodeAllBarrier();
+}
+
 // pthread entry trampoline for the PE threads created by CmiStartThreads.
 // everReturn is 0 for ranks > 0, meaning these ranks call the start function
-// and never return from ConverseInit, so this never returns in practice.
+// and never return from ConverseInit, so this never returns in practice --
+// except in interop mode, where converseRunPe returns and the thread follows
+// rank 0's phases.
 static void *converseRunPeThread(void *arg) {
   converseRunPe((int)(intptr_t)arg, 0);
+  if (CharmLibInterOperate)
+    interopWorkerLoop();
   return nullptr;
 }
 
@@ -588,7 +618,8 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
 
   Cmi_argv = argv;
   Cmi_startfn = fn;
-  CharmLibInterOperate = 0;
+  // CharmLibInterOperate is not reset here: CharmBeginInit sets it before
+  // calling ConverseInit, and it is zero-initialized for everyone else.
   Cmi_usched = usched;
   Cmi_initret = initret;
 
@@ -1736,12 +1767,25 @@ void CommunicationServerThread(int sleepTime) {}
 
 // start and stop interop schedulers
 
+// interopExitFlag is the sticky record of a stop request, as in classic
+// Converse, whose loop checks it at the top and clears it when it breaks.
+// A stop can arrive before the pass starts -- with one PE, _initDone runs
+// inside CharmBeginInit and stops the scheduler before CharmFinishInit starts
+// it -- and CsdScheduler(-1) clears stopFlag on entry, so check the flag first.
 void StartInteropScheduler() {
-  CsdScheduler(-1);
+  if (!CpvAccess(interopExitFlag))
+    CsdScheduler(-1);
+  CpvAccess(interopExitFlag) = 0;
   CmiNodeAllBarrier();
 }
 
-void StopInteropScheduler() { CpvAccess(interopExitFlag) = 1; }
+// Ends the current StartInteropScheduler pass on this PE. Classic Converse's
+// scheduler loop polls interopExitFlag; this one only checks stopFlag, so set
+// both.
+void StopInteropScheduler() {
+  CpvAccess(interopExitFlag) = 1;
+  CsdExitScheduler();
+}
 
 int CmiMemoryIs(int flag)
 {
