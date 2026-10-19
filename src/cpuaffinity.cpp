@@ -636,12 +636,7 @@ void CmiInitCPUAffinity(char **argv) {
        CmiPrintf("Charm++> cpuaffinity PE-core map (%s): %s\n",
            pemap_logical_flag ? "logical indices" : "OS indices", pemap);
     }
-    // Auto affinity divides this host's cores among the processes on it,
-    // which needs the physical-node grouping that CmiInitCPUTopology gathers.
-    // Charm++ calls CmiInitCPUTopology only after this function, so without
-    // this call every process counted itself as alone on its host and all
-    // processes on a host bound to the same cores (issue #276). The call is
-    // idempotent; a +pemap placement indexes by global PE and does not need it.
+    // If no pemap provided (+setcpuaffinity) make sure topology is ready
     if (pemap == NULL) CmiInitCPUTopology(argv);
     // if a pemap is provided
     if (pemap != NULL){
