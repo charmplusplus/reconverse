@@ -1322,7 +1322,9 @@ void CmiAbort(const char *format, ...) {
   va_end(args);
   CmiAbortHelper("Called CmiAbort", newmsg, NULL, 1, 0);
 
-  /* No CmiExitHelper() here. */
+  /* No CmiExitHelper() here: the other processes are ended by the process
+     manager (PMI abort) or by the launcher when this one dies. */
+  comm_backend::abortAll(1, newmsg);
   std::signal(SIGABRT, SIG_DFL);
   abort();
 }

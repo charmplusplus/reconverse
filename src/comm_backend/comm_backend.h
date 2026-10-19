@@ -33,6 +33,12 @@ void init_mempool();
 
 void exit();
 /**
+ * @brief Ask the launcher to end every process of the job, as MPI_Abort does.
+ * Called from CmiAbort before this process aborts; a no-op when the backend
+ * has no process manager to ask (lcrun's file bootstrap, single process).
+ */
+void abortAll(int exit_code, const char *msg);
+/**
  * @brief Initialize the communication backend for a new thread. Not
  * thread-safe.
  */

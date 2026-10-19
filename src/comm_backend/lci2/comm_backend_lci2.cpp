@@ -1,5 +1,6 @@
 #include "mempool.h"
 #include "lci.hpp"
+#include "lct.h"
 #include "comm_backend/lci2/comm_backend_lci2.h"
 #include <cstdlib>
 #include <vector>
@@ -232,6 +233,19 @@ void CommBackendLCI2::init(char **argv) {
   m_rcomp = lci::register_rcomp(m_remote_comp);
   lci::set_allocator(&m_allocator);
   barrier();
+}
+
+// The PMI abort reaches the process manager (Slurm's PMI2/PMIx, mpirun), which
+// then ends the other ranks; without it they spin until the job's time limit
+// (issue #285). lcrun's file bootstrap has no manager: there lcrun itself
+// kills the peers when a process exits with a failure status.
+void CommBackendLCI2::abortAll(int exit_code, const char *msg) {
+#ifdef LCT_PMI_HAS_ABORT
+  if (LCT_pmi_initialized()) LCT_pmi_abort(exit_code, msg);
+#else
+  (void)exit_code;
+  (void)msg;
+#endif
 }
 
 void CommBackendLCI2::exit() {

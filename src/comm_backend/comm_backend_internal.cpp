@@ -64,6 +64,12 @@ void exit() {
   }
 }
 
+void abortAll(int exit_code, const char *msg) {
+  if (gCommBackend) {
+    gCommBackend->abortAll(exit_code, msg);
+  }
+}
+
 void initThread(int thread_id, int num_threads) {
   if (gCommBackend == nullptr) {
     return;
