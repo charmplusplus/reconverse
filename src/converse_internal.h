@@ -62,7 +62,9 @@ typedef struct State {
 // straight through as pollProgress's weight in the slot table; the old
 // scheduler turns it back into a loop period, saturating at once per
 // iteration, which is as often as that loop can poll. The default gives
-// progress a little over half the slot table.
+// progress a little over half the slot table. Whatever the weight, the
+// registered scheduler stops polling for the rest of a sweep once a poll
+// comes back empty, so an idle sweep polls at most once.
 #define BACKEND_POLL_FREQ_DEFAULT 64
 extern int backend_poll_freq;
 extern int thread_queue_max;

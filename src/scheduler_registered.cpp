@@ -78,9 +78,15 @@ static bool pollNodeQueuesFirst() {
 // libfabric TCP provider's is a kevent), and everything that waits for the PE
 // to be idle -- quiescence detection, CcdPROCESSOR_*_IDLE callbacks -- waited
 // for a whole sweep of them: a QD round across two one-PE processes took
-// 10.6 ms instead of 0.4 ms on macOS. One empty poll per sweep is as
-// often as the old scheduler polls; a sweep that finds work stops there, so
-// busy loops still poll at the full +backend_poll_freq rate.
+// 10.6 ms instead of 0.4 ms on macOS. Now an iteration makes at most one
+// empty poll, idle or busy, which is the old scheduler's rate. (A busy
+// iteration used to poll every progress slot it crossed before reaching
+// work, about two at the default weight.)
+// The flag is not a completion fact: LCI2's progress() also returns false to
+// a thread that loses a device's trylock, so for the rest of that sweep it
+// can mean "another thread is polling this device". That is harmless, since
+// the winner delivers into this PE's thread queue, which every iteration
+// drains first.
 static thread_local bool t_progressFoundNothing = false;
 
 bool pollProgress()
