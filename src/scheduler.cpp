@@ -363,7 +363,7 @@ void CsdSchedulePoll() {
           else
           {
           #endif
-            comm_backend::progress();
+            if (CmiMyRank() % backend_poll_thread == 0) comm_backend::progress();   // +backend_poll_thread applies when idle too
             break; //break when queues are empty
           #if CMK_TASKQUEUE
           }
@@ -405,7 +405,7 @@ void CsdSchedulePoll() {
           else
           {
           #endif
-            comm_backend::progress();
+            if (CmiMyRank() % backend_poll_thread == 0) comm_backend::progress();   // +backend_poll_thread applies when idle too
             break; //break when queues are empty
           #if CMK_TASKQUEUE
           }

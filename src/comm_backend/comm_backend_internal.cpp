@@ -122,6 +122,18 @@ void issueRput(int rank, const void *local_buf, size_t size, mr_t local_mr,
                           localComp, user_context);
 }
 
+SignalHandler g_signal_handler = nullptr;
+void setSignalHandler(SignalHandler handler) { g_signal_handler = handler; }
+void issueRputSignal(int rank, const void *local_buf, size_t size, mr_t local_mr,
+                     void *remote_buf, void *rmr, uint32_t tag, CompHandler localComp,
+                     void *user_context) {
+  if (gCommBackend == nullptr) {
+    return;
+  }
+  gCommBackend->issueRputSignal(rank, local_buf, size, local_mr, remote_buf, rmr, tag,
+                                localComp, user_context);
+}
+
 void *malloc(int nbytes, int header)
 {
   if (gCommBackend) {

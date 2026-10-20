@@ -53,6 +53,9 @@ public:
   void issueRput(int rank, const void *local_buf, size_t size, mr_t local_mr,
                  void* remote_buf, void *rmr,
                  CompHandler localComp, void *user_context) override;
+  void issueRputSignal(int rank, const void *local_buf, size_t size, mr_t local_mr,
+                       void *remote_buf, void *rmr, uint32_t tag, CompHandler localComp,
+                       void *user_context) override;
   bool progress(void) override;
   void barrier(void) override;
   mr_t registerMemory(void *addr, size_t size) override;
@@ -74,6 +77,8 @@ private:
   lci::comp_t m_local_comp;
   lci::comp_t m_remote_comp;
   lci::rcomp_t m_rcomp;
+  lci::comp_t m_signal_comp;    // put with signal: the target's completion
+  lci::rcomp_t m_signal_rcomp;
   AllocatorLCI2 m_allocator;
 
   // Memory regions handed out by registerMemory() that have not been given back

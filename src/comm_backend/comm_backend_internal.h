@@ -36,6 +36,13 @@ public:
     // Default implementation: not supported
     CmiAbort("Rput not supported in this backend");
   }
+  virtual void issueRputSignal(int rank, const void *local_buf, size_t size,
+                               mr_t local_mr, void *remote_buf, void *rmr, uint32_t tag,
+                               CompHandler localComp, void *user_context) {
+    (void)rank; (void)local_buf; (void)size; (void)local_mr; (void)remote_buf; (void)rmr; (void)tag;
+    (void)localComp; (void)user_context;
+    CmiAbort("comm_backend: this backend has no put with signal\n");
+  }
   // return true if there is more work to do
   virtual bool progress(void) = 0;
   virtual void barrier(void) = 0;

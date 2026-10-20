@@ -27,7 +27,7 @@ extern bool CmiUseCopyBasedRDMA;
 #define CMK_REG_REQUIRED 1
 // 8-byte for mr, 16-byte for rmr
 // TODO: better to use dynamic allocation and PUP
-#define CMK_NOCOPY_DIRECT_BYTES 32
+#define CMK_NOCOPY_DIRECT_BYTES 128   // one LCI rmr (32 B) per LCI device of the process, up to four (+lci_ndevices)
 
 /*********************************** Zerocopy Direct API
  * **********************************/
@@ -61,6 +61,13 @@ void CmiIssueRget(NcpyOperationInfo *ncpyOpInfo);
  */
 
 void CmiIssueRput(NcpyOperationInfo *ncpyOpInfo);
+// RDMA write with immediate data: the target's handler (set once per process) gets
+// the 16-bit tag and the bytes written when the data has landed.
+void CmiIssueRputSignal(NcpyOperationInfo *ncpyOpInfo, uint32_t tag);
+void CmiSetRputSignalHandler(void (*handler)(int rank, uint32_t tag, size_t size));
+// A small one-sided write with no record and no acknowledgement (see conv-rdma.cpp).
+void CmiRdmaPutRaw(int destPe, const void *src, size_t bytes, const void *srcLayerInfo,
+                   void *dest, const void *destLayerInfo);
 
 void CmiDeregisterMem(const void *ptr, void *info, int pe,
                       unsigned short int mode);
