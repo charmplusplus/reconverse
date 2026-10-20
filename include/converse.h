@@ -658,6 +658,9 @@ void CmiExit(int status);
 extern "C" {
 #endif
 void CmiAbort(const char *format, ...);
+/* Print the calling thread's stack to stderr, demangled, one frame per
+   line; nSkip innermost frames are omitted. CmiAbort prints one. */
+void CmiPrintStackTrace(int nSkip);
 #ifdef __cplusplus
 }
 #endif

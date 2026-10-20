@@ -24,6 +24,8 @@ typedef struct GroupDef_s {
 #define  DEBUGF(...)    //CmiPrintf(__VA_ARGS__)
 
 void CmiStartThreads(char **argv);
+// Installs the fatal-signal stack-trace handlers unless +truecrash is given.
+void CmiInitCrashHandlers(char **argv);
 void converseRunPe(int rank, int everReturn);
 void collectiveInit(void);
 
