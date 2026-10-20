@@ -79,6 +79,16 @@ void issueRget(int rank, const void *local_buf, size_t size, mr_t local_mr,
 void issueRput(int rank, const void *local_buf, size_t size, mr_t local_mr,
                void *remote_buf, void *rmr, CompHandler localComp, void *user_context);
 /**
+ * @brief A remote put whose completion at the target raises the registered
+ * signal handler with the 16-bit tag and the bytes written (RDMA write with
+ * immediate data). Thread-safe.
+ */
+using SignalHandler = void (*)(int rank, uint32_t tag, size_t size);
+void setSignalHandler(SignalHandler handler);
+void issueRputSignal(int rank, const void *local_buf, size_t size, mr_t local_mr,
+                     void *remote_buf, void *rmr, uint32_t tag, CompHandler localComp,
+                     void *user_context);
+/**
  * @brief Make progress on the communication backend. Thread-safe.
  */
 bool progress(void);

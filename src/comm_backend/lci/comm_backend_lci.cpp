@@ -1,9 +1,28 @@
+#include <time.h>
 #include "mempool.h"
 #include "lci.hpp"
 #include "lct.h"
 #include "comm_backend/lci/comm_backend_lci.h"
 #include <cstdlib>
 #include <vector>
+namespace comm_backend { extern SignalHandler g_signal_handler; }   // comm_backend_internal.cpp
+
+// Where an active-message send spends its time, per thread (printed at
+// exitThread when anything was sent): the LCI post, the progress call that
+// follows it, retries, and how often the post completed inline.
+namespace {
+struct AmSendStats {
+  long n = 0, retries = 0, inline_done = 0;
+  double post_s = 0.0, progress_s = 0.0;
+  long retry_lock = 0, retry_nopacket = 0, retry_nomem = 0, retry_backlog = 0, retry_other = 0;
+  double max_post_s = 0.0;   // the longest single post (its retries included)
+};
+thread_local AmSendStats g_am_send_stats;
+static inline double amNow() {
+  struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+  return ts.tv_sec + ts.tv_nsec * 1e-9;
+}
+}  // namespace
 
 CpvDeclare(mempool_type*, mempool);
 
@@ -49,6 +68,11 @@ void remoteCallback(lci::status_t status) {
   auto am_handler = static_cast<AmHandler>(status.get_tag());
   auto handler = g_handlers[am_handler];
   handler({status.get_buffer(), status.get_size(), nullptr});
+}
+
+// A put with signal landed here: rank, the 16-bit tag and the bytes written.
+void signalCallback(lci::status_t status) {
+  if (comm_backend::g_signal_handler) comm_backend::g_signal_handler(status.rank, (uint32_t)status.get_tag(), status.get_size());
 }
 
 void *alloc_mempool_block(size_t *size, void **mem_hndl, int expand_flag)
@@ -249,6 +273,9 @@ void CommBackendLCI::init(char **argv) {
   m_local_comp = lci::alloc_handler(localCallback);
   m_remote_comp = lci::alloc_handler(remoteCallback);
   m_rcomp = lci::register_rcomp(m_remote_comp);
+  m_signal_comp = lci::alloc_handler(signalCallback);
+  m_signal_rcomp = lci::register_rcomp(m_signal_comp);
+  if (lci::get_rank_me() == 0) fprintf(stderr, "[lci] am rcomp=%u signal rcomp=%u max_imm_tag=%llu max_imm_rcomp=%llu\n", (unsigned)m_rcomp, (unsigned)m_signal_rcomp, (unsigned long long)lci::get_g_runtime().get_attr_max_imm_tag(), (unsigned long long)lci::get_g_runtime().get_attr_max_imm_rcomp());
   lci::set_allocator(&m_allocator);
   barrier();
 }
@@ -280,6 +307,7 @@ void CommBackendLCI::exit() {
   m_devices.clear();
   lci::free_comp(&m_local_comp);
   lci::free_comp(&m_remote_comp);
+  lci::free_comp(&m_signal_comp);
   lci::g_runtime_fina();
   lci::global_finalize();
 
@@ -310,6 +338,15 @@ void CommBackendLCI::initThread(int thread_id, int num_threads) {
 }
 
 void CommBackendLCI::exitThread() {
+  if (g_am_send_stats.n > 0)
+    fprintf(stderr, "[am-send] rank %d thread %d: n=%ld post mean_us=%.2f progress-after-post mean_us=%.2f retries=%ld inline-done=%ld "
+            "| retry reasons: lock=%ld nopacket=%ld nomem=%ld backlog=%ld other=%ld | longest post %.1f us\n",
+            lci::get_rank_me(), detail::g_thread_context.thread_id, g_am_send_stats.n,
+            g_am_send_stats.post_s / g_am_send_stats.n * 1e6,
+            g_am_send_stats.progress_s / g_am_send_stats.n * 1e6, g_am_send_stats.retries,
+            g_am_send_stats.inline_done, g_am_send_stats.retry_lock, g_am_send_stats.retry_nopacket,
+            g_am_send_stats.retry_nomem, g_am_send_stats.retry_backlog, g_am_send_stats.retry_other,
+            g_am_send_stats.max_post_s * 1e6);
   // This PE's mempool is NOT destroyed here: completions processed later by
   // another thread's progress() still allocate from and free into it (see
   // exit()). Destroying it here freed buffers of in-flight sends and receive
@@ -339,8 +376,12 @@ void CommBackendLCI::issueAm(int rank, const void *local_buf, size_t size, mr_t 
   // queue. Use allow_retry=false so LCI pushes to its backlog queue and returns
   // immediately; the backlog is drained in the next progress() call.
   bool allow_retry = !detail::g_in_progress_callback;
+  AmSendStats &st = g_am_send_stats;
+  st.n++;
+  const double tpost0 = amNow();
   do {
     // we use LCI tag to pass the remoteComp
+    const double t0 = amNow();
     status = lci::post_am_x(rank, const_cast<void *>(local_buf), size,
                             m_local_comp, m_rcomp)
                  .mr(getThreadLocalMR(mr))
@@ -348,9 +389,24 @@ void CommBackendLCI::issueAm(int rank, const void *local_buf, size_t size, mr_t 
                  .tag(remoteComp)
                  .user_context(args)
                  .allow_retry(allow_retry)();
+    const double t1 = amNow();
+    st.post_s += t1 - t0;
     if (allow_retry) progress();
+    st.progress_s += amNow() - t1;
+    if (status.is_retry()) {
+      st.retries++;
+      switch (status.error.errorcode) {
+        case lci::errorcode_t::retry_lock: st.retry_lock++; break;
+        case lci::errorcode_t::retry_nopacket: st.retry_nopacket++; break;
+        case lci::errorcode_t::retry_nomem: st.retry_nomem++; break;
+        case lci::errorcode_t::retry_backlog: st.retry_backlog++; break;
+        default: st.retry_other++; break;
+      }
+    }
   } while (status.is_retry());
+  { const double dt = amNow() - tpost0; if (dt > st.max_post_s) st.max_post_s = dt; }
   if (status.is_done()) {
+    st.inline_done++;
     localComp({local_buf, size, user_context});
     delete args;
   }
@@ -414,6 +470,33 @@ void CommBackendLCI::issueRput(int rank, const void *local_buf, size_t size,
 
 bool CommBackendLCI::threadMustPoll() {
   return detail::g_thread_context.device_poller;
+}
+
+void CommBackendLCI::issueRputSignal(int rank, const void *local_buf, size_t size,
+                                     mr_t local_mr, void *remote_buf, void *rmr, uint32_t tag,
+                                     CompHandler localComp, void *user_context) {
+  auto args = new localCallbackArgs{localComp, user_context};
+  lci::status_t status;
+  uintptr_t remote_disp = (uintptr_t)remote_buf - getThreadLocalRMR(rmr).base;
+  // Same reentrancy guard as issueAm/issueRget/issueRput: from inside a
+  // completion callback this thread holds m_progress_locks[dev], so push to
+  // the LCI backlog instead of spinning.
+  bool allow_retry = !detail::g_in_progress_callback;
+  do {
+    status = lci::post_put_x(rank, const_cast<void *>(local_buf), size,
+                             m_local_comp, remote_disp, getThreadLocalRMR(rmr))
+                 .mr(getThreadLocalMR(local_mr))
+                 .device(getThreadLocalDevice())
+                 .tag(tag)
+                 .remote_comp(m_signal_rcomp)
+                 .user_context(args)
+                 .allow_retry(allow_retry)();
+    if (allow_retry) progress();
+  } while (status.is_retry());
+  if (status.is_done()) {
+    localComp({local_buf, size, user_context});
+    delete args;
+  }
 }
 
 bool CommBackendLCI::progress(void) {

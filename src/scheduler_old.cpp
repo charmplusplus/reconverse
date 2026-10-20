@@ -430,7 +430,11 @@ void CsdSchedulePollOld() {
           else
           {
           #endif
-            comm_backend::progress();
+            // +backend_poll_thread applies when idle too: only a polling rank,
+            // or the first thread of a device, progresses the network here
+            if (CmiMyRank() % backend_poll_thread == 0 ||
+                comm_backend::threadMustPoll())
+              comm_backend::progress();
             break; //break when queues are empty
           #if CMK_TASKQUEUE
           }
@@ -474,7 +478,11 @@ void CsdSchedulePollOld() {
           else
           {
           #endif
-            comm_backend::progress();
+            // +backend_poll_thread applies when idle too: only a polling rank,
+            // or the first thread of a device, progresses the network here
+            if (CmiMyRank() % backend_poll_thread == 0 ||
+                comm_backend::threadMustPoll())
+              comm_backend::progress();
             break; //break when queues are empty
           #if CMK_TASKQUEUE
           }

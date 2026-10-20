@@ -1315,7 +1315,11 @@ enum ncpyOperationMode {
   // A device-payload correction put. Its completion is raised on the initiator,
   // which is the sender, so the upper layer must notify the target rather than
   // resolve the operation locally.
-  CMK_DEVICE_RESTAGE_PUT = 9
+  CMK_DEVICE_RESTAGE_PUT = 9,
+  // A persistent device endpoint's one-sided put or get (CkDevicePersistent).
+  // Its completion is raised on the initiator, which fires both endpoints'
+  // callbacks; refPtr carries them. Passed through by the machine layer.
+  CMK_DEVICE_PERSISTENT_OP = 10
 };
 
 enum cmiZCMsgType {

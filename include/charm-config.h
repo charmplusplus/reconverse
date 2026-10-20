@@ -22,6 +22,6 @@
 // Size of the machine-layer buffer in CmiNcpyBuffer::layerInfo.
 // Reconverse uses 8 bytes for mr_t + 16 bytes for rmr + 8 bytes spare = 32.
 // This must match CMK_NOCOPY_DIRECT_BYTES in reconverse/include/conv-rdma.h.
-#define CMK_NOCOPY_DIRECT_BYTES 32
+#define CMK_NOCOPY_DIRECT_BYTES 128   // one LCI rmr (32 B) per LCI device of the process, up to four (+lci_ndevices)
 
 #endif

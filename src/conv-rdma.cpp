@@ -603,6 +603,48 @@ if (target_node == CmiMyNode()) {
 }
 }
 
+// A put whose completion at the target is a signal (RDMA write with immediate
+// data): the target's registered handler gets the 16-bit tag and the bytes.
+// Loopback keeps the copy and raises the handler here.
+static void (*cmi_rput_signal_handler)(int rank, uint32_t tag, size_t size) = nullptr;
+void CmiSetRputSignalHandler(void (*handler)(int rank, uint32_t tag, size_t size)) {
+  cmi_rput_signal_handler = handler;
+  comm_backend::setSignalHandler(handler);
+}
+void CmiIssueRputSignal(NcpyOperationInfo *ncpyOpInfo, uint32_t tag) {
+  int target_node = CmiNodeOf(ncpyOpInfo->destPe);
+  if (target_node == CmiMyNode()) {
+    memcpyAnyPtr((void *)ncpyOpInfo->destPtr, ncpyOpInfo->srcPtr, ncpyOpInfo->srcSize);
+    comm_backend::Status status;
+    status.local_buf = ncpyOpInfo->srcPtr;
+    status.size = ncpyOpInfo->srcSize;
+    status.user_context = ncpyOpInfo;
+    const size_t bytes = ncpyOpInfo->srcSize;
+    CommRputLocalHandler(status);
+    if (cmi_rput_signal_handler) cmi_rput_signal_handler(CmiMyNodeGlobal(), tag, bytes);
+  } else {
+    auto mr = *(comm_backend::mr_t *)ncpyOpInfo->srcLayerInfo;
+    void *rmr = ncpyOpInfo->destLayerInfo + sizeof(comm_backend::mr_t);
+    comm_backend::issueRputSignal(CmiNodeToGlobal(CmiNodeOf(ncpyOpInfo->destPe)),
+                                  ncpyOpInfo->srcPtr, ncpyOpInfo->srcSize, mr,
+                                  (void *)ncpyOpInfo->destPtr, rmr, tag,
+                                  CommRputLocalHandler, ncpyOpInfo);
+  }
+}
+
+// A small one-sided write with no operation record and no acknowledgement:
+// the source must stay valid until the completion, which here is nothing (the
+// caller reuses its source only much later). srcLayerInfo/destLayerInfo are
+// the registration blocks of CmiNcpyBuffers for the two sides.
+static void rawPutNoop(comm_backend::Status) {}
+void CmiRdmaPutRaw(int destPe, const void *src, size_t bytes, const void *srcLayerInfo,
+                   void *dest, const void *destLayerInfo) {
+  auto mr = *(comm_backend::mr_t *)srcLayerInfo;
+  void *rmr = (void *)((const char *)destLayerInfo + sizeof(comm_backend::mr_t));
+  comm_backend::issueRput(CmiNodeToGlobal(CmiNodeOf(destPe)), src, bytes, mr, dest, rmr,
+                          rawPutNoop, nullptr);
+}
+
 /* De-register registered memory for pointer */
 void CmiDeregisterMem(const void *ptr, void *info, int pe,
                       unsigned short int mode) {
