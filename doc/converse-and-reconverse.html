@@ -204,9 +204,9 @@ td:first-child { font-weight: 600; white-space: nowrap; }
 <tr><td>Checkpoint and restart</td><td>Disk checkpoint, in-memory checkpoint with restart-phase hooks in converse.h.</td><td>Disk checkpoint through Charm++ unchanged (tests/charm++/chkpt passes in the Mac sweep). The converse-side in-memory checkpoint hooks are absent.</td></tr>
 <tr><td>Tracing and replay</td><td>Projections tracing, record-replay.</td><td>Both work. Recording on reconverse needs per-record flushing (<code>+recplay-logsize</code>).</td></tr>
 <tr><td>GPUs</td><td>hapi, device zero-copy in the cuda arch overlay.</td><td>Same, through reconverse-linux-x86_64-cuda; GPU-aware load balancing merged 2026-09.</td></tr>
-<tr><td>Interoperability</td><td>MPI interop, user-driven interop.</td><td>User-driven interop added 2026-10-19 (reconverse #288, charm #4055). MPI interop untested.</td></tr>
+<tr><td>Interoperability</td><td>MPI interop, user-driven interop.</td><td>User-driven interop added 2026-10-19 (reconverse #288, charm #4055). MPI interop absent on the Converse side; slated to return.</td></tr>
 <tr><td>AMPI</td><td>Full, with thread migration and isomalloc-based privatization.</td><td>Stage 0 (charm #4051, 2026-10-19): builds and runs, non-migrating; migration and checkpoint tests skipped.</td></tr>
-<tr><td>Abort</td><td>charmrun kills the job on CmiAbort.</td><td>CmiAbort aborts the local process; with the srun or lcrun launchers other ranks could survive (reconverse #285). Fix in flight: LCT_pmi_abort (uiuc-hpc/lci #209) plus a backend abortAll call.</td></tr>
+<tr><td>Abort</td><td>charmrun kills the job on CmiAbort; stack trace printed.</td><td>CmiAbort aborts the local process; with the srun or lcrun launchers other ranks could survive (reconverse #285). Fixes in flight: LCT_pmi_abort (uiuc-hpc/lci #209) plus a backend abortAll call; stack traces on abort and fatal signals in reconverse #294.</td></tr>
 <tr><td>Build</td><td>./build with the classic configure, or CMake.</td><td>CMake only (<code>./build charm++ reconverse-linux-x86_64</code>); reconverse builds as a shared library with its own CMake project and fetches or finds LCI.</td></tr>
 </tbody>
 </table>
@@ -297,6 +297,8 @@ td:first-child { font-weight: 600; white-space: nowrap; }
   <li><b>Migratable threads</b> (AMPI stage 2): CthPup over an isomalloc stack, then un-guarding migrate, async migrate and checkpoint in TCharm and AMPI, and switching tests/ampi migration and chkpt back on.</li>
   <li><b>Seed balancers</b>: a re-port of the classic strategies as an opt-in (reconverse #185 plan).</li>
   <li><b>Job-wide abort</b>: LCI #209 and the reconverse abortAll call, so CmiAbort ends every rank under srun and lcrun.</li>
+  <li><b>Stack traces</b> on CmiAbort and fatal signals, rewritten (reconverse #294), and <b>Converse futures</b> (Cfuture), ported (reconverse #295), both for standalone Converse programs and crash reports.</li>
+  <li><b>Interoperation with MPI programs</b> (CharmLibInit): decided 2026-10-20 to return; no date yet.</li>
 </ul>
 </div>
 <div>
