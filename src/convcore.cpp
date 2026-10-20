@@ -192,6 +192,7 @@ void converseRunPe(int rank, int everReturn) {
   CmiQueueRegisterInitThread();
 
   CldModuleInit(CmiMyArgv);
+  CfutureModuleInit();
 
   Cmi_exitHandler = CmiRegisterHandler(CmiExitHandler);
   collectiveInit();

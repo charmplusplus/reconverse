@@ -24,6 +24,8 @@ typedef struct GroupDef_s {
 #define  DEBUGF(...)    //CmiPrintf(__VA_ARGS__)
 
 void CmiStartThreads(char **argv);
+// Registers the Cfuture store handler; runs on every PE (futures.cpp).
+void CfutureModuleInit(void);
 void converseRunPe(int rank, int everReturn);
 void collectiveInit(void);
 

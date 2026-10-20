@@ -355,6 +355,30 @@ void CthResume(CthThread t);
 int CthIsSuspendable(CthThread t);
 
 void CthSuspend(void);
+/* A spare link in each thread, for the runtime's own waiting lists (the Cth
+   standby list, Cfuture waiters); a thread is on at most one such list. */
+void CthSetNext(CthThread t, CthThread next);
+CthThread CthGetNext(CthThread t);
+
+/* Converse futures: a single-assignment cell a Cth thread can block on.
+   The handle may be copied to any PE; CfutureSet may run on any PE,
+   CfutureWait and CfutureDestroy only on the PE that created the future.
+   Documented in the Converse extensions manual (section Futures). */
+struct CfutureCell;
+typedef struct Cfuture_s {
+  int pe;
+  struct CfutureCell *data;
+} Cfuture;
+Cfuture CfutureCreate(void);
+void CfutureSet(Cfuture f, void *value, int len);
+void *CfutureWait(Cfuture f);
+void CfutureDestroy(Cfuture f);
+/* Zero-copy form: fill the buffer, then store it; the buffer becomes the
+   future's value and is freed by CfutureDestroy. */
+void *CfutureCreateBuffer(int bytes);
+void CfutureDestroyBuffer(void *value);
+void CfutureStoreBuffer(Cfuture f, void *value);
+#define CfuturePE(f) ((f).pe)
 
 void CthAwaken(CthThread th);
 
