@@ -4,7 +4,7 @@ This is a clean reimplementation of Converse without the complexities and deadco
 
 ## Documentation
 
-- [Converse and Reconverse](doc/converse-and-reconverse.html): how reconverse differs from classic Converse, with a block diagram of the modules and their interfaces, a side-by-side comparison, API compatibility notes, and what returns for AMPI (isomalloc, migratable threads). GitHub shows the file as source; to read it rendered, open the [htmlpreview link](https://htmlpreview.github.io/?https://github.com/charmplusplus/reconverse/blob/main/doc/converse-and-reconverse.html) or download the file and open it in a browser.
+- [Converse and Reconverse](doc/converse-and-reconverse.md): how reconverse differs from classic Converse, with a block diagram of the modules and their interfaces, a side-by-side comparison, API compatibility notes, and what returns for AMPI (isomalloc, migratable threads).
 
 ## Build Reconverse
 
