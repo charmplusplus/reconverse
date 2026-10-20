@@ -2,6 +2,10 @@
 Complete an mostly backward compatible implementation of a new scheduling and communication layer, primarily used for Charm++. 
 This is a clean reimplementation of Converse without the complexities and deadcode that had accumulated in the old Converse. It is a complete task-based runtime system, that can be used in a stand-alone mode (i.e without Charm++), and with support for message-driven scheduling, multiple queues, user-level threads and communication. It schedules execution on CPUs as well as GPGPUs.   
 
+## Documentation
+
+- [Converse and Reconverse](doc/converse-and-reconverse.html): how reconverse differs from classic Converse, with a block diagram of the modules and their interfaces, a side-by-side comparison, API compatibility notes, and what returns for AMPI (isomalloc, migratable threads). GitHub shows the file as source; to read it rendered, open the [htmlpreview link](https://htmlpreview.github.io/?https://github.com/charmplusplus/reconverse/blob/main/doc/converse-and-reconverse.html) or download the file and open it in a browser.
+
 ## Build Reconverse
 
 ### Build Reconverse with Single-node Support
