@@ -26,6 +26,8 @@ typedef struct GroupDef_s {
 void CmiStartThreads(char **argv);
 // Installs the fatal-signal stack-trace handlers unless +truecrash is given.
 void CmiInitCrashHandlers(char **argv);
+// Registers the Cfuture store handler; runs on every PE (futures.cpp).
+void CfutureModuleInit(void);
 void converseRunPe(int rank, int everReturn);
 void collectiveInit(void);
 
