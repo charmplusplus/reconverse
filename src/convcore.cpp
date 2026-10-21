@@ -28,6 +28,12 @@
 #ifdef __APPLE__
 #include <sys/sysctl.h>
 #endif
+#if defined(__GLIBC__) || defined(__APPLE__)
+#define CMK_HAS_EXECINFO_H 1
+#include <execinfo.h>
+#else
+#define CMK_HAS_EXECINFO_H 0
+#endif
 
 // GLOBALS
 static char **Cmi_argv;
@@ -116,6 +122,7 @@ int node_queue_max; // +node_queue_max: registered scheduler, consecutive node-q
 int backend_poll_thread;
 
 void (*CmiTraceFn)(char **argv) = nullptr;
+void (*CmiIsomallocInitFn)(char **argv) = nullptr;
 
 void CldModuleInit(char **);
 
@@ -146,6 +153,10 @@ CpvStaticDeclare(int,inittime_virtual);
 
 void registerTraceInit(void (*fn)(char **argv)) {
   CmiTraceFn = fn;
+}
+
+void registerIsomallocInit(void (*fn)(char **argv)) {
+  CmiIsomallocInitFn = fn;
 }
 
 void CommLocalHandler(comm_backend::Status status) {
@@ -213,6 +224,13 @@ void converseRunPe(int rank, int everReturn) {
   //printf("[DBG] pe %d rank %d: converseRunPe nodebarrier2 start\n", CmiMyPe(), rank); fflush(stdout);
   CmiNodeBarrier();
   //printf("[DBG] pe %d rank %d: converseRunPe nodebarrier2 done\n", CmiMyPe(), rank); fflush(stdout);
+
+  // Before CthInit: a migratable thread's stack comes out of an Isomalloc
+  // context, so the global address range has to be negotiated first. The
+  // negotiation is a node reduction, so this also has to be after
+  // collectiveInit above.
+  if (CmiIsomallocInitFn)
+    CmiIsomallocInitFn(CmiMyArgv);
 
   CthInit(CmiMyArgv);
   CthSchedInit();
@@ -1222,6 +1240,41 @@ void CmiFreeBroadcastAllFn(int size, char *msg) {
   CmiSyncBroadcastAllAndFree(size, (void *)msg);
 }
 
+/* Best-effort call stack, for diagnostics. Skips the innermost nSkip frames
+   plus this function itself, so a caller passing 1 gets its own caller first.
+   Prints nothing where the platform has no unwinder. */
+void CmiPrintStackTrace(int nSkip) {
+#if CMK_HAS_EXECINFO_H
+  void *frames[64];
+  const int n = backtrace(frames, (int)(sizeof(frames) / sizeof(frames[0])));
+  const int skip = nSkip + 1;
+  if (n <= skip) return;
+  char **names = backtrace_symbols(frames + skip, n - skip);
+  if (names == NULL) {
+    backtrace_symbols_fd(frames + skip, n - skip, fileno(stdout));
+    return;
+  }
+  for (int i = 0; i < n - skip; i++)
+    CmiPrintf("  [%d] %s\n", i, names[i]);
+  free(names);
+#endif
+}
+
+int CmiGetPageSize(void) {
+#ifdef _WIN32
+  SYSTEM_INFO system_info;
+  GetSystemInfo(&system_info);
+  return (int)system_info.dwPageSize;
+#else
+  static int cached = 0;
+  if (cached == 0) {
+    long ps = sysconf(_SC_PAGESIZE);
+    cached = (ps > 0) ? (int)ps : 4096;
+  }
+  return cached;
+#endif
+}
+
 void CmiInitMsgHeader(void *msg, int size) {
   if (size < (int)CmiMsgHeaderSizeBytes) return;
   CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
@@ -1795,6 +1848,8 @@ int CmiMemoryIs(int flag)
 {
 	return (CmiMemoryIs_flag&flag)==flag;
 }
+
+void CmiMemoryIsSetFlag(int flag) { CmiMemoryIs_flag |= flag; }
 
 static char *CopyMsg(char *msg, int len) {
   char *copy = (char *)CmiAlloc(len);
