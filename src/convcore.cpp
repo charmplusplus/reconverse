@@ -116,6 +116,7 @@ int node_queue_max; // +node_queue_max: registered scheduler, consecutive node-q
 int backend_poll_thread;
 
 void (*CmiTraceFn)(char **argv) = nullptr;
+void (*CmiIsomallocInitFn)(char **argv) = nullptr;
 
 void CldModuleInit(char **);
 
@@ -146,6 +147,10 @@ CpvStaticDeclare(int,inittime_virtual);
 
 void registerTraceInit(void (*fn)(char **argv)) {
   CmiTraceFn = fn;
+}
+
+void registerIsomallocInit(void (*fn)(char **argv)) {
+  CmiIsomallocInitFn = fn;
 }
 
 void CommLocalHandler(comm_backend::Status status) {
@@ -214,6 +219,13 @@ void converseRunPe(int rank, int everReturn) {
   //printf("[DBG] pe %d rank %d: converseRunPe nodebarrier2 start\n", CmiMyPe(), rank); fflush(stdout);
   CmiNodeBarrier();
   //printf("[DBG] pe %d rank %d: converseRunPe nodebarrier2 done\n", CmiMyPe(), rank); fflush(stdout);
+
+  // Before CthInit: a migratable thread's stack comes out of an Isomalloc
+  // context, so the global address range has to be negotiated first. The
+  // negotiation is a node reduction, so this also has to be after
+  // collectiveInit above.
+  if (CmiIsomallocInitFn)
+    CmiIsomallocInitFn(CmiMyArgv);
 
   CthInit(CmiMyArgv);
   CthSchedInit();
@@ -443,6 +455,8 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
   // it never reaches the application.
   if (CmiGetArgFlagDesc(argv, "++quiet", "Omit non-error runtime messages"))
     quietModeRequested = quietMode = 1;
+  // Stack traces on fatal signals (see backtrace.cpp); +truecrash opts out.
+  CmiInitCrashHandlers(argv);
 #if defined(__GLIBC__)
   // Keep glibc freed memory inside the process to avoid serialization
   // on the process memory-map lock
@@ -1221,6 +1235,21 @@ void CmiFreeBroadcastAllFn(int size, char *msg) {
   CmiSyncBroadcastAllAndFree(size, (void *)msg);
 }
 
+int CmiGetPageSize(void) {
+#ifdef _WIN32
+  SYSTEM_INFO system_info;
+  GetSystemInfo(&system_info);
+  return (int)system_info.dwPageSize;
+#else
+  static int cached = 0;
+  if (cached == 0) {
+    long ps = sysconf(_SC_PAGESIZE);
+    cached = (ps > 0) ? (int)ps : 4096;
+  }
+  return cached;
+#endif
+}
+
 void CmiInitMsgHeader(void *msg, int size) {
   if (size < (int)CmiMsgHeaderSizeBytes) return;
   CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
@@ -1322,8 +1351,10 @@ void CmiAbort(const char *format, ...) {
   vsnprintf(newmsg, sizeof(newmsg), format, args);
   va_end(args);
   CmiAbortHelper("Called CmiAbort", newmsg, NULL, 1, 0);
+  CmiPrintStackTrace(1); // skip CmiAbort's own frame
 
-  /* No CmiExitHelper() here. */
+  /* No CmiExitHelper() here. The trace is already printed, so SIGABRT goes
+     back to its default disposition before abort(). */
   std::signal(SIGABRT, SIG_DFL);
   abort();
 }
@@ -1792,6 +1823,8 @@ int CmiMemoryIs(int flag)
 {
 	return (CmiMemoryIs_flag&flag)==flag;
 }
+
+void CmiMemoryIsSetFlag(int flag) { CmiMemoryIs_flag |= flag; }
 
 static char *CopyMsg(char *msg, int len) {
   char *copy = (char *)CmiAlloc(len);

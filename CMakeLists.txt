@@ -40,8 +40,8 @@ option(RECONVERSE_TRY_ENABLE_COMM_LCI2 "whether to enable the LCIv2 backend" ON)
 option(RECONVERSE_AUTOFETCH_LCI2
         "whether to autofetch LCIv2 if LCI2 cannot be found" OFF)
 set(RECONVERSE_AUTOFETCH_LCI2_TAG
-    "ca88ce2c4b429ce72dfc3233fa21f8833299440c"
-    CACHE STRING "The tag to fetch for LCIv2") # uiuc-hpc/lci master branch tip as of 2026-08-06
+    "b5d9ea9707bc004e60537115b84a57416801fa22"
+    CACHE STRING "The tag to fetch for LCIv2") # uiuc-hpc/lci master, 2026-09-21: isolate file PMI state per launch (#203)
 
 option(RECONVERSE_TRY_ENABLE_COMM_LCW "whether to enable the LCW backend" ON)
 option(RECONVERSE_AUTOFETCH_LCW
@@ -205,6 +205,11 @@ set_target_properties(reconverse PROPERTIES CXX_STANDARD 17)
 add_subdirectory(include)
 add_subdirectory(src)
 target_link_libraries(reconverse PUBLIC Threads::Threads)
+# Stack traces (backtrace.cpp) name functions inside the executable only if
+# its symbols are exported; on Linux that takes -rdynamic at the final link.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  target_link_options(reconverse INTERFACE -rdynamic)
+endif()
 
 if(RECONVERSE_ENABLE_XPMEM)
   target_include_directories(reconverse PRIVATE ${XPMEM_INCLUDE_DIR})
