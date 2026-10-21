@@ -86,9 +86,16 @@ CpvStaticDeclare(CthThread, CthSleepingStandins);
 
 CthThreadToken *CthGetToken(CthThread t) { return B(t)->token; }
 
-/* Which flavor of thread this build provides. Set in CthInit; read by callers
-   that need to know whether a stack address survives a migration. */
-static int CmiThreadIs_flag = 0;
+/* Which flavor of thread this build provides, for callers that need to know
+   whether a stack address survives a migration. Fixed at compile time, so no
+   PE can read it before it is set. The threads are uFcontext over boost
+   fcontext: a saved context is a stack pointer into the thread's own stack, so
+   a migratable thread's stack keeps its address (Isomalloc gives it one) and
+   is neither aliased nor copied. UJCONTEXT is the answer classic Converse
+   gives for this flavor (its threads.C sets it for the jcontext and fcontext
+   builds alike); what Charm++ asks about is ALIAS, STACKCOPY and TLS, all of
+   which are false here. */
+static const int CmiThreadIs_flag = CMI_THREAD_IS_UJCONTEXT;
 
 int CmiThreadIs(int flag) { return (CmiThreadIs_flag & flag) == flag; }
 
@@ -225,12 +232,6 @@ void CthInit(char **argv) {
   CthThreadInit(t);
   CpvInitialize(CthThread, doomedThreadPool);
   CpvAccess(doomedThreadPool) = (CthThread)NULL;
-
-  /* boost fcontext: a saved context is a stack pointer into the thread's own
-     stack, so a migratable thread's stack has to keep its address -- which is
-     what Isomalloc gives it. Not aliased, not copied. */
-  if (CmiMyRank() == 0)
-    CmiThreadIs_flag |= CMI_THREAD_IS_UJCONTEXT;
 }
 
 /* Globals swapping: not implemented here. See the comment in converse.h --
