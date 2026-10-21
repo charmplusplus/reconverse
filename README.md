@@ -2,6 +2,10 @@
 Complete an mostly backward compatible implementation of a new scheduling and communication layer, primarily used for Charm++. 
 This is a clean reimplementation of Converse without the complexities and deadcode that had accumulated in the old Converse. It is a complete task-based runtime system, that can be used in a stand-alone mode (i.e without Charm++), and with support for message-driven scheduling, multiple queues, user-level threads and communication. It schedules execution on CPUs as well as GPGPUs.   
 
+## Documentation
+
+- [Converse and Reconverse](doc/converse-and-reconverse.md): how reconverse differs from classic Converse, with a block diagram of the modules and their interfaces, a side-by-side comparison, API compatibility notes, and what returns for AMPI (isomalloc, migratable threads).
+
 ## Build Reconverse
 
 ### Build Reconverse with Single-node Support
@@ -335,6 +339,25 @@ reduction id `CcsSetMergeFn` took from `CmiGetGlobalReduction`.
 
 Not carried over from classic Converse: CharmDebug's conditional delivery
 and stdio forwarding, which depend on the Converse debugger.
+
+There is no charmrun to relay requests, so the client must reach PE 0's
+socket on its compute node. On a cluster whose compute nodes are reachable
+from the login node but not from outside, forward the port through the
+login node with ssh and point the client at localhost:
+
+```
+# job script: a fixed port, so the address is known
+srun --mpi=pmix -n 2 ./app +pe 4 ++server ++server-port 1234
+# job output: ccs: Server IP = <address>, Server port = 1234
+# laptop:
+ssh -L 1234:<compute node>:1234 <login node>
+./client localhost 1234
+```
+
+Verified on NCSA Delta (2026-10-20): examples/converse/ccstest from Charm++
+run under srun on a cpu-interactive node, client on a laptop through
+`ssh -L`, replies from all four PEs. `++server-auth <file>` protects the
+socket as before.
 
 ## Example Steps to Build and Run Reconverse
 
