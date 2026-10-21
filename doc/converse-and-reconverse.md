@@ -11,7 +11,7 @@ Written 2026-10-19 to answer how the two differ. Facts were read from the trees 
 - **No comm thread, no charmrun.** Every PE is a worker thread that also polls the network from its scheduler loop. Programs are launched directly with `lcrun`, `srun` or `mpirun` and sized with `+pe`.
 - **Rewritten core, ported periphery.** Startup, scheduler, queues, the backend layer, collectives, RDMA and shared-memory IPC are new. Threads, conditions and timers, seed balancing, mempool, affinity, topology, persistent channels, CCS and the message manager were ported file by file from classic. Nothing was copied wholesale, so classic's dead code did not come along.
 - **Smaller.** Counting only code the project wrote (no comments, no blank lines, no vendored third-party files): 12,900 lines of reconverse against 66,800 for classic's conv-core, conv-ldb and arch, plus 5,100 for charmrun. With vendored code included, 21,600 against 97,200. Section 4 has the breakdown.
-- **Two things AMPI needs are not there yet:** isomalloc and migratable threads. They were left out of the rewrite; AMPI stage 1 brings them back (charm #4064 with reconverse #298, in review since 2026-10-20, section 6).
+- **What AMPI needs to migrate ranks:** migratable threads and isomalloc. Both were left out of the rewrite, and AMPI stage 1 brings them back (section 6). The threads are in reconverse (#298). Isomalloc stays in Charm++, next to the PUP framework it serializes with, and plugs into the threads through an ops table (charm #4064).
 
 ## 1. Block diagram: modules and interfaces
 
@@ -39,7 +39,7 @@ flowchart TB
     R1["Startup and PE threads<br/>convcore.cpp (1,519): ConverseInit, +pe parsing, one pthread per PE, sends, CmiAbort"]
     R2["Scheduler<br/>scheduler*.cpp (762): registered pollable sources in a slot table; +old-scheduler, +randomized_msgq"]
     R3["Queues<br/>queue.h, queueing.cpp (Cqs priority queue), concurrentqueue.h (moodycamel MPMC)"]
-    R4["Threads (Cth)<br/>threads.cpp (415) on boost fcontext; no migration"]
+    R4["Threads (Cth)<br/>threads.cpp (550) on boost fcontext; migratable when an Isomalloc provider is registered"]
     R5["Conditions and timers (Ccd)<br/>conv-conds.cpp (187)"]
     R6["Seed balancing (Cld)<br/>cldb.cpp, cldb.rand.cpp (187)"]
     R7["Collectives<br/>collectives.cpp (592): broadcast, node broadcast, spanning tree, CmiReduce"]
@@ -80,8 +80,8 @@ What is deliberately not in the picture: no comm thread (progress is a call in e
 | Process model | Non-SMP: one process per PE. SMP: worker PEs plus one comm thread per process that owns the network. | Always one process with N PE threads. No comm thread. The network is polled from each PE's scheduler loop. |
 | Launch and sizing | `./charmrun ++local ./app +p8 ++ppn 4`. charmrun starts processes and relays CCS and stdio. `+p` is the total PE count. | `./app +pe 4` (one process) or `lcrun -n 2 ./app +pe 8`, `srun --mpi=pmi2 -n 2 ./app +pe 8`, `mpirun -n 2 ./app +backend lcw +pe 8`. `+pe` is the total across processes; `+ppn` and `+p` are per process. |
 | Scheduler | One hard-coded loop in convcore.C polling a fixed set of queues and the machine layer. | Pollable sources register a handler in a slot table (scheduler_registered.cpp). The original loop is kept behind `+old-scheduler`; `+randomized_msgq` delivers in random order for testing. |
-| User-level threads | Cth on QuickThreads or uFcontext/uJcontext; migratable threads with isomalloc stacks, CthPup. | Cth on boost fcontext (vendored boost-context, 6,000 code lines of assembly and headers). Same create/suspend/awaken/yield API. No migration: the migratable flag is accepted and ignored. |
-| Isomalloc | isomalloc.C (2,174 code lines) and memory-isomalloc.C: address-space partition across processes, migratable stacks and heaps. | Absent. Only the `CMI_MEMORY_IS_ISOMALLOC` flag constant exists. Returns in AMPI stage 1. |
+| User-level threads | Cth on QuickThreads or uFcontext/uJcontext; migratable threads with isomalloc stacks, CthPup. | Cth on boost fcontext (vendored boost-context, 6,000 code lines of assembly and headers). Same create/suspend/awaken/yield API. Migratable threads (`CthCreateMigratable`, `CthPupThread` through a caller-supplied `CmiPupStream`) once an Isomalloc provider registers with `CthRegisterIsomallocOps`; without one, the migratable flag is accepted and ignored. |
+| Isomalloc | isomalloc.C (2,174 code lines) and memory-isomalloc.C: address-space partition across processes, migratable stacks and heaps. | Not in reconverse: it stays in Charm++ (AMPI stage 1, charm #4064) and plugs in through `CthRegisterIsomallocOps` and `registerIsomallocInit`. |
 | Memory | CmiAlloc with pluggable memory modules (gnu malloc, paranoid, isomalloc, ...); CmiMemoryUsage reports real figures. | CmiAlloc and CmiFree present; messages come from the backend's registered mempool. `CmiMemoryUsage` is a stub returning 0. `+glibc_tuned_malloc` tunes glibc instead. |
 | Zero-copy and persistent | Ncpy get/put, device zero-copy, persistent channels, all machine-layer specific. | Same APIs (conv-rdma.h, persistent.h) on the backend's registerMemory, issueRget and issueRput. |
 | Same-host IPC | PXSHM and XPMEM inside the machine layers (netlrts, verbs, gni). | A Converse-level pool, `+ipc`, with shm and xpmem transports, usable by any backend. |
@@ -158,7 +158,7 @@ reconverse's converse.h declares 263 functions: 177 `Cmi*` (including 11 `CmiIpc
 
 About 210 identifiers from classic's converse.h have no counterpart. The ones a library author might notice:
 
-- Thread migration: `CthPup`, `CthMigratable`, `CthCreateMigratable`, `CmiIsomalloc*` (returning; the TCharm shim stubs them meanwhile).
+- Thread migration: `CthPup` and `CmiIsomalloc*`. Charm++ provides them on top of reconverse's `CthPupThread` and `CthRegisterIsomallocOps` (charm #4064); until then, the TCharm shim stubs them.
 - Asynchronous sends: the whole `CmiAsync*` family and `CmiReleaseCommHandle`; `CmiSyncVectorSend`; `CmiMultipleSend`.
 - Reductions: `CmiReduceID`, `CmiReduceStruct`, the pup and delete variants. Only `CmiReduce` and `CmiNodeReduce` with a merge function remain.
 - Idle and comm-thread notification: `CmiNotifyIdle`, `CmiNotifyCommThd*`; use `CcdCallOnCondition(CcdPROCESSOR_STILL_IDLE, ...)`.
