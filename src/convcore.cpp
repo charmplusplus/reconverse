@@ -28,12 +28,6 @@
 #ifdef __APPLE__
 #include <sys/sysctl.h>
 #endif
-#if defined(__GLIBC__) || defined(__APPLE__)
-#define CMK_HAS_EXECINFO_H 1
-#include <execinfo.h>
-#else
-#define CMK_HAS_EXECINFO_H 0
-#endif
 
 // GLOBALS
 static char **Cmi_argv;
@@ -1238,26 +1232,6 @@ void CmiFreeNodeSendFn(int destNode, int size, char *msg) {
 
 void CmiFreeBroadcastAllFn(int size, char *msg) {
   CmiSyncBroadcastAllAndFree(size, (void *)msg);
-}
-
-/* Best-effort call stack, for diagnostics. Skips the innermost nSkip frames
-   plus this function itself, so a caller passing 1 gets its own caller first.
-   Prints nothing where the platform has no unwinder. */
-void CmiPrintStackTrace(int nSkip) {
-#if CMK_HAS_EXECINFO_H
-  void *frames[64];
-  const int n = backtrace(frames, (int)(sizeof(frames) / sizeof(frames[0])));
-  const int skip = nSkip + 1;
-  if (n <= skip) return;
-  char **names = backtrace_symbols(frames + skip, n - skip);
-  if (names == NULL) {
-    backtrace_symbols_fd(frames + skip, n - skip, fileno(stdout));
-    return;
-  }
-  for (int i = 0; i < n - skip; i++)
-    CmiPrintf("  [%d] %s\n", i, names[i]);
-  free(names);
-#endif
 }
 
 int CmiGetPageSize(void) {
