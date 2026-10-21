@@ -190,6 +190,31 @@ void CommRgetRemoteHandler(comm_backend::Status status);
 // memcpy when neither pointer is a device allocation or no GPU support is
 // compiled in.
 static void memcpyAnyPtr(void *dst, const void *src, size_t size) {
+#if CMK_HIP
+  {
+    hipPointerAttribute_t srcAttr{}, dstAttr{};
+    bool srcIsDevice = (hipPointerGetAttributes(&srcAttr, src) == hipSuccess &&
+                        srcAttr.type == hipMemoryTypeDevice);
+    bool dstIsDevice = (hipPointerGetAttributes(&dstAttr, dst) == hipSuccess &&
+                        dstAttr.type == hipMemoryTypeDevice);
+    if (srcIsDevice || dstIsDevice) {
+      if (hipMemcpy(dst, src, size, hipMemcpyDefault) == hipSuccess)
+        return;
+      void *h = malloc(size);
+      CmiAssert(h != nullptr);
+      if (srcIsDevice)
+        hipMemcpy(h, src, size, hipMemcpyDeviceToHost);
+      else
+        memcpy(h, src, size);
+      if (dstIsDevice)
+        hipMemcpy(dst, h, size, hipMemcpyHostToDevice);
+      else
+        memcpy(dst, h, size);
+      free(h);
+      return;
+    }
+  }
+#endif
 #if CMK_CUDA
   {
     cudaPointerAttributes srcAttr{}, dstAttr{};
