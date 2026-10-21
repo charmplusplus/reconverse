@@ -14,6 +14,9 @@
  * Symbols inside the executable itself resolve on Linux only when it is
  * linked with -rdynamic (reconverse's CMake interface adds it to consumers);
  * otherwise a frame shows the object and an address for addr2line.
+ * 
+ * need to do in future: handle possibility of stack overflow in user level threads
+ * when implementing AMPI on Reconverse
  */
 #include "converse_internal.h"
 
