@@ -11,7 +11,7 @@ Written 2026-10-19 to answer how the two differ. Facts were read from the trees 
 - **No comm thread, no charmrun.** Every PE is a worker thread that also polls the network from its scheduler loop. Programs are launched directly with `lcrun`, `srun` or `mpirun` and sized with `+pe`.
 - **Rewritten core, ported periphery.** Startup, scheduler, queues, the backend layer, collectives, RDMA and shared-memory IPC are new. Threads, conditions and timers, seed balancing, mempool, affinity, topology, persistent channels, CCS and the message manager were ported file by file from classic. Nothing was copied wholesale, so classic's dead code did not come along.
 - **Smaller.** Counting only code the project wrote (no comments, no blank lines, no vendored third-party files): 12,900 lines of reconverse against 66,800 for classic's conv-core, conv-ldb and arch, plus 5,100 for charmrun. With vendored code included, 21,600 against 97,200. Section 4 has the breakdown.
-- **Two things AMPI needs are not there yet:** isomalloc and migratable threads. They were left out of the rewrite and return as the next two AMPI stages (section 6).
+- **Two things AMPI needs are not there yet:** isomalloc and migratable threads. They were left out of the rewrite; AMPI stage 1 brings them back (charm #4064 with reconverse #298, in review since 2026-10-20, section 6).
 
 ## 1. Block diagram: modules and interfaces
 
@@ -24,6 +24,7 @@ flowchart TB
     P1["Charm++ applications<br/>chares, arrays, SDAG, groups"]
     P2["AMPI programs<br/>stage 0: builds and runs, no migration"]
     P3["Standalone Converse programs<br/>e.g. the Argobots-style shim for Mochi"]
+    P4["Charm4py programs<br/>through libcharm.so (the charm4py build target; on reconverse with charm #4063)"]
   end
   subgraph C["Charm++ runtime (charmplusplus/charm, branch recharm; reconverse is the submodule contrib/reconverse)"]
     direction LR
@@ -92,7 +93,7 @@ What is deliberately not in the picture: no comm thread (progress is a call in e
 | Tracing and replay | Projections tracing, record-replay. | Both work. Recording on reconverse needs per-record flushing (`+recplay-logsize`). |
 | GPUs | hapi, device zero-copy in the cuda arch overlay. | Same, through reconverse-linux-x86_64-cuda; GPU-aware load balancing merged 2026-09. |
 | Interoperability | MPI interop, user-driven interop. | User-driven interop added 2026-10-19 (reconverse #288, charm #4055). MPI interop absent on the Converse side; slated to return. |
-| AMPI | Full, with thread migration and isomalloc-based privatization. | Stage 0 (charm #4051, 2026-10-19): builds and runs, non-migrating; migration and checkpoint tests skipped. |
+| AMPI | Full, with thread migration and isomalloc-based privatization. | Stage 0 (charm #4051, 2026-10-19): builds and runs, non-migrating. Stage 1 (charm #4064 with reconverse #298, in review): migratable threads and isomalloc, migration tests on. |
 | Abort | charmrun kills the job on CmiAbort; stack trace printed. | CmiAbort aborts the local process; with the srun or lcrun launchers other ranks could survive (reconverse #285). Fixes in flight: LCT_pmi_abort (uiuc-hpc/lci #209) plus a backend abortAll call; stack traces on abort and fatal signals in reconverse #294. |
 | Build | ./build with the classic configure, or CMake. | CMake only (`./build charm++ reconverse-linux-x86_64`); reconverse builds as a shared library with its own CMake project and fetches or finds LCI. |
 
@@ -102,7 +103,7 @@ What is deliberately not in the picture: no comm thread (progress is a call in e
 
 Until the classic-deletion pull request (charm #4061) merges, the `recharm` branch holds both runtimes and builds Charm++ against either one. The switch is a CMake option, `RECONVERSE`, and the Charm++ source carries 79 conditional lines in 31 files, 48 of them `#if CMK_RECONVERSE` or `if(RECONVERSE)`. The files with the most are CMakeLists.txt (17) and cmake/converse.cmake (7); everything else has three lines or fewer. That is the whole cost of supporting both, and it is what "a few ifdefs" means.
 
-The deletion removes classic Converse from `recharm`: 705 files, 155,529 lines, including src/conv-core except eleven headers, src/arch, conv-ldb, QuickThreads and charmrun. The classic line stays on the `classic` branch (Charm++ 8.1.0) and in every tag up to `v9.0.0-alpha2`, so the two-runtime tree remains checkable for comparison.
+The deletion removes classic Converse from `recharm`: 701 files, 151,100 lines, including src/conv-core except eleven headers and the four isomalloc and memory-module sources AMPI stage 1 builds, src/arch, conv-ldb, QuickThreads and charmrun. The charm4py build target stays, in the reconverse form charm #4063 gives it. The classic line stays on the `classic` branch (Charm++ 8.1.0) and in every tag up to `v9.0.0-alpha2`, so the two-runtime tree remains checkable for comparison.
 
 ## 4. Sizes
 
@@ -170,8 +171,7 @@ About 210 identifiers from classic's converse.h have no counterpart. The ones a 
 
 ### Returning
 
-- **Isomalloc** (AMPI stage 1): the address-space partition agreed at startup, per-PE regions, and the allocator hook for stacks and, for AMPI, heaps. Classic isomalloc.C is the reference; the mmap arithmetic ports, the startup agreement uses reconverse collectives.
-- **Migratable threads** (AMPI stage 2): CthPup over an isomalloc stack, then un-guarding migrate, async migrate and checkpoint in TCharm and AMPI, and switching tests/ampi migration and chkpt back on.
+- **Isomalloc and migratable threads** (AMPI stage 1, charm #4064 with reconverse #298, in review): reconverse gains migratable Cth threads and a CthIsomallocOps hook table; isomalloc itself stays on the Charm++ side (isomalloc.C with a new isomalloc-reconverse.C as libisomalloc, memory.C and memory-os-wrapper.C as the isomalloc memory module), because its context serialization is written against PUP, which sits above reconverse. TCharm and AMPI migrate again and tests/ampi runs its migration tests.
 - **Seed balancers**: a re-port of the classic strategies as an opt-in (reconverse #185 plan).
 - **Job-wide abort**: LCI #209 and the reconverse abortAll call, so CmiAbort ends every rank under srun and lcrun.
 - **Stack traces** on CmiAbort and fatal signals, rewritten (reconverse #294), and **Converse futures** (Cfuture), ported (reconverse #295), both for standalone Converse programs and crash reports.
@@ -187,7 +187,7 @@ About 210 identifiers from classic's converse.h have no counterpart. The ones a 
 
 ## 7. Timeline and where to read more
 
-- **2024-12-16** first reconverse commit. **2026-09-14** announcement to users that the reconverse line becomes the main line. **2026-10-13** Charm++ 8.1.0, the last classic release; `main` renamed `classic`, `recharm` becomes the default branch. **2026-10-16** v9.0.0-alpha1. **2026-10-19** v9.0.0-alpha2; AMPI stage 0 and user-driven interop merged; classic-deletion PR #4061 opened.
+- **2024-12-16** first reconverse commit. **2026-09-14** announcement to users that the reconverse line becomes the main line. **2026-10-13** Charm++ 8.1.0, the last classic release; `main` renamed `classic`, `recharm` becomes the default branch. **2026-10-16** v9.0.0-alpha1. **2026-10-19** v9.0.0-alpha2; AMPI stage 0 and user-driven interop merged; classic-deletion PR #4061 opened. **2026-10-20** LCI pin moved to b5d9ea97 (reconverse #297; that LCI needs CMake 3.21 and Python 3.8 or newer); AMPI stage 1 (#4064) and charm4py on reconverse (#4063) in review.
 - Repositories: [charmplusplus/reconverse](https://github.com/charmplusplus/reconverse) (README covers build options, backends, +ipc, +randomized_msgq, CCS, Delta recipes), [charmplusplus/charm](https://github.com/charmplusplus/charm) branch recharm, [uiuc-hpc/lci](https://github.com/uiuc-hpc/lci).
 - Deeper notes on single slices: "IPC in the Reconverse Stack" (same-host communication, 2026-09-15) and "Reconverse Message Queues" (scheduler and queue internals, 2026-10-11), both internal notes.
 - The Charm++ manual's Converse chapter still describes classic; this page is the current description until the manual is updated for 9.0.
