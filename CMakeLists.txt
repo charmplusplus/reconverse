@@ -205,6 +205,11 @@ set_target_properties(reconverse PROPERTIES CXX_STANDARD 17)
 add_subdirectory(include)
 add_subdirectory(src)
 target_link_libraries(reconverse PUBLIC Threads::Threads)
+# Stack traces (backtrace.cpp) name functions inside the executable only if
+# its symbols are exported; on Linux that takes -rdynamic at the final link.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  target_link_options(reconverse INTERFACE -rdynamic)
+endif()
 
 if(RECONVERSE_ENABLE_XPMEM)
   target_include_directories(reconverse PRIVATE ${XPMEM_INCLUDE_DIR})

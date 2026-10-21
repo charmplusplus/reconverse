@@ -28,12 +28,6 @@
 #ifdef __APPLE__
 #include <sys/sysctl.h>
 #endif
-#if defined(__GLIBC__) || defined(__APPLE__)
-#define CMK_HAS_EXECINFO_H 1
-#include <execinfo.h>
-#else
-#define CMK_HAS_EXECINFO_H 0
-#endif
 
 // GLOBALS
 static char **Cmi_argv;
@@ -460,6 +454,8 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
   // it never reaches the application.
   if (CmiGetArgFlagDesc(argv, "++quiet", "Omit non-error runtime messages"))
     quietModeRequested = quietMode = 1;
+  // Stack traces on fatal signals (see backtrace.cpp); +truecrash opts out.
+  CmiInitCrashHandlers(argv);
 #if defined(__GLIBC__)
   // Keep glibc freed memory inside the process to avoid serialization
   // on the process memory-map lock
@@ -1238,26 +1234,6 @@ void CmiFreeBroadcastAllFn(int size, char *msg) {
   CmiSyncBroadcastAllAndFree(size, (void *)msg);
 }
 
-/* Best-effort call stack, for diagnostics. Skips the innermost nSkip frames
-   plus this function itself, so a caller passing 1 gets its own caller first.
-   Prints nothing where the platform has no unwinder. */
-void CmiPrintStackTrace(int nSkip) {
-#if CMK_HAS_EXECINFO_H
-  void *frames[64];
-  const int n = backtrace(frames, (int)(sizeof(frames) / sizeof(frames[0])));
-  const int skip = nSkip + 1;
-  if (n <= skip) return;
-  char **names = backtrace_symbols(frames + skip, n - skip);
-  if (names == NULL) {
-    backtrace_symbols_fd(frames + skip, n - skip, fileno(stdout));
-    return;
-  }
-  for (int i = 0; i < n - skip; i++)
-    CmiPrintf("  [%d] %s\n", i, names[i]);
-  free(names);
-#endif
-}
-
 int CmiGetPageSize(void) {
 #ifdef _WIN32
   SYSTEM_INFO system_info;
@@ -1374,8 +1350,10 @@ void CmiAbort(const char *format, ...) {
   vsnprintf(newmsg, sizeof(newmsg), format, args);
   va_end(args);
   CmiAbortHelper("Called CmiAbort", newmsg, NULL, 1, 0);
+  CmiPrintStackTrace(1); // skip CmiAbort's own frame
 
-  /* No CmiExitHelper() here. */
+  /* No CmiExitHelper() here. The trace is already printed, so SIGABRT goes
+     back to its default disposition before abort(). */
   std::signal(SIGABRT, SIG_DFL);
   abort();
 }

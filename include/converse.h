@@ -497,8 +497,9 @@ char *CthPointer(CthThread t, size_t pos);
 #define CMI_THREAD_IS_TLS (1 << 8)
 int CmiThreadIs(int flag);
 
-/* Print the current call stack to stdout, skipping the innermost nSkip
-   frames. Best effort: prints nothing if the platform cannot walk the stack. */
+/* Print the calling thread's stack to stderr, demangled, one frame per
+   line; nSkip innermost frames are omitted (see backtrace.cpp). CmiAbort
+   prints one, and so does the fatal-signal handler. */
 void CmiPrintStackTrace(int nSkip);
 
 /* Converse Thread Globals: swapping a private copy of the program's global
