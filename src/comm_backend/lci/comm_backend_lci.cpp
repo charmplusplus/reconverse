@@ -1,11 +1,7 @@
 #include "mempool.h"
 #include "lci.hpp"
-<<<<<<< HEAD:src/comm_backend/lci2/comm_backend_lci2.cpp
 #include "lct.h"
-#include "comm_backend/lci2/comm_backend_lci2.h"
-=======
 #include "comm_backend/lci/comm_backend_lci.h"
->>>>>>> origin/main:src/comm_backend/lci/comm_backend_lci.cpp
 #include <cstdlib>
 #include <vector>
 
@@ -239,12 +235,11 @@ void CommBackendLCI::init(char **argv) {
   barrier();
 }
 
-<<<<<<< HEAD:src/comm_backend/lci2/comm_backend_lci2.cpp
 // The PMI abort reaches the process manager (Slurm's PMI2/PMIx, mpirun), which
 // then ends the other ranks; without it they spin until the job's time limit
 // (issue #285). lcrun's file bootstrap has no manager: there lcrun itself
 // kills the peers when a process exits with a failure status.
-void CommBackendLCI2::abortAll(int exit_code, const char *msg) {
+void CommBackendLCI::abortAll(int exit_code, const char *msg) {
 #ifdef LCT_PMI_HAS_ABORT
   if (LCT_pmi_initialized()) LCT_pmi_abort(exit_code, msg);
 #else
@@ -253,10 +248,7 @@ void CommBackendLCI2::abortAll(int exit_code, const char *msg) {
 #endif
 }
 
-void CommBackendLCI2::exit() {
-=======
 void CommBackendLCI::exit() {
->>>>>>> origin/main:src/comm_backend/lci/comm_backend_lci.cpp
   // Drop any still-registered memory regions before tearing the devices down;
   // an open region makes fi_close(domain) fail with FI_EBUSY. This supersedes
   // the reconverse_lci_cache_amd workaround of skipping free_device entirely.
