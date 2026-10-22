@@ -82,11 +82,11 @@ static bool pollNodeQueuesFirst() {
 // empty poll, idle or busy, which is the old scheduler's rate. (A busy
 // iteration used to poll every progress slot it crossed before reaching
 // work, about two at the default weight.)
-// The flag is not a completion fact: LCI2's progress() also returns false to
-// a thread that loses a device's trylock, so for the rest of that sweep it
-// can mean "another thread is polling this device". That is harmless, since
-// the winner delivers into this PE's thread queue, which every iteration
-// drains first.
+// The flag is not a completion fact: the LCI backend's progress() also returns
+// false to a thread that loses a device's trylock, so for the rest of that
+// sweep it can mean "another thread is polling this device". That is
+// harmless, since the winner delivers into this PE's thread queue, which every
+// iteration drains first.
 static thread_local bool t_progressFoundNothing = false;
 
 bool pollProgress()
