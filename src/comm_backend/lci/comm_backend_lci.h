@@ -39,6 +39,7 @@ public:
   void init(char **argv) override;
   void init_mempool() override;
   void exit() override;
+  void abortAll(int exit_code, const char *msg) override;
   void initThread(int thread_id, int num_threads) override;
   void exitThread() override;
   int getMyNodeId() override;

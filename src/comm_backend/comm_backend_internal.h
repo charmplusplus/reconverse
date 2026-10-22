@@ -16,6 +16,7 @@ public:
   virtual void init(char **argv) = 0;
   virtual void init_mempool() = 0;
   virtual void exit() = 0;
+  virtual void abortAll(int exit_code, const char *msg) {}
   virtual void initThread(int thread_id, int num_threads) {}
   virtual void exitThread() {}
   virtual int getMyNodeId() = 0;

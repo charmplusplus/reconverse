@@ -1364,8 +1364,10 @@ void CmiAbort(const char *format, ...) {
   CmiAbortHelper("Called CmiAbort", newmsg, NULL, 1, 0);
   CmiPrintStackTrace(1); // skip CmiAbort's own frame
 
-  /* No CmiExitHelper() here. The trace is already printed, so SIGABRT goes
-     back to its default disposition before abort(). */
+  /* No CmiExitHelper(): the process manager ends the other ranks (abortAll),
+     or the launcher does when this one dies. The trace is already printed, so
+     SIGABRT goes back to its default disposition before abort(). */
+  comm_backend::abortAll(1, newmsg);
   std::signal(SIGABRT, SIG_DFL);
   abort();
 }
