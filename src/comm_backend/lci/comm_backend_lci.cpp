@@ -1,13 +1,13 @@
 #include "mempool.h"
 #include "lci.hpp"
-#include "comm_backend/lci2/comm_backend_lci2.h"
+#include "comm_backend/lci/comm_backend_lci.h"
 #include <cstdlib>
 #include <vector>
 
 CpvDeclare(mempool_type*, mempool);
 
 namespace comm_backend {
-namespace lci2_impl {
+namespace lci_impl {
 
 namespace detail {
 struct ThreadContext {
@@ -85,7 +85,7 @@ void free_mempool_block(void *ptr, void* mem_hndl)
     ::free(ptr);
 }
 
-void CommBackendLCI2::init_mempool()
+void CommBackendLCI::init_mempool()
 {
   CpvInitialize(mempool_type*, mempool);
 
@@ -95,7 +95,7 @@ void CommBackendLCI2::init_mempool()
     mempool_options.mempool_max_size);
 }
 
-void* CommBackendLCI2::malloc(int n_bytes, int header)
+void* CommBackendLCI::malloc(int n_bytes, int header)
 {
   char *ptr = NULL;
   size_t size = n_bytes + header;
@@ -159,7 +159,7 @@ void* CommBackendLCI2::malloc(int n_bytes, int header)
   return ptr;
 }
 
-void CommBackendLCI2::free(void *msg)
+void CommBackendLCI::free(void *msg)
 {
   int headersize = sizeof(CmiChunkHeader);
   // msg points to user data, we need to go back to find mempool_header
@@ -184,7 +184,7 @@ void CommBackendLCI2::free(void *msg)
   }
 }
 
-void CommBackendLCI2::init(char **argv) {
+void CommBackendLCI::init(char **argv) {
   int num_devices = 1;
   CmiGetArgInt(argv, "+lci_ndevices", (int *)&num_devices);
   CmiAssert(num_devices >= 1);
@@ -234,7 +234,7 @@ void CommBackendLCI2::init(char **argv) {
   barrier();
 }
 
-void CommBackendLCI2::exit() {
+void CommBackendLCI::exit() {
   // Drop any still-registered memory regions before tearing the devices down;
   // an open region makes fi_close(domain) fail with FI_EBUSY. This supersedes
   // the reconverse_lci_cache_amd workaround of skipping free_device entirely.
@@ -266,7 +266,7 @@ void CommBackendLCI2::exit() {
   }
 }
 
-void CommBackendLCI2::initThread(int thread_id, int num_threads) {
+void CommBackendLCI::initThread(int thread_id, int num_threads) {
   detail::g_thread_context.thread_id = thread_id;
   int nthreads_per_device =
       (num_threads + m_devices.size() - 1) / m_devices.size();
@@ -276,7 +276,7 @@ void CommBackendLCI2::initThread(int thread_id, int num_threads) {
   detail::g_thread_context.tls_device = m_devices[device_id];
 }
 
-void CommBackendLCI2::exitThread() {
+void CommBackendLCI::exitThread() {
   // This PE's mempool is NOT destroyed here: completions processed later by
   // another thread's progress() still allocate from and free into it (see
   // exit()). Destroying it here freed buffers of in-flight sends and receive
@@ -287,16 +287,16 @@ void CommBackendLCI2::exitThread() {
   detail::g_thread_context.thread_id = -1;
 }
 
-int CommBackendLCI2::getMyNodeId() { return lci::get_rank_me(); }
+int CommBackendLCI::getMyNodeId() { return lci::get_rank_me(); }
 
-int CommBackendLCI2::getNumNodes() { return lci::get_rank_n(); }
+int CommBackendLCI::getNumNodes() { return lci::get_rank_n(); }
 
-AmHandler CommBackendLCI2::registerAmHandler(CompHandler handler) {
+AmHandler CommBackendLCI::registerAmHandler(CompHandler handler) {
   g_handlers.push_back(handler);
   return g_handlers.size() - 1;
 }
 
-void CommBackendLCI2::issueAm(int rank, const void *local_buf, size_t size, mr_t mr,
+void CommBackendLCI::issueAm(int rank, const void *local_buf, size_t size, mr_t mr,
                               CompHandler localComp, AmHandler remoteComp, void *user_context) {
   auto args = new localCallbackArgs{localComp, user_context};
   lci::status_t status;
@@ -323,7 +323,7 @@ void CommBackendLCI2::issueAm(int rank, const void *local_buf, size_t size, mr_t
   }
 }
 
-void CommBackendLCI2::issueRget(int rank, const void *local_buf, size_t size,
+void CommBackendLCI::issueRget(int rank, const void *local_buf, size_t size,
                                 mr_t local_mr, void* remote_buf, void *rmr,
                                 CompHandler localComp, void *user_context) {
   auto args = new localCallbackArgs{localComp, user_context};
@@ -347,7 +347,7 @@ void CommBackendLCI2::issueRget(int rank, const void *local_buf, size_t size,
   }
 }
 
-void CommBackendLCI2::issueRput(int rank, const void *local_buf, size_t size,
+void CommBackendLCI::issueRput(int rank, const void *local_buf, size_t size,
                                 mr_t local_mr, uintptr_t remote_disp, void *rmr,
                                 CompHandler localComp, void *user_context) {
   auto args = new localCallbackArgs{localComp, user_context};
@@ -372,7 +372,7 @@ void CommBackendLCI2::issueRput(int rank, const void *local_buf, size_t size,
   }
 }
 
-bool CommBackendLCI2::progress(void) {
+bool CommBackendLCI::progress(void) {
   // OFI fi_cq_read is not thread-safe. Use a per-device trylock so at most
   // one thread polls each device CQ at a time. Callers that lose the race
   // simply return without making progress — the winning thread covers them.
@@ -414,7 +414,7 @@ bool CommBackendLCI2::progress(void) {
   }
 }
 
-void CommBackendLCI2::barrier(void) {
+void CommBackendLCI::barrier(void) {
   // nonblocking barrier
   lci::comp_t comp = lci::alloc_counter();
   lci::barrier_x().device(getThreadLocalDevice()).comp(comp)();
@@ -424,7 +424,7 @@ void CommBackendLCI2::barrier(void) {
   lci::free_comp(&comp);
 }
 
-mr_t CommBackendLCI2::registerMemory(void *addr, size_t size) {
+mr_t CommBackendLCI::registerMemory(void *addr, size_t size) {
   auto mrs = new lci::mr_impl_t *[m_devices.size()];
   for (int i = 0; i < m_devices.size(); i++) {
     mrs[i] =
@@ -437,7 +437,7 @@ mr_t CommBackendLCI2::registerMemory(void *addr, size_t size) {
   return mrs;
 }
 
-size_t CommBackendLCI2::getRMR(mr_t mr, void *addr, size_t size) {
+size_t CommBackendLCI::getRMR(mr_t mr, void *addr, size_t size) {
   lci::mr_t *mrs = (lci::mr_t *)mr;
   if (addr && size >= sizeof(lci::rmr_t) * m_devices.size()) {
     for (int i = 0; i < m_devices.size(); i++) {
@@ -449,7 +449,7 @@ size_t CommBackendLCI2::getRMR(mr_t mr, void *addr, size_t size) {
   return sizeof(lci::rmr_t) * m_devices.size();
 }
 
-void CommBackendLCI2::deregisterMemory(mr_t mr_) {
+void CommBackendLCI::deregisterMemory(mr_t mr_) {
   {
     std::lock_guard<std::mutex> lock(m_liveMrsMutex);
     m_liveMrs.erase(mr_);
@@ -465,7 +465,7 @@ void CommBackendLCI2::deregisterMemory(mr_t mr_) {
 // Release any memory regions the application never handed back, e.g. buffers
 // registered with CK_BUFFER_NODEREG. Must run while the devices are still alive
 // (deregisterMemory walks m_devices), so exit() calls this before free_device.
-void CommBackendLCI2::deregisterAllMemory() {
+void CommBackendLCI::deregisterAllMemory() {
   std::unordered_set<void *> leftovers;
   {
     std::lock_guard<std::mutex> lock(m_liveMrsMutex);
@@ -482,7 +482,7 @@ void CommBackendLCI2::deregisterAllMemory() {
   }
 }
 
-lci::device_t CommBackendLCI2::getThreadLocalDevice() {
+lci::device_t CommBackendLCI::getThreadLocalDevice() {
   if (detail::g_thread_context.tls_device.is_empty()) {
     CmiAssert(m_devices.size() > 0);
     return m_devices[0];
@@ -491,7 +491,7 @@ lci::device_t CommBackendLCI2::getThreadLocalDevice() {
   }
 }
 
-lci::mr_t CommBackendLCI2::getThreadLocalMR(mr_t mr) {
+lci::mr_t CommBackendLCI::getThreadLocalMR(mr_t mr) {
   if (mr == MR_NULL) {
     return lci::mr_t();
   }
@@ -499,12 +499,12 @@ lci::mr_t CommBackendLCI2::getThreadLocalMR(mr_t mr) {
       static_cast<lci::mr_impl_t **>(mr)[detail::g_thread_context.device_idx]);
 }
 
-lci::rmr_t CommBackendLCI2::getThreadLocalRMR(void *rmr) {
+lci::rmr_t CommBackendLCI::getThreadLocalRMR(void *rmr) {
   if (rmr == nullptr) {
     return lci::rmr_t();
   }
   return static_cast<lci::rmr_t *>(rmr)[detail::g_thread_context.device_idx];
 }
 
-} // namespace lci2_impl
+} // namespace lci_impl
 } // namespace comm_backend

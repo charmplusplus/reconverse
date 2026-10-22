@@ -48,7 +48,7 @@ if(RECONVERSE_TRY_ENABLE_COMM_LCI2)
     # Compile in LCI's registration cache (LCI cannot build it on Apple).
     # At run time it is on for ibv, where repeated sends of long-lived buffers
     # hit it instead of re-registering, and off on OFI, where libfabric caches
-    # registrations itself (see CommBackendLCI2::init).
+    # registrations itself (see CommBackendLCI::init).
     # LCI_ATTR_USE_REG_CACHE overrides either default.
     if(NOT APPLE)
       set(LCI_USE_REG_CACHE ON CACHE BOOL
@@ -85,12 +85,12 @@ if(RECONVERSE_TRY_ENABLE_COMM_LCI2)
     # LCI is a private dependency of reconverse
     # but we need to link it publicly in case reconverse is built as a static library
     target_link_libraries(reconverse PUBLIC LCI::lci)
-    target_sources(reconverse PRIVATE comm_backend_lci2.cpp)
+    target_sources(reconverse PRIVATE comm_backend_lci.cpp)
     set(RECONVERSE_ENABLE_COMM_LCI2 ON PARENT_SCOPE)
   else()
     message(
       WARNING
-        "LCI2 is not found. The LCI2 backend is not enabled. Try setting RECONVERSE_AUTOFETCH_LCI2=ON to fetch LCIv2 automatically."
+        "LCIv2 is not found. The LCI backend is not enabled. Try setting RECONVERSE_AUTOFETCH_LCI2=ON to fetch LCIv2 automatically."
     )
   endif()
 endif()
