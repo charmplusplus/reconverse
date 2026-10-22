@@ -314,6 +314,22 @@ take, and both walk every producer that has pushed to it (#271), so at
 64 PEs per process a backlog of N messages costs on the order of N µs per
 iteration. That is expected in this mode; it goes away when #271 is fixed.
 
+## Aborts and stack traces
+
+`CmiAbort` prints its reason and the calling thread's stack (demangled) to
+stderr, asks the process manager to end the other ranks, and aborts. The
+process-manager step goes through LCI's `LCT_pmi_abort`: under `srun` with
+`--mpi=pmi2` or `--mpi=pmix`, and under `mpirun`, the whole job ends at once;
+`lcrun` ends the other processes itself when one exits with a failure; with
+the file PMI backend (no launcher) nothing else is needed. Fatal signals
+(SIGSEGV, SIGBUS, SIGILL, SIGFPE, SIGABRT) print the PE, the signal and a
+stack trace, then re-raise with the default disposition, so exit status and
+core dumps are unchanged. `+truecrash` leaves those handlers uninstalled for
+a debugger or a core dump that should see the fault first-hand. On Linux the
+executable's own functions appear in the traces only when it is linked with
+`-rdynamic` (reconverse's CMake interface adds it to its consumers; Charm++'s
+charmc does for reconverse targets).
+
 ## CCS (Converse Client-Server)
 
 CCS lets a program outside the parallel job send requests to handlers
