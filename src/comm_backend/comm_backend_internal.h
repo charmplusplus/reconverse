@@ -38,6 +38,9 @@ public:
   }
   // return true if there is more work to do
   virtual bool progress(void) = 0;
+  // True if this thread must poll progress whatever +backend_poll_thread says,
+  // because no other thread would progress something it depends on
+  virtual bool threadMustPoll() { return false; }
   virtual void barrier(void) = 0;
   virtual mr_t registerMemory(void *addr, size_t size) { return MR_NULL; }
   virtual size_t getRMR(mr_t mr, void *addr, size_t size) { return 0; }

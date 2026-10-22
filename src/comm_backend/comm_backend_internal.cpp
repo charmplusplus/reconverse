@@ -156,6 +156,13 @@ bool progress(void) {
   return gCommBackend->progress();
 }
 
+bool threadMustPoll(void) {
+  if (gCommBackend == nullptr) {
+    return false;
+  }
+  return gCommBackend->threadMustPoll();
+}
+
 void barrier(void) {
   if (gCommBackend == nullptr) {
     return;

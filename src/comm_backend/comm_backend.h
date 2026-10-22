@@ -77,6 +77,12 @@ void issueRput(int rank, const void *local_buf, size_t size, mr_t local_mr,
  */
 bool progress(void);
 /**
+ * @brief Whether the calling thread must poll progress() regardless of
+ * +backend_poll_thread (e.g. it is the only thread of its device that would).
+ * Call after initThread.
+ */
+bool threadMustPoll(void);
+/**
  * @brief Block until all nodes have reached this point. Thread-safe.
  */
 void barrier(void);
