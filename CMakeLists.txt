@@ -202,6 +202,20 @@ endif()
 
 add_library(reconverse $<TARGET_OBJECTS:boost-context>)
 set_target_properties(reconverse PROPERTIES CXX_STANDARD 17)
+
+# Thread-locals (CmiGetState, the scheduler's and the LCI backend's per-thread
+# state) are read on every scheduler pass. In a shared library the default TLS
+# model reaches them through __tls_get_addr, 2-3% of a PE's time in a
+# fine-grained Charm++ code on Stampede3. libreconverse is always loaded at
+# program start (linked, never dlopen'ed), so the initial-exec model -- the one
+# charmc already uses for application code -- is safe and makes each access a
+# fixed offset from the thread pointer.
+option(RECONVERSE_TLS_INITIAL_EXEC
+       "Compile libreconverse with -ftls-model=initial-exec (ELF only)" ON)
+if(RECONVERSE_TLS_INITIAL_EXEC AND NOT APPLE AND
+   CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+  target_compile_options(reconverse PRIVATE -ftls-model=initial-exec)
+endif()
 add_subdirectory(include)
 add_subdirectory(src)
 target_link_libraries(reconverse PUBLIC Threads::Threads)
