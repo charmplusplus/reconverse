@@ -53,7 +53,7 @@ static_assert(sizeof(CsdNodeQueueLen_t) == CMI_CACHE_LINE_SIZE &&
                   alignof(CsdNodeQueueLen_t) == CMI_CACHE_LINE_SIZE,
               "CsdNodeQueueLen must own exactly one cache line");
 
-// Data padded to keep PEs from sharing a cache line (CsdNodeQueueLen, the LCI2
+// Data padded to keep PEs from sharing a cache line (CsdNodeQueueLen, the LCI
 // per-device locks) is padded to the compile-time CMI_CACHE_LINE_SIZE. Warn if
 // this machine's line is larger, so the padding no longer separates them. The
 // OS may not report a size (sysconf returns 0 or -1 on some systems); then
