@@ -1,0 +1,5 @@
+enable_language(C)
+add_reconverse_executable(c_program c_program.c)
+set_target_properties(c_program PROPERTIES C_STANDARD 11)
+add_test(NAME c_program COMMAND c_program +pe 2)
+add_test(NAME c_program-multinode COMMAND ${RECONVERSE_TEST_LAUNCHER} -n 2 $<TARGET_FILE:c_program> +pe 4)
