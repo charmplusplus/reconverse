@@ -24,6 +24,13 @@
 #  define CLINKAGE /*empty*/
 #endif
 
+/* Everything a C program can call is declared with C linkage, so that a C
+   program links against the library. C++-only declarations (templates,
+   overloads, classes) sit between the blocks. */
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 typedef int8_t CMK_TYPEDEF_INT1;
 typedef int16_t CMK_TYPEDEF_INT2;
 typedef int32_t CMK_TYPEDEF_INT4;
@@ -814,13 +821,7 @@ void CmiResetGlobalNodeReduceSeqID();
 // Exit functions
 
 void CmiExit(int status);
-#ifdef __cplusplus
-extern "C" {
-#endif
 void CmiAbort(const char *format, ...);
-#ifdef __cplusplus
-}
-#endif
 
 // Utility functions
 CLINKAGE int CmiPrintf(const char *format, ...);
@@ -1420,19 +1421,11 @@ void CmiForwardMsgToPeers(int size, char *msg);
 
 void LBTopoInit();
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 size_t CmiFwrite(const void *ptr, size_t size, size_t nmemb, FILE *f);
 CmiInt8 CmiPwrite(int fd, const char *buf, size_t bytes, size_t offset);
 int CmiOpen(const char *pathname, int flags, int mode);
 FILE *CmiFopen(const char *path, const char *mode);
 int CmiFclose(FILE *fp);
-
-#ifdef __cplusplus
-}
-#endif
 
 void registerTraceInit(void (*fn)(char **argv));
 
@@ -1460,6 +1453,11 @@ int CmiDeliverMsgs(int maxmsgs);
 #endif
 
 #ifdef __cplusplus
+}
+#endif
+
+/* C++-only: templates cannot have C linkage */
+#ifdef __cplusplus
 template <typename T> struct CmiIsAtomic : std::false_type {};
 template <typename T> struct CmiIsAtomic<std::atomic<T>> : std::true_type {};
 
@@ -1478,6 +1476,10 @@ CmiAtomicFetchAndIncImpl(T& input) {
 #define CmiMemoryAtomicFetchAndInc(input, output) ((output) = CmiAtomicFetchAndIncImpl(input))
 #else
 #define CmiMemoryAtomicFetchAndInc(input, output) ((output) = __sync_fetch_and_add(&(input), 1))
+#endif
+
+#ifdef __cplusplus
+extern "C" {
 #endif
 
 #define CmiEnableUrgentSend(yn) /* intentionally left empty */
@@ -1604,6 +1606,11 @@ typedef struct CmiIpcManager CmiIpcManager;
 #endif
 
 #ifdef __cplusplus
+}
+#endif
+
+/* C++-only shared-memory (IPC) API: classes, std::pair, overloads */
+#ifdef __cplusplus
 namespace cmi {
 namespace ipc {
 // recommended cutoff for block sizes
@@ -1715,6 +1722,10 @@ bool CmiIpcTrySendAndFree(int destNode, int destRank, int messageSize,
 bool CmiIpcReaches(int destNode);
 #endif /* __cplusplus */
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 CsvExtern(CmiIpcManager*, coreIpcManager_);
 
 /* Whether this run moves messages between processes that share a host
@@ -1751,16 +1762,19 @@ CLINKAGE long CmiIpcMessagesReceived(void);
 CLINKAGE void CmiIpcBeginNetworkOnly(void);
 CLINKAGE void CmiIpcEndNetworkOnly(void);
 
+#ifdef __cplusplus
+}
+#endif
+
 /* Persistent communication */
 #include "persistent.h"
 
 /* Task Queue Macros */
 #include "taskqueue.h"
-CpvExtern(TaskQueue, CsdTaskQueue);
-
 #ifdef __cplusplus
 extern "C" {
 #endif
+CpvExtern(TaskQueue, CsdTaskQueue);
 
 /* Steal a task from another PE on the same node */
 void StealTask(void);

@@ -54,6 +54,7 @@ add_subdirectory(fanout_refcount)
 add_subdirectory(exit_inflight)
 add_subdirectory(nodeq_sharing)
 add_subdirectory(randomized_msgq)
+add_subdirectory(c_program)
 
 # Add a test that configures, builds, and runs standalone_project
 add_test(NAME standalone_project_build_and_test
