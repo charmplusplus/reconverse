@@ -1,5 +1,5 @@
-#ifndef RECONVERSE_COMM_BACKEND_LCI2_H
-#define RECONVERSE_COMM_BACKEND_LCI2_H
+#ifndef RECONVERSE_COMM_BACKEND_LCI_H
+#define RECONVERSE_COMM_BACKEND_LCI_H
 
 #include "lci.hpp"
 #include <atomic>
@@ -9,10 +9,10 @@
 #include <unordered_set>
 
 namespace comm_backend {
-namespace lci2_impl {
+namespace lci_impl {
 // A breach of the comm_backend interface with direct access to CmiAlloc/CmiFree
 // There are another way to do this, but this is the simplest way to do it
-struct AllocatorLCI2 : lci::allocator_base_t {
+struct AllocatorLCI : lci::allocator_base_t {
   void *allocate(size_t size) override { return CmiAlloc(size); }
 
   void deallocate(void *ptr) override { CmiFree(ptr); }
@@ -34,7 +34,7 @@ static MempoolOptions mempool_options = {
   MEMPOOL_RB_DEFAULT
 };
 
-class CommBackendLCI2 : public CommBackendBase {
+class CommBackendLCI : public CommBackendBase {
 public:
   void init(char **argv) override;
   void init_mempool() override;
@@ -80,7 +80,7 @@ private:
   lci::comp_t m_local_comp;
   lci::comp_t m_remote_comp;
   lci::rcomp_t m_rcomp;
-  AllocatorLCI2 m_allocator;
+  AllocatorLCI m_allocator;
 
   // Memory regions handed out by registerMemory() that have not been given back
   // to deregisterMemory(). A buffer registered with CK_BUFFER_NODEREG is never
@@ -95,7 +95,7 @@ private:
   lci::rmr_t getThreadLocalRMR(void *rmr);
 };
 
-} // namespace lci2_impl
+} // namespace lci_impl
 } // namespace comm_backend
 
-#endif // RECONVERSE_COMM_BACKEND_LCI2_H
+#endif // RECONVERSE_COMM_BACKEND_LCI_H

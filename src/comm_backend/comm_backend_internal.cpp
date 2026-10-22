@@ -8,7 +8,7 @@ int gMyNodeID = 0;
 
 void init(char **argv) {
   const char *backend_str = nullptr;
-// default to LCI2 if both are enabled
+// default to LCI if both are enabled
 #ifdef RECONVERSE_ENABLE_COMM_LCI2
   backend_str = "lci";
 #elif defined(RECONVERSE_ENABLE_COMM_LCW)
@@ -24,9 +24,9 @@ void init(char **argv) {
   }
   if (strcmp(backend_str, "lci") == 0) {
 #ifdef RECONVERSE_ENABLE_COMM_LCI2
-    gCommBackend = new lci2_impl::CommBackendLCI2();
+    gCommBackend = new lci_impl::CommBackendLCI();
 #else
-    CmiAbort("LCI2 backend is not enabled in this build.\n");
+    CmiAbort("LCI backend is not enabled in this build.\n");
 #endif
   } else if (strcmp(backend_str, "lcw") == 0) {
 #ifdef RECONVERSE_ENABLE_COMM_LCW

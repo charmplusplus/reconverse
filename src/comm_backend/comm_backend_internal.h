@@ -51,7 +51,7 @@ public:
 } // namespace comm_backend
 
 #ifdef RECONVERSE_ENABLE_COMM_LCI2
-#include "comm_backend/lci2/comm_backend_lci2.h"
+#include "comm_backend/lci/comm_backend_lci.h"
 #endif
 #ifdef RECONVERSE_ENABLE_COMM_LCW
 #include "comm_backend/lcw/comm_backend_lcw.h"
