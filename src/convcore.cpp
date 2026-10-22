@@ -1345,11 +1345,22 @@ void CmiAbortHelper(const char *source, const char *message,
 }
 
 void CmiAbort(const char *format, ...) {
-  char newmsg[256];
-  va_list args;
+  char stackmsg[1024];
+  char *newmsg = stackmsg;
+  va_list args, args2;
   va_start(args, format);
-  vsnprintf(newmsg, sizeof(newmsg), format, args);
+  va_copy(args2, args);
+  int len = vsnprintf(NULL, 0, format, args);
   va_end(args);
+  if (len >= (int)sizeof(stackmsg)) {
+    // Not freed: abort() below ends the process.
+    char *heapmsg = (char *)malloc((size_t)len + 1);
+    if (heapmsg != NULL)
+      newmsg = heapmsg;
+  }
+  vsnprintf(newmsg, newmsg == stackmsg ? sizeof(stackmsg) : (size_t)len + 1,
+            format, args2);
+  va_end(args2);
   CmiAbortHelper("Called CmiAbort", newmsg, NULL, 1, 0);
   CmiPrintStackTrace(1); // skip CmiAbort's own frame
 
