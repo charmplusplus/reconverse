@@ -14,6 +14,8 @@ struct AmSendStats {
   double post_s = 0.0, progress_s = 0.0;
   long retry_lock = 0, retry_nopacket = 0, retry_nomem = 0, retry_backlog = 0, retry_other = 0;
   double max_post_s = 0.0;   // the longest single post (its retries included)
+  long prog_n = 0; double prog_s = 0.0, prog_max_s = 0.0;   // progress(): count, total, longest
+  double put_loop_max_s = 0.0, get_loop_max_s = 0.0;        // the longest put / get post loop (retries included)
 };
 thread_local AmSendStats g_am_send_stats;
 static inline double amNow() {
@@ -280,6 +282,9 @@ void CommBackendLCI2::exitThread() {
             g_am_send_stats.inline_done, g_am_send_stats.retry_lock, g_am_send_stats.retry_nopacket,
             g_am_send_stats.retry_nomem, g_am_send_stats.retry_backlog, g_am_send_stats.retry_other,
             g_am_send_stats.max_post_s * 1e6);
+    fprintf(stderr, "[lci-loop] rank %d thread %d: progress n=%ld total=%.1f ms max=%.2f ms | put loop max %.2f ms | get loop max %.2f ms\n",
+            (int)lci::get_rank_me(), (int)CmiMyRank(), g_am_send_stats.prog_n, g_am_send_stats.prog_s * 1e3, g_am_send_stats.prog_max_s * 1e3,
+            g_am_send_stats.put_loop_max_s * 1e3, g_am_send_stats.get_loop_max_s * 1e3);
   // Destroy this PE's mempool while the LCI devices and runtime are still alive,
   // so its registered memory blocks are deregistered (deregisterMemory uses
   // m_devices, and the devices/runtime are only torn down later in exit() on
@@ -358,6 +363,7 @@ void CommBackendLCI2::issueRget(int rank, const void *local_buf, size_t size,
   // Same reentrancy guard as issueAm: don't spin when called from a completion
   // callback, push to backlog instead.
   bool allow_retry = !detail::g_in_progress_callback;
+  const double tloop0 = amNow();
   do {
     status = lci::post_get_x(rank, const_cast<void *>(local_buf), size,
                              m_local_comp, remote_disp, getThreadLocalRMR(rmr))
@@ -367,6 +373,7 @@ void CommBackendLCI2::issueRget(int rank, const void *local_buf, size_t size,
                  .allow_retry(allow_retry)();
     if (allow_retry) progress();
   } while (status.is_retry());
+  { const double dl = amNow() - tloop0; if (dl > g_am_send_stats.get_loop_max_s) g_am_send_stats.get_loop_max_s = dl; }
   if (status.is_done()) {
     localComp({local_buf, size, user_context});
     delete args;
@@ -385,6 +392,7 @@ void CommBackendLCI2::issueRput(int rank, const void *local_buf, size_t size,
   // so a hardcoded displacement of 0 writes ahead of the intended buffer by
   // however far into its region the buffer sits.
   uintptr_t remote_disp = (uintptr_t)remote_buf - getThreadLocalRMR(rmr).base;
+  const double tloop0 = amNow();
   do {
     status = lci::post_put_x(rank, const_cast<void *>(local_buf), size,
                              m_local_comp, remote_disp, getThreadLocalRMR(rmr))
@@ -393,6 +401,7 @@ void CommBackendLCI2::issueRput(int rank, const void *local_buf, size_t size,
                  .user_context(args)();
     progress();
   } while (status.is_retry());
+  { const double dl = amNow() - tloop0; if (dl > g_am_send_stats.put_loop_max_s) g_am_send_stats.put_loop_max_s = dl; }
   if (status.is_done()) {
     localComp({local_buf, size, user_context});
     delete args;
@@ -405,6 +414,7 @@ void CommBackendLCI2::issueRputSignal(int rank, const void *local_buf, size_t si
   auto args = new localCallbackArgs{localComp, user_context};
   lci::status_t status;
   uintptr_t remote_disp = (uintptr_t)remote_buf - getThreadLocalRMR(rmr).base;
+  const double tloop0 = amNow();
   do {
     status = lci::post_put_x(rank, const_cast<void *>(local_buf), size,
                              m_local_comp, remote_disp, getThreadLocalRMR(rmr))
@@ -415,6 +425,7 @@ void CommBackendLCI2::issueRputSignal(int rank, const void *local_buf, size_t si
                  .user_context(args)();
     progress();
   } while (status.is_retry());
+  { const double dl = amNow() - tloop0; if (dl > g_am_send_stats.put_loop_max_s) g_am_send_stats.put_loop_max_s = dl; }
   if (status.is_done()) {
     localComp({local_buf, size, user_context});
     delete args;
@@ -422,6 +433,7 @@ void CommBackendLCI2::issueRputSignal(int rank, const void *local_buf, size_t si
 }
 
 bool CommBackendLCI2::progress(void) {
+  struct ProgTimer { double t0; ~ProgTimer() { const double d = amNow() - t0; AmSendStats& st = g_am_send_stats; st.prog_n++; st.prog_s += d; if (d > st.prog_max_s) st.prog_max_s = d; } } prog_timer{amNow()};
   // OFI fi_cq_read is not thread-safe. Use a per-device trylock so at most
   // one thread polls each device CQ at a time. Callers that lose the race
   // simply return without making progress — the winning thread covers them.
