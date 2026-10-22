@@ -9,7 +9,7 @@
 // while rank 0 keeps calling progress() until all ranks are done; a
 // completion for a buffer whose pool is already gone then calls CmiFree on
 // freed (possibly unmapped) memory. Seen as a ~1-in-3 SIGSEGV at exit in
-// CmiFree <- lci::progress_send <- CommBackendLCI2::progress <-
+// CmiFree <- lci::progress_send <- CommBackendLCI::progress <-
 // ConverseExit after a broadcast-heavy Charm++ run on Delta.
 //
 // The receiving side only frees what arrives. Nothing here checks

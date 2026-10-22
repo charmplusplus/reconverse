@@ -1,5 +1,5 @@
 target_include_directories(reconverse PRIVATE .)
-add_subdirectory(lci2)
+add_subdirectory(lci)
 set(RECONVERSE_ENABLE_COMM_LCI2 ${RECONVERSE_ENABLE_COMM_LCI2} PARENT_SCOPE)
 add_subdirectory(lcw)
 set(RECONVERSE_ENABLE_COMM_LCW ${RECONVERSE_ENABLE_COMM_LCW} PARENT_SCOPE)

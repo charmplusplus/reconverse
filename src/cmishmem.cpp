@@ -95,7 +95,7 @@ void* CmiIpcBlockToMsg(CmiIpcBlock* block, bool init) {
     // Pool memory is not registered with the backend, and nothing else ever
     // writes this field. A handler that forwards a message it received from
     // the pool to a PE on another host passes MRFIELD straight to issueAm,
-    // and LCI2 dereferences any non-null value, so say there is no region
+    // and the LCI backend dereferences any non-null value, so say there is no region
     // here rather than relying on the segment's pages starting out zeroed.
     MRFIELD(msg) = comm_backend::MR_NULL;
     // block->size covers the chunk header too, so the space a message can
