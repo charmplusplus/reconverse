@@ -40,7 +40,7 @@ option(RECONVERSE_TRY_ENABLE_COMM_LCI2 "whether to enable the LCIv2 backend" ON)
 option(RECONVERSE_AUTOFETCH_LCI2
         "whether to autofetch LCIv2 if LCI2 cannot be found" OFF)
 set(RECONVERSE_AUTOFETCH_LCI2_TAG
-    "d366a4059ee06f1d0a0b3bf5c1ad1fc4b24f2c9b"
+    "d366a4053c204182e5129eefd4c9d71d63a06d68"
     CACHE STRING "The tag to fetch for LCIv2") # uiuc-hpc/lci master, 2026-10-20: LCT_pmi_abort (#209), downstream CI on OFI tcp (#210)
 
 option(RECONVERSE_TRY_ENABLE_COMM_LCW "whether to enable the LCW backend" ON)
