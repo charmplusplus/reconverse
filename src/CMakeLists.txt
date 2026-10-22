@@ -4,7 +4,7 @@ target_sources(reconverse PRIVATE conv-conds.cpp convcore.cpp random.cpp
                 scheduler_old.cpp cpuaffinity.cpp mempool.C collectives.cpp
                 comm_backend/comm_backend_internal.cpp threads.cpp cldb.rand.cpp cldb.cpp cmirdmautils.cpp 
                 conv-rdma.cpp conv-topology.cpp msgmgr.cpp queueing.cpp cmishmem.cpp
-                conv-taskq.cpp persist-comm.cpp
+                conv-taskq.cpp persist-comm.cpp backtrace.cpp futures.cpp
                 ccs/conv-ccs.cpp ccs/middle-ccs.cpp ccs/ccs-server.cpp
                 ccs/ccs-auth.cpp ccs/sockRoutines.cpp)
 

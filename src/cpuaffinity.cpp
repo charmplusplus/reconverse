@@ -484,9 +484,9 @@ static std::vector<hwloc_obj_t> getPUListForAutoAffinity(hwloc_obj_t container, 
 // process's rank among them (ordered by node index). Every physical node is treated
 // as running only worker PEs, since reconverse has no separate communication thread.
 //
-// This relies on CmiPhysicalNodeID(), which falls back to treating each process as
-// its own physical node unless the program has already called CmiInitCPUTopology()
-// to detect physical nodes shared by multiple processes.
+// This relies on CmiPhysicalNodeID(), which treats each process as its own
+// physical node until CmiInitCPUTopology() has gathered which processes share
+// a host; CmiInitCPUAffinity runs that gather before auto affinity.
 static void getMyRankAndCountOnPhysicalNode(int *node_rank, int *nodes_on_host)
 {
   const int mynode = CmiMyNode();
@@ -636,6 +636,8 @@ void CmiInitCPUAffinity(char **argv) {
        CmiPrintf("Charm++> cpuaffinity PE-core map (%s): %s\n",
            pemap_logical_flag ? "logical indices" : "OS indices", pemap);
     }
+    // If no pemap provided (+setcpuaffinity) make sure topology is ready
+    if (pemap == NULL) CmiInitCPUTopology(argv);
     // if a pemap is provided
     if (pemap != NULL){
       int mycore = search_pemap(pemap, CmiMyPeGlobal());
