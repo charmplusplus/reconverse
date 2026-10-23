@@ -101,6 +101,18 @@ extern CmiNodeLock CmiMemLock_lock;
 # define CMI_FORCE_INLINE inline
 #endif
 
+#if defined __cplusplus
+#define CMK_NORETURN [[noreturn]]
+#else
+#if defined _Noreturn
+#define CMK_NORETURN _Noreturn
+#elif defined _MSC_VER && 1200 <= _MSC_VER
+#define CMK_NORETURN __declspec(noreturn)
+#else
+#define CMK_NORETURN __attribute__((__noreturn__))
+#endif
+#endif
+
 #ifdef __cplusplus
 /* In C++, use new so t's constructor gets called */
 # define CpvInit_Alloc(t,n) new t[n]()
@@ -877,7 +889,10 @@ void CmiResetGlobalNodeReduceSeqID();
 // Exit functions
 
 void CmiExit(int status);
-void CmiAbort(const char *format, ...);
+/* Never returns, as in classic Converse: callers (Charm++'s CkAbort, which is
+   this function) end non-void functions with it, which MSVC rejects unless it
+   knows. */
+CMK_NORETURN void CmiAbort(const char *format, ...);
 
 // Utility functions
 CLINKAGE int CmiPrintf(const char *format, ...);
@@ -1336,18 +1351,6 @@ enum ncpyFreeNcpyOpInfoMode {
 #endif
 
 #define CMI_NORETURN_FUNCTION_END CMI_UNREACHABLE_SECTION(while (1));
-
-#if defined __cplusplus
-#define CMK_NORETURN [[noreturn]]
-#else
-#if defined _Noreturn
-#define CMK_NORETURN _Noreturn
-#elif defined _MSC_VER && 1200 <= _MSC_VER
-#define CMK_NORETURN __declspec(noreturn)
-#else
-#define CMK_NORETURN __attribute__((__noreturn__))
-#endif
-#endif
 
 // must be placed before return type and at both declaration and definition
 #if defined __GNUC__ && __GNUC__ >= 4
