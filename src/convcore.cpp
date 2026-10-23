@@ -119,6 +119,9 @@ int Cmi_usched;
 int Cmi_initret;
 
 CmiNodeLock CmiMemLock_lock;
+// C linkage, like interopExitFlag above: CkLoop.h declares it CpvCExtern. GCC
+// does not decorate variable names, so only MSVC notices a mismatch.
+CpvCExtern(int, isHelperOn);
 CpvDeclare(int, isHelperOn);
 //partition
 PartitionInfo _partitionInfo;
