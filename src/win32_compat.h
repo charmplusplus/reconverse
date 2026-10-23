@@ -16,6 +16,7 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#include <psapi.h> // GetProcessMemoryInfo
 
 #include <direct.h>  // _mkdir
 #include <process.h> // _beginthreadex

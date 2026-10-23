@@ -1307,6 +1307,18 @@ int CmiGetPageSize(void) {
 #endif
 }
 
+#ifdef _WIN32
+// Committed private bytes (the pagefile-backed total, resident or not), the
+// figure classic Converse reported on Windows. kernel32 exports this as
+// K32GetProcessMemoryInfo, so no psapi.lib is needed.
+CmiUInt8 CmiMemoryUsage(void) {
+  PROCESS_MEMORY_COUNTERS pmc;
+  if (GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof(pmc)))
+    return (CmiUInt8)pmc.PagefileUsage;
+  return 0;
+}
+#endif
+
 void CmiInitMsgHeader(void *msg, int size) {
   if (size < (int)CmiMsgHeaderSizeBytes) return;
   CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);

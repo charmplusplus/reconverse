@@ -668,7 +668,13 @@ int CmiGetPageSize(void);
 void CmiFree(void *msg);
 #define CmiRdmaAlloc CmiAlloc
 #define CmiRdmaFree CmiFree
+#ifdef _WIN32
+// Bytes of memory the process has committed, as classic Converse reported on
+// Windows. NAMD's memory reports rely on it there, having no /proc to read.
+CmiUInt8 CmiMemoryUsage(void);
+#else
 #define CmiMemoryUsage() 0
+#endif
 void CmiMemoryMarkBlock(void *blk);
 extern void
     *memory_stack_top; // TODO: replace this with actual memory implementation
