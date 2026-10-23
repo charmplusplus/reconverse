@@ -66,7 +66,11 @@ static void finishSetup_(CmiIpcManager* meta) {
   meta->ready.store(true, std::memory_order_release);
 }
 
+#ifdef _WIN32
+#include "cmishm-win32.cpp"
+#else
 #include "cmishm.cpp"
+#endif
 #if CMK_HAS_XPMEM
 #include "cmixpmem.cpp"
 #endif
