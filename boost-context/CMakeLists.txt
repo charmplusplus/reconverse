@@ -7,7 +7,7 @@ elseif(CHARM_OS STREQUAL "win")
   set(ABI ms)
   set(FORMAT pe)
   # MSVC cannot assemble the GAS sources; use Boost's MASM ones (ml64).
-  # Charm++ sets CMK_COMPILER, a standalone build only has MSVC.
+  # Charm++ sets CMK_COMPILER; a standalone build only has MSVC.
   if(MSVC OR CMK_COMPILER STREQUAL "msvc")
     set(SYNTAX masm)
     set(EXTENSION asm)
@@ -29,7 +29,11 @@ else()
   set(ARCHITECTURE i386)
 endif()
 
-if(SYNTAX STREQUAL "masm")
+# A native Windows build (MSVC set) assembles them with ml64 directly. Charm++
+# on Windows instead drives MSVC from Cygwin through its unix2nt_cc wrapper,
+# which hands .asm sources to ml64 itself, so there they go through the
+# generic ASM language with that wrapper as the assembler.
+if(SYNTAX STREQUAL "masm" AND MSVC)
   enable_language(C ASM_MASM)
 else()
   enable_language(C ASM)

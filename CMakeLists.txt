@@ -157,7 +157,12 @@ endif()
 # Add Library
 # ##############################################################################
 
-find_package(Threads REQUIRED)
+# Windows threads are part of the system, so there is no thread library to
+# find; FindThreads, run from Cygwin for a Charm++ build, looks for pthreads
+# and fails.
+if(NOT CHARM_OS STREQUAL "win")
+  find_package(Threads REQUIRED)
+endif()
 
 if(RECONVERSE_ENABLE_XPMEM)
   find_package(PkgConfig QUIET)
@@ -208,7 +213,9 @@ set_target_properties(reconverse PROPERTIES CXX_STANDARD 17)
 target_compile_features(reconverse PUBLIC cxx_std_17)
 add_subdirectory(include)
 add_subdirectory(src)
-target_link_libraries(reconverse PUBLIC Threads::Threads)
+if(TARGET Threads::Threads)
+  target_link_libraries(reconverse PUBLIC Threads::Threads)
+endif()
 # Stack traces (backtrace.cpp) name functions inside the executable only if
 # its symbols are exported; on Linux that takes -rdynamic at the final link.
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
