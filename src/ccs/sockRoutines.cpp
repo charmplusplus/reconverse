@@ -8,7 +8,12 @@
 #include <signal.h>
 #include <time.h>
 #include <ctype.h>
+#if defined(_WIN32)
+#pragma comment(lib, "ws2_32.lib") /* whoever does the final link */
+#define poll WSAPoll /* same pollfd/POLLIN interface, from <winsock2.h> */
+#else
 #include <poll.h>
+#endif
 
 
 #ifndef CMK_NOT_USE_CONVERSE
@@ -19,10 +24,12 @@
 #  define CmiTmpFree(ptr) free(ptr)
 #endif
 
+#if !defined(_WIN32)
 #include <netinet/in.h> /* for sockaddr_in */
 #include <ifaddrs.h> /* for getifaddrs */
 #include <net/if.h> /* for IFF_RUNNING */
 #include <netdb.h> /* for getaddrinfo */
+#endif
 
 /*Just print out error message and exit*/
 static int default_skt_abort(SOCKET skt, int code, const char *msg)
@@ -194,7 +201,11 @@ skt_ip_t skt_my_ip(void)
 {
   char hostname[1000];
   skt_ip_t ip = _skt_invalid_ip;
-  
+
+#if defined(_WIN32)
+  skt_init(); /* Winsock's gethostname fails before WSAStartup */
+#endif
+
   // Prefer hostname resolution so multi-interface nodes still resolve to a
   // stable, routable node identity.
   if (gethostname(hostname, sizeof(hostname)) == 0) {
@@ -219,6 +230,7 @@ skt_ip_t skt_my_ip(void)
   }
 
   int ifcount = 0;
+#if !defined(_WIN32) /* Windows has no getifaddrs; the hostname route above is it */
     /* Code snippet from  Jens Alfke
  *     http://lists.apple.com/archives/macnetworkprog/2008/May/msg00013.html */
   struct ifaddrs *ifaces=0;
@@ -235,6 +247,7 @@ skt_ip_t skt_my_ip(void)
         }
         freeifaddrs(ifaces);
   }
+#endif
   /* fprintf(stderr, "My IP is %d.%d.%d.%d\n", ip.data[0],ip.data[1],ip.data[2],ip.data[3]); */
   if (ifcount >= 1) return ip;
 

@@ -7,6 +7,12 @@
 // New tasks are pushed into the tail of this queue and the tasks are popped at the tail of this queue by the same thread. Thieves(other threads trying to steal) steal a task at the head of this queue.
 // So, synchronization is needed only when there is only one task in the queue because thieves and victim can try to obtain the same task.
 typedef int taskq_idx;
+#if CMI_MSVC
+#define TaskQueueCAS(p, oldv, newv)                                            \
+  (_InterlockedCompareExchange((volatile long *)(p), (newv), (oldv)) == (oldv))
+#else
+#define TaskQueueCAS(p, oldv, newv) __sync_bool_compare_and_swap((p), (oldv), (newv))
+#endif
 typedef struct TaskQueueStruct {
   taskq_idx head; // This pointer indicates the first task in the queue
   taskq_idx tail; // The tail indicates the array element next to the last available task in the queue. So, if head == tail, the queue is empty
@@ -44,7 +50,7 @@ inline static void* TaskQueuePop(TaskQueue Q) { // Pop happens in the same worke
   }
   // From now on, we should handle the situation where there is only one task so thieves and victim can try to obtain this task simultaneously.
   Q->tail = h + 1;
-  if (!__sync_bool_compare_and_swap(&(Q->head), h, h+1)) // Check whether the last task has already stolen.
+  if (!TaskQueueCAS(&(Q->head), h, h+1)) // Check whether the last task has already stolen.
     return NULL;
   return Q->data[t % TaskQueueSize];
 }
@@ -56,7 +62,7 @@ inline static void* TaskQueueSteal(TaskQueue Q) {
     t = Q->tail;
     if (h >= t) // The queue is empty or the last element has been stolen by other thieves or popped by the victim.
       return NULL;
-    if (!__sync_bool_compare_and_swap(&(Q->head), h, h+1)) // Check whether the task this thief is trying to steal is still in the queue and not stolen by the other thieves.
+    if (!TaskQueueCAS(&(Q->head), h, h+1)) // Check whether the task this thief is trying to steal is still in the queue and not stolen by the other thieves.
       continue;
     return Q->data[h % TaskQueueSize];
   }

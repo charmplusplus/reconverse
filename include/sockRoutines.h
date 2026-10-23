@@ -103,7 +103,17 @@
 /*Preliminaries*/
 #if defined(_WIN32)
 /*For windows systems:*/
+/* This header is public; keep <windows.h> (pulled in by Winsock) from
+   defining min/max macros and the rest of its legacy surface in every
+   program that includes it. */
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <winsock2.h>
+#include <ws2tcpip.h> /* getaddrinfo, socklen_t */
 static void sleep(int secs) { Sleep(1000 * secs); }
 
 #else

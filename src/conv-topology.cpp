@@ -1,4 +1,5 @@
 #include "conv-topology.h"
+#ifndef _WIN32 /* on Windows, sockRoutines.h has brought in Winsock */
 #include <sys/socket.h>
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
@@ -8,6 +9,7 @@
 #include <ifaddrs.h> /* for getifaddrs */
 #include <net/if.h> /* for IFF_RUNNING */
 #include <netdb.h> /* for getaddrinfo */
+#endif
 #include <cstring>
 
 
@@ -38,7 +40,9 @@
 
 #  include <stdio.h>
 #  include <stdlib.h>
+#ifndef _WIN32
 #  include <unistd.h>
+#endif
 #include <atomic>
 #include <cerrno>
 

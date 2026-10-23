@@ -102,7 +102,11 @@ bool fillPool(std::vector<void *> &pool) {
 // reduction is below 2^-50 for any pool size that fits in memory.
 void *drawFromPool(RandomizedState &st) {
   std::vector<void *> &pool = st.pool;
+#if CMI_MSVC
+  size_t i = (size_t)__umulh(st.rng(), (unsigned long long)pool.size());
+#else
   size_t i = (size_t)(((unsigned __int128)st.rng() * pool.size()) >> 64);
+#endif
   void *msg = pool[i];
   pool[i] = pool.back();
   pool.pop_back();

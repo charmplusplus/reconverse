@@ -197,7 +197,12 @@ PersistentReceivesTable *newRecvSlot(int maxBytes) {
 
   for (int i = 0; i < PERSIST_BUFFERS_NUM; i++) {
     void *base = nullptr;
+#ifdef _WIN32
+    base = _aligned_malloc(total, ALIGN_BYTES);
+    if (base == nullptr)
+#else
     if (posix_memalign(&base, ALIGN_BYTES, total) != 0 || base == nullptr)
+#endif
       CmiAbort("Persistent communication: could not allocate a %zu byte "
                "receive buffer\n",
                total);
@@ -255,7 +260,11 @@ void freeRecvSlot(PersistentReceivesTable *slot) {
   for (int i = 0; i < PERSIST_BUFFERS_NUM; i++) {
     if (slot->mr[i] != comm_backend::MR_NULL)
       comm_backend::deregisterMemory(slot->mr[i]);
+#ifdef _WIN32
+    _aligned_free(slot->base[i]);
+#else
     free(slot->base[i]);
+#endif
   }
   delete slot;
 }

@@ -4,14 +4,28 @@
 #define CONVERSE_H
 
 // note: this file is included by both C and C++ files, so it should always have valid C code
+// CMI_MSVC: the Microsoft compiler proper, which lacks the GCC builtins,
+// __thread, __int128, and (in C) usable <stdatomic.h>. clang-cl defines
+// _MSC_VER too but speaks GCC, so it takes the GCC paths.
+#if defined(_MSC_VER) && !defined(__clang__)
+#define CMI_MSVC 1
+#else
+#define CMI_MSVC 0
+#endif
+
 #ifdef __cplusplus
 #include <atomic>
 #include <queue>
 #include <utility>
-#else
+#elif !CMI_MSVC
 #include <stdatomic.h>
 #endif
+#if CMI_MSVC
+#include <intrin.h>
+#endif
+#ifndef _WIN32
 #include <pthread.h>
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
@@ -49,10 +63,20 @@ typedef CMK_TYPEDEF_UINT1 CmiUInt1;
 typedef CMK_TYPEDEF_UINT2 CmiUInt2;
 typedef CMK_TYPEDEF_UINT4 CmiUInt4;
 typedef CMK_TYPEDEF_UINT8 CmiUInt8;
+// Only where the compiler has a 128-bit integer; Charm++ guards its uses of
+// these with CMK_HAS_INT16, which it detects the same way.
+#ifdef __SIZEOF_INT128__
 typedef __int128_t CmiInt16;
 typedef __uint128_t CmiUInt16;
+#endif
 
+#ifdef _WIN32
+// A Windows SRW lock. Named by the struct tag <windows.h> gives SRWLOCK, so
+// that this header does not have to include <windows.h> itself.
+typedef struct _RTL_SRWLOCK *CmiNodeLock;
+#else
 typedef pthread_mutex_t *CmiNodeLock;
+#endif
 typedef CmiNodeLock CmiImmediateLockType;
 extern int _immediateLock;
 extern int _immediateFlag;
@@ -86,20 +110,31 @@ extern CmiNodeLock CmiMemLock_lock;
 # define CpvInit_Alloc_scalar(t) (t *)calloc(1,sizeof(t))
 #endif
 
-#define CpvDeclare(t,v) __thread t* CMK_TAG(Cpv_,v) = NULL;   \
+// Storage class of the per-PE pointer behind each Cpv. Deliberately __thread
+// rather than C++ thread_local where the compiler has it: an extern
+// thread_local is reached through a TLS wrapper call, and CpvAccess is on
+// every hot path. MSVC's __declspec(thread) is the same kind of plain,
+// constant-initialized TLS slot.
+#if CMI_MSVC
+#define CMI_CPV_TLS __declspec(thread)
+#else
+#define CMI_CPV_TLS __thread
+#endif
+
+#define CpvDeclare(t,v) CMI_CPV_TLS t* CMK_TAG(Cpv_,v) = NULL;   \
                         int CMK_TAG(Cpv_inited_,v) = 0;  \
                         t ** CMK_TAG(Cpv_addr_,v)
-#define CpvExtern(t,v)  extern __thread t* CMK_TAG(Cpv_,v);  \
+#define CpvExtern(t,v)  extern CMI_CPV_TLS t* CMK_TAG(Cpv_,v);  \
                         extern int CMK_TAG(Cpv_inited_,v);  \
                         extern t ** CMK_TAG(Cpv_addr_,v)
 #ifdef __cplusplus
-#define CpvCExtern(t,v) extern "C" __thread t* CMK_TAG(Cpv_,v);  \
+#define CpvCExtern(t,v) extern "C" CMI_CPV_TLS t* CMK_TAG(Cpv_,v);  \
                         extern "C" int CMK_TAG(Cpv_inited_,v);  \
                         extern "C" t ** CMK_TAG(Cpv_addr_,v)
 #else
 #define CpvCExtern(t,v)    CpvExtern(t,v)
 #endif
-#define CpvStaticDeclare(t,v) static __thread t* CMK_TAG(Cpv_,v) = NULL;   \
+#define CpvStaticDeclare(t,v) static CMI_CPV_TLS t* CMK_TAG(Cpv_,v) = NULL;   \
                         static int CMK_TAG(Cpv_inited_,v) = 0;  \
                         static t ** CMK_TAG(Cpv_addr_,v)
 
@@ -166,6 +201,10 @@ extern CmiNodeLock CmiMemLock_lock;
 // 'struct' and the tag name, whereas __attribute__ can (GCC/Clang extension).
 #ifdef __cplusplus
 #define CMI_ALIGNAS(n) alignas(n)
+#elif CMI_MSVC
+// Also checked before _Alignas: MSVC in /std:c11 claims C11 but rejects
+// _Alignas in the 'struct X tag' position; __declspec(align) is accepted there.
+#define CMI_ALIGNAS(n) __declspec(align(n))
 #elif defined(__GNUC__) || defined(__clang__)
 // GCC/Clang __attribute__ supports the 'struct __attribute__((aligned(n))) tag' form
 #define CMI_ALIGNAS(n) __attribute__((aligned(n)))
@@ -192,6 +231,8 @@ extern CmiNodeLock CmiMemLock_lock;
 // C17 (GKlib, for instance), so the bare keyword cannot be used here.
 #ifdef __cplusplus
 #define CMI_THREAD_LOCAL thread_local
+#elif CMI_MSVC
+#define CMI_THREAD_LOCAL __declspec(thread)
 #elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 202311L
 // C23 has thread_local
 #define CMI_THREAD_LOCAL thread_local
@@ -316,8 +357,13 @@ struct CMI_ALIGNAS(ALIGN_BYTES) CmiChunkHeader {
 /* C functions for reference counting */
 static inline int CmiChunkHeader_getRef(struct CmiChunkHeader* hdr) { return hdr->ref; }
 static inline void CmiChunkHeader_setRef(struct CmiChunkHeader* hdr, int r) { hdr->ref = r; }
+#if CMI_MSVC
+static inline int CmiChunkHeader_incRef(struct CmiChunkHeader* hdr) { return _InterlockedExchangeAdd((volatile long *)&hdr->ref, 1); }
+static inline int CmiChunkHeader_decRef(struct CmiChunkHeader* hdr) { return _InterlockedExchangeAdd((volatile long *)&hdr->ref, -1); }
+#else
 static inline int CmiChunkHeader_incRef(struct CmiChunkHeader* hdr) { return __atomic_fetch_add(&hdr->ref, 1, __ATOMIC_RELEASE); }
 static inline int CmiChunkHeader_decRef(struct CmiChunkHeader* hdr) { return __atomic_fetch_sub(&hdr->ref, 1, __ATOMIC_ACQ_REL); }
+#endif
 #endif
 
 // threads library
@@ -777,6 +823,16 @@ CsvExtern(CsdNodeQueueLen_t, CsdNodeQueueLen);
   CsvAccess(CsdNodeQueueLen).v.fetch_add((n), std::memory_order_relaxed)
 #define CsdNodeQueueLenGet()                                                   \
   CsvAccess(CsdNodeQueueLen).v.load(std::memory_order_relaxed)
+#elif CMI_MSVC
+/* MSVC's C has no usable <stdatomic.h>; a long is int-sized on Windows, so
+   this is still the same object as the C++ spelling. */
+typedef struct __declspec(align(CMI_CACHE_LINE_SIZE)) {
+  volatile long v;
+} CsdNodeQueueLen_t;
+CsvExtern(CsdNodeQueueLen_t, CsdNodeQueueLen);
+#define CsdNodeQueueLenAdd(n)                                                  \
+  _InterlockedExchangeAdd(&CsvAccess(CsdNodeQueueLen).v, (n))
+#define CsdNodeQueueLenGet() ((int)CsvAccess(CsdNodeQueueLen).v)
 #else
 typedef struct {
   _Alignas(CMI_CACHE_LINE_SIZE) _Atomic int v;
@@ -1447,6 +1503,12 @@ int CmiDeliverMsgs(int maxmsgs);
 #ifdef __cplusplus
 #define CmiMemoryReadFence()                 std::atomic_thread_fence(std::memory_order_seq_cst)
 #define CmiMemoryWriteFence()                std::atomic_thread_fence(std::memory_order_seq_cst)
+#elif CMI_MSVC && (defined(_M_X64) || defined(_M_IX86))
+#define CmiMemoryReadFence()                 _mm_mfence()
+#define CmiMemoryWriteFence()                _mm_mfence()
+#elif CMI_MSVC
+#define CmiMemoryReadFence()                 __dmb(_ARM64_BARRIER_ISH)
+#define CmiMemoryWriteFence()                __dmb(_ARM64_BARRIER_ISH)
 #else
 #define CmiMemoryReadFence()                 __sync_synchronize()
 #define CmiMemoryWriteFence()                __sync_synchronize()
@@ -1470,10 +1532,21 @@ CmiAtomicFetchAndIncImpl(T& input) {
 template <typename T>
 typename std::enable_if<!CmiIsAtomic<T>::value, T>::type
 CmiAtomicFetchAndIncImpl(T& input) {
+#if CMI_MSVC
+    static_assert(sizeof(T) == 4 || sizeof(T) == 8,
+                  "CmiMemoryAtomicFetchAndInc needs a 4- or 8-byte integer");
+    if constexpr (sizeof(T) == 4)
+      return (T)_InterlockedExchangeAdd((volatile long *)&input, 1);
+    else
+      return (T)_InterlockedExchangeAdd64((volatile long long *)&input, 1);
+#else
     return __atomic_fetch_add(&input, T(1), __ATOMIC_SEQ_CST);
+#endif
 }
 
 #define CmiMemoryAtomicFetchAndInc(input, output) ((output) = CmiAtomicFetchAndIncImpl(input))
+#elif CMI_MSVC
+#define CmiMemoryAtomicFetchAndInc(input, output) ((output) = _InterlockedExchangeAdd((volatile long *)&(input), 1))
 #else
 #define CmiMemoryAtomicFetchAndInc(input, output) ((output) = __sync_fetch_and_add(&(input), 1))
 #endif
