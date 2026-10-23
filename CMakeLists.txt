@@ -214,6 +214,19 @@ target_link_libraries(reconverse PUBLIC Threads::Threads)
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   target_link_options(reconverse INTERFACE -rdynamic)
 endif()
+# Rank 0 runs on the main thread, whose stack size is fixed in the executable
+# header. Windows defaults it to 1 MB; give it the 8 MB the other PE threads
+# get (CmiStartThreads) and that Linux and macOS main threads have. It is
+# reserved address space, committed only as the stack grows.
+#
+# /DEBUG is the counterpart of -rdynamic above: it writes a PDB beside the
+# executable, which is what lets backtrace.cpp name the executable's own
+# functions. It does not change the generated code, but it does switch the
+# linker's dead-code and identical-code folding off unless they are asked for.
+if(MSVC)
+  target_link_options(reconverse INTERFACE /STACK:8388608 /DEBUG
+                      $<$<NOT:$<CONFIG:Debug>>:/OPT:REF /OPT:ICF>)
+endif()
 
 if(RECONVERSE_ENABLE_XPMEM)
   target_include_directories(reconverse PRIVATE ${XPMEM_INCLUDE_DIR})
