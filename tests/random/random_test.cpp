@@ -1,5 +1,4 @@
 #include "converse.h"
-#include <pthread.h>
 #include <stdio.h>
 
 struct Message {

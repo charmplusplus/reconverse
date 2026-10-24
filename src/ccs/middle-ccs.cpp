@@ -1,4 +1,3 @@
-#include <unistd.h>
 #include "converse.h"
 
 #include "ccs-server.h"

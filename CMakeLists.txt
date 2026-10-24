@@ -157,7 +157,12 @@ endif()
 # Add Library
 # ##############################################################################
 
-find_package(Threads REQUIRED)
+# Windows threads are part of the system, so there is no thread library to
+# find; FindThreads, run from Cygwin for a Charm++ build, looks for pthreads
+# and fails.
+if(NOT CHARM_OS STREQUAL "win")
+  find_package(Threads REQUIRED)
+endif()
 
 if(RECONVERSE_ENABLE_XPMEM)
   find_package(PkgConfig QUIET)
@@ -208,11 +213,26 @@ set_target_properties(reconverse PROPERTIES CXX_STANDARD 17)
 target_compile_features(reconverse PUBLIC cxx_std_17)
 add_subdirectory(include)
 add_subdirectory(src)
-target_link_libraries(reconverse PUBLIC Threads::Threads)
+if(TARGET Threads::Threads)
+  target_link_libraries(reconverse PUBLIC Threads::Threads)
+endif()
 # Stack traces (backtrace.cpp) name functions inside the executable only if
 # its symbols are exported; on Linux that takes -rdynamic at the final link.
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   target_link_options(reconverse INTERFACE -rdynamic)
+endif()
+# Rank 0 runs on the main thread, whose stack size is fixed in the executable
+# header. Windows defaults it to 1 MB; give it the 8 MB the other PE threads
+# get (CmiStartThreads) and that Linux and macOS main threads have. It is
+# reserved address space, committed only as the stack grows.
+#
+# /DEBUG is the counterpart of -rdynamic above: it writes a PDB beside the
+# executable, which is what lets backtrace.cpp name the executable's own
+# functions. It does not change the generated code, but it does switch the
+# linker's dead-code and identical-code folding off unless they are asked for.
+if(MSVC)
+  target_link_options(reconverse INTERFACE /STACK:8388608 /DEBUG
+                      $<$<NOT:$<CONFIG:Debug>>:/OPT:REF /OPT:ICF>)
 endif()
 
 if(RECONVERSE_ENABLE_XPMEM)

@@ -31,10 +31,7 @@ CpvDeclare(int, acks);
 // is free to drop the array or move it off the stack entirely.
 static volatile unsigned long stack_sink;
 
-#if defined(__GNUC__)
-__attribute__((noinline))
-#endif
-static unsigned long
+CMI_NOINLINE static unsigned long
 touch_big_frame(int pe) {
   volatile unsigned char buf[kFrameBytes];
   // Write one byte per page, walking downward from the top of the frame so

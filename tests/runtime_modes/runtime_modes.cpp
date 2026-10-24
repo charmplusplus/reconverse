@@ -56,7 +56,8 @@
 #include <converse.h>
 #include <stdio.h>
 #include <string.h>
-#include <unistd.h>
+#include <chrono>
+#include <thread>
 
 #ifdef __linux__
 #include <pthread.h>
@@ -314,7 +315,7 @@ static void ipcThreadFn(void *) {
         CmiAbort("PE %d: process %d's shared segment did not become ready "
                  "within %d attempts\n",
                  CmiMyPe(), other, maxAttempts);
-      usleep(100);
+      std::this_thread::sleep_for(std::chrono::microseconds(100));
     }
   }
 

@@ -6,6 +6,7 @@ Orion Sky Lawlor, olawlor@acm.org, 7/21/2001
 
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h> /* _lrotl, on MSVC */
 #include "sockRoutines.h"
 #include "ccs-auth.h"
 

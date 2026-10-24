@@ -1,6 +1,5 @@
 #include "converse.h"
 #include <iostream>
-#include <pthread.h>
 #include <stdio.h>
 
 CpvDeclare(int, exitHandlerId);

@@ -11,7 +11,6 @@
 #include <csignal>
 #include <cstdarg>
 #include <cstring>
-#include <pthread.h>
 #include <stdio.h>
 #include <sys/stat.h>
 #ifdef RECONVERSE_USE_JEMALLOC
@@ -20,11 +19,16 @@
 #include <stdlib.h>
 #include <thread>
 #include <vector>
-#include <sys/time.h>
 #if defined(__GLIBC__)
 #include <malloc.h>
 #endif
+#ifdef _WIN32
+#include "win32_compat.h"
+#else
+#include <pthread.h>
+#include <sys/time.h>
 #include <unistd.h>
+#endif
 #ifdef __APPLE__
 #include <sys/sysctl.h>
 #endif
@@ -65,6 +69,19 @@ static void CmiCheckCacheLineSize() {
   size_t len = sizeof(value);
   if (sysctlbyname("hw.cachelinesize", &value, &len, NULL, 0) == 0)
     line = (long)value;
+#elif defined(_WIN32)
+  DWORD bytes = 0;
+  GetLogicalProcessorInformation(NULL, &bytes);
+  std::vector<SYSTEM_LOGICAL_PROCESSOR_INFORMATION> info(
+      bytes / sizeof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION));
+  if (!info.empty() && GetLogicalProcessorInformation(info.data(), &bytes)) {
+    for (const auto &i : info)
+      if (i.Relationship == RelationCache && i.Cache.Level == 1 &&
+          i.Cache.Type != CacheInstruction) {
+        line = (long)i.Cache.LineSize;
+        break;
+      }
+  }
 #elif defined(_SC_LEVEL1_DCACHE_LINESIZE)
   line = sysconf(_SC_LEVEL1_DCACHE_LINESIZE);
 #endif
@@ -102,6 +119,9 @@ int Cmi_usched;
 int Cmi_initret;
 
 CmiNodeLock CmiMemLock_lock;
+// C linkage, like interopExitFlag above: CkLoop.h declares it CpvCExtern. GCC
+// does not decorate variable names, so only MSVC notices a mismatch.
+CpvCExtern(int, isHelperOn);
 CpvDeclare(int, isHelperOn);
 //partition
 PartitionInfo _partitionInfo;
@@ -388,6 +408,13 @@ static void *converseRunPeThread(void *arg) {
   return nullptr;
 }
 
+#ifdef _WIN32
+static unsigned __stdcall converseRunPeThreadWin(void *arg) {
+  converseRunPeThread(arg);
+  return 0;
+}
+#endif
+
 void CmiStartThreads() {
 
   // PE thread stack size. macOS gives secondary threads only 512 KB of stack
@@ -404,13 +431,29 @@ void CmiStartThreads() {
   // one sizes the user-level Cth (ULT) stacks, which are malloc'd blocks, not
   // these PE pthread stacks.
   size_t pe_stacksize = 0;
-#if defined(__APPLE__)
+#if defined(__APPLE__) || defined(_WIN32)
+  // Windows threads default to the 1 MB reserve in the executable's header.
+  // This is only reserved address space there; pages are committed as the
+  // stack grows.
   pe_stacksize = (size_t)8 * 1024 * 1024;
 #endif
   const char *pe_stacksize_env = getenv("CHARM_PE_STACKSIZE");
   if (pe_stacksize_env != nullptr)
     pe_stacksize = (size_t)strtoul(pe_stacksize_env, nullptr, 0);
 
+#ifdef _WIN32
+  for (int i = 1; i < Cmi_mynodesize; i++) {
+    uintptr_t th = _beginthreadex(
+        nullptr, (unsigned)pe_stacksize, converseRunPeThreadWin,
+        (void *)(intptr_t)i,
+        pe_stacksize > 0 ? STACK_SIZE_PARAM_IS_A_RESERVATION : 0, nullptr);
+    if (th == 0)
+      CmiAbort("CmiStartThreads: _beginthreadex: %s (%d)", strerror(errno),
+               errno);
+    // Detached, as on POSIX: nothing ever joins a PE thread.
+    CloseHandle((HANDLE)th);
+  }
+#else
   // Create threads for ranks 1 and up, run rank 0 on main thread (like original Converse)
   for (int i = 1; i < Cmi_mynodesize; i++) {
     pthread_attr_t attr;
@@ -437,6 +480,7 @@ void CmiStartThreads() {
       CmiAbort("CmiStartThreads: pthread_create: %s (%d)", strerror(err), err);
     pthread_attr_destroy(&attr);
   }
+#endif
 
 }
 
@@ -812,7 +856,11 @@ void CsdEnqueue(void *msg) { QueuePush(CpvAccess(CsdSchedQueue), msg, 0); }
 void CsdEnqueueLifo(void *msg) { QueuePushFront(CpvAccess(CsdSchedQueue), msg, 0); }
 
 /* Classic Converse filesystem utility, used by Charm++'s checkpoint code. */
+#ifdef _WIN32
+extern "C" void CmiMkdir(const char *dirName) { _mkdir(dirName); }
+#else
 extern "C" void CmiMkdir(const char *dirName) { mkdir(dirName, 0777); }
+#endif
 
 void CmiPushPE(int destRank, void *msg) {
   CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
@@ -1062,7 +1110,12 @@ void CmiDecrementCounter(DecrementToEnqueueMsg *dteMsg){
     // consumed.
     return;
   }
+#if CMI_MSVC
+  unsigned int oldValue = (unsigned int)_InterlockedExchangeAdd(
+      (volatile long *)dteMsg->counter, -1);
+#else
   unsigned int oldValue = __atomic_fetch_sub(dteMsg->counter, 1, __ATOMIC_SEQ_CST);
+#endif
   if(oldValue == 0){
     CmiAbort("CmiDecrementCounter: counter already zero, cannot decrement further\n");
   }
@@ -1089,7 +1142,11 @@ void CmiResetCounter(DecrementToEnqueueMsg *dteMsg, unsigned int newCount){
   if(newCount == 0){
     CmiAbort("CmiResetCounter: newCount cannot be zero\n");
   }
+#if CMI_MSVC
+  _InterlockedExchange((volatile long *)dteMsg->counter, (long)newCount);
+#else
   __atomic_store_n(dteMsg->counter, newCount, __ATOMIC_SEQ_CST);
+#endif
 }
 
 void CmiFreeDecrementToEnqueue(DecrementToEnqueueMsg *dteMsg){
@@ -1250,6 +1307,18 @@ int CmiGetPageSize(void) {
 #endif
 }
 
+#ifdef _WIN32
+// Committed private bytes (the pagefile-backed total, resident or not), the
+// figure classic Converse reported on Windows. kernel32 exports this as
+// K32GetProcessMemoryInfo, so no psapi.lib is needed.
+CmiUInt8 CmiMemoryUsage(void) {
+  PROCESS_MEMORY_COUNTERS pmc;
+  if (GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof(pmc)))
+    return (CmiUInt8)pmc.PagefileUsage;
+  return 0;
+}
+#endif
+
 void CmiInitMsgHeader(void *msg, int size) {
   if (size < (int)CmiMsgHeaderSizeBytes) return;
   CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
@@ -1317,9 +1386,21 @@ int CmiPrintf(const char *format, ...) {
 }
 
 double getCurrentTime() {
+#ifdef _WIN32
+  // Wall-clock time like CLOCK_REALTIME, at the system's full (~100 ns)
+  // resolution; classic Converse's ftime() only had milliseconds.
+  FILETIME ft;
+  GetSystemTimePreciseAsFileTime(&ft);
+  ULARGE_INTEGER t;
+  t.LowPart = ft.dwLowDateTime;
+  t.HighPart = ft.dwHighDateTime;
+  // 100 ns ticks since 1601-01-01; shift to the Unix epoch.
+  return (double)(t.QuadPart - 116444736000000000ULL) / 1e7;
+#else
   struct timespec ts;
   clock_gettime(CLOCK_REALTIME, &ts);
   return ts.tv_sec + ts.tv_nsec / 1e9;
+#endif
 }
 
 // TODO: implement timer
@@ -1790,6 +1871,24 @@ void CmiDeprecateArgInt(char **argv, const char *arg, const char *desc,
     CmiPrintf("%s\n", warning);
 }
 
+#ifdef _WIN32
+// SRW locks: user-mode when uncontended, no destructor, and like the default
+// pthread mutex they are not recursive.
+CmiNodeLock CmiCreateLock() {
+  CmiNodeLock lock = (CmiNodeLock)malloc(sizeof(SRWLOCK));
+  InitializeSRWLock(lock);
+  return lock;
+}
+
+void CmiDestroyLock(CmiNodeLock lock) { free(lock); }
+
+void CmiLock(CmiNodeLock lock) { AcquireSRWLockExclusive(lock); }
+
+void CmiUnlock(CmiNodeLock lock) { ReleaseSRWLockExclusive(lock); }
+
+// 0 on success, like pthread_mutex_trylock.
+int CmiTryLock(CmiNodeLock lock) { return !TryAcquireSRWLockExclusive(lock); }
+#else
 CmiNodeLock CmiCreateLock() {
   CmiNodeLock lock = (CmiNodeLock)malloc(sizeof(pthread_mutex_t));
   pthread_mutex_init(lock, NULL);
@@ -1806,6 +1905,7 @@ void CmiLock(CmiNodeLock lock) { pthread_mutex_lock(lock); }
 void CmiUnlock(CmiNodeLock lock) { pthread_mutex_unlock(lock); }
 
 int CmiTryLock(CmiNodeLock lock) { return pthread_mutex_trylock(lock); }
+#endif
 
 // empty function to satisfy charm
 void CommunicationServerThread(int sleepTime) {}
