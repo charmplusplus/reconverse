@@ -90,6 +90,14 @@ private:
   std::unordered_set<void *> m_liveMrs;
   void deregisterAllMemory();
 
+  // +lci_dest_device: send a PE-directed message on the device its
+  // destination rank polls (device i of one process talks only to device i of
+  // another), instead of on the sending thread's device. Assumes every process
+  // has the same number of PE threads.
+  bool m_dest_device = false;
+  int m_nthreads_per_device = 1;
+  bool progressDevice(int dev_idx);
+
   lci::device_t getThreadLocalDevice();
   lci::mr_t getThreadLocalMR(mr_t mr);
   lci::rmr_t getThreadLocalRMR(void *rmr);
