@@ -96,6 +96,16 @@ AmHandler registerAmHandler(CompHandler handler) {
   return gCommBackend->registerAmHandler(handler);
 }
 
+static thread_local int t_send_rank_hint = -1;
+
+void setSendRankHint(int destRank) { t_send_rank_hint = destRank; }
+
+int takeSendRankHint() {
+  int r = t_send_rank_hint;
+  t_send_rank_hint = -1;
+  return r;
+}
+
 void issueAm(int rank, const void *msg, size_t size, mr_t mr, CompHandler localComp,
              AmHandler remoteComp, void *user_context) {
   if (gCommBackend == nullptr) {

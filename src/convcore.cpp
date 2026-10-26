@@ -936,6 +936,7 @@ void CmiSyncSendAndFreeNoPersistent(int destPE, int messageSize, void *msg) {
                                    msg)) {
     // Not a peer process on this host, or too big for the pool: over the
     // network it goes.
+    comm_backend::setSendRankHint(CmiRankOf(destPE));
     comm_backend::issueAm(CmiNodeToGlobal(destNode), msg, messageSize,
                           MRFIELD(msg), CommLocalHandler, g_amHandler,
                           nullptr); // Commlocalhandler will free msg

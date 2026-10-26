@@ -63,6 +63,14 @@ AmHandler registerAmHandler(CompHandler handler);
 void issueAm(int rank, const void *local_buf, size_t size, mr_t mr,
              CompHandler localComp, AmHandler remoteComp, void *user_context);
 /**
+ * @brief Name the destination PE's rank (within its process) for the next
+ * issueAm from this thread. With +lci_dest_device the LCI2 backend sends on
+ * the device that rank polls, so the message is drained by its destination
+ * PE. Other backends ignore it. Thread-safe (per-thread state).
+ */
+void setSendRankHint(int destRank);
+int takeSendRankHint();
+/**
  * @brief Issue a remote get operation. Thread-safe.
  */
 void issueRget(int rank, const void *local_buf, size_t size, mr_t local_mr,

@@ -190,6 +190,8 @@ void CommBackendLCI2::init(char **argv) {
   int num_devices = 1;
   CmiGetArgInt(argv, "+lci_ndevices", (int *)&num_devices);
   CmiAssert(num_devices >= 1);
+  m_dest_device = CmiGetArgFlagDesc(argv, "+lci_dest_device",
+      "send each PE-directed message on the device its destination PE polls");
 
   lci::global_initialize();
   auto g_attr = lci::get_g_default_attr();
@@ -261,6 +263,7 @@ void CommBackendLCI2::initThread(int thread_id, int num_threads) {
   detail::g_thread_context.thread_id = thread_id;
   int nthreads_per_device =
       (num_threads + m_devices.size() - 1) / m_devices.size();
+  m_nthreads_per_device = nthreads_per_device;
   int device_id = thread_id / nthreads_per_device;
   CmiAssert(device_id < m_devices.size());
   detail::g_thread_context.device_idx = device_id;
@@ -298,16 +301,34 @@ void CommBackendLCI2::issueAm(int rank, const void *local_buf, size_t size, mr_t
   // queue. Use allow_retry=false so LCI pushes to its backlog queue and returns
   // immediately; the backlog is drained in the next progress() call.
   bool allow_retry = !detail::g_in_progress_callback;
+  // +lci_dest_device: the message lands on the receiver's device with the
+  // index it was sent on, so send it on the device its destination PE polls.
+  // The send then completes on that device here, polled by its own threads.
+  int hint = takeSendRankHint();
+  int dest_dev = -1;
+  if (m_dest_device && hint >= 0 && detail::g_thread_context.device_idx >= 0) {
+    dest_dev = hint / m_nthreads_per_device;
+    if (dest_dev >= (int)m_devices.size()) dest_dev = (int)m_devices.size() - 1;
+    if (dest_dev == detail::g_thread_context.device_idx) dest_dev = -1;
+  }
+  lci::device_t device =
+      dest_dev >= 0 ? m_devices[dest_dev] : getThreadLocalDevice();
+  lci::mr_t lmr = getThreadLocalMR(mr);
+  if (dest_dev >= 0 && mr != MR_NULL)
+    lmr = lci::mr_t(static_cast<lci::mr_impl_t **>(mr)[dest_dev]);
   do {
     // we use LCI tag to pass the remoteComp
     status = lci::post_am_x(rank, const_cast<void *>(local_buf), size,
                             m_local_comp, m_rcomp)
-                 .mr(getThreadLocalMR(mr))
-                 .device(getThreadLocalDevice())
+                 .mr(lmr)
+                 .device(device)
                  .tag(remoteComp)
                  .user_context(args)
                  .allow_retry(allow_retry)();
-    if (allow_retry) progress();
+    if (allow_retry) {
+      progress();
+      if (dest_dev >= 0) progressDevice(dest_dev);
+    }
   } while (status.is_retry());
   if (status.is_done()) {
     localComp({local_buf, size, user_context});
@@ -366,6 +387,23 @@ void CommBackendLCI2::issueRput(int rank, const void *local_buf, size_t size,
 
 bool CommBackendLCI2::threadMustPoll() {
   return detail::g_thread_context.device_poller;
+}
+
+// Poll one device under its trylock; used by a sender waiting on another
+// thread's device (+lci_dest_device).
+bool CommBackendLCI2::progressDevice(int dev_idx) {
+  bool expected = false;
+  if (!m_progress_locks[dev_idx].v.compare_exchange_strong(
+          expected, true, std::memory_order_acquire,
+          std::memory_order_relaxed)) {
+    return false;
+  }
+  bool prev_in_cb = detail::g_in_progress_callback;
+  detail::g_in_progress_callback = true;
+  auto ret = lci::progress_x().device(m_devices[dev_idx])();
+  detail::g_in_progress_callback = prev_in_cb;
+  m_progress_locks[dev_idx].v.store(false, std::memory_order_release);
+  return ret.is_done();
 }
 
 bool CommBackendLCI2::progress(void) {
