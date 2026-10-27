@@ -104,6 +104,11 @@ ctest --test-dir build --output-on-failure --timeout 120 -E $exclude
 
 When the PR was opened, 67 tests ran and passed, and 54 were skipped.
 
+One test, `reduction_many-overflow`, runs through `sh`. GitHub's runner has
+Git for Windows' `sh` on `PATH`, but a default Git for Windows install puts
+only `Git\cmd` there, so on a desktop the filter usually skips that test too
+(66 run, 55 skipped). To run it, add `C:\Program Files\Git\bin` to `PATH`.
+
 ## Use Reconverse from your own CMake project
 
 Link against the `reconverse::reconverse` target, as
@@ -111,9 +116,13 @@ Link against the `reconverse::reconverse` target, as
 added:
 
 ```cmake
+include(FetchContent)
+FetchContent_Declare(reconverse
+  GIT_REPOSITORY https://github.com/charmplusplus/reconverse.git
+  GIT_TAG main)
 set(RECONVERSE_TRY_ENABLE_COMM_LCI2 OFF CACHE BOOL "")
 set(RECONVERSE_TRY_ENABLE_COMM_LCW  OFF CACHE BOOL "")
-FetchContent_MakeAvailable(reconverse)   # or add_subdirectory(...)
+FetchContent_MakeAvailable(reconverse)   # or add_subdirectory(<checkout>)
 target_link_libraries(myprog PRIVATE reconverse::reconverse)
 ```
 
@@ -134,10 +143,11 @@ and `/OPT:ICF` are added back, because `/DEBUG` would otherwise turn them off.
 - **Timers and locks.** The wall clock uses `GetSystemTimePreciseAsFileTime`,
   which has about 100 ns resolution. Locks are SRW locks, which, like a
   default pthread mutex, are not recursive.
-- **Stack traces.** `CmiAbort` and fatal faults print a stack trace. Frames
-  show the function name, plus file:line when a `.pdb` is present; without
-  one, they show module+offset. Keep the `.pdb` next to the `.exe` if you
-  want readable traces.
+- **Stack traces.** `CmiAbort` and fatal faults print a stack trace. With the
+  `.pdb` present, frames show function names; code compiled with debug
+  information (`Debug` or `RelWithDebInfo`) also shows file:line. Without the
+  `.pdb`, the program's own frames show only module+offset. Keep the `.pdb`
+  next to the `.exe` if you want readable traces.
 - **Crashes.**
   - A fatal fault (access violation and so on) is reported with the POSIX
     signal it corresponds to, for example `SIGSEGV`, and the process exits
@@ -161,8 +171,9 @@ and `/OPT:ICF` are added back, because `/DEBUG` would otherwise turn them off.
   - `+setcpuaffinity`, `+pemap` and `+showcpuaffinity` are accepted but do
     nothing.
   - `CmiSetCPUAffinity` returns -1, meaning not supported.
-- **CCS.** CCS (`++server`) has not been tested on Windows, because of the
-  firewall prompt described under [Test](#test).
+- **CCS.** CCS (`++server`) is left out of Windows test runs, because of the
+  firewall prompt described under [Test](#test). Its `ccs` test passed the
+  one time it was run by hand.
 - **Compiler.** Only MSVC targeting x64 is supported. clang-cl has not been
   tested; the MSVC-specific code paths are keyed to `cl`, not clang-cl.
 - **Toolchain.** MinGW and MSYS2 are not supported.
