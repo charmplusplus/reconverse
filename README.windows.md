@@ -45,17 +45,21 @@ The path should end in `\Hostx64\x64\cl.exe`.
 
 ## Build
 
+Until charmplusplus/reconverse#304 is merged, Windows support is only on its
+branch, `windows-support`; `main` fails with `Cannot open include file:
+'pthread.h'`. Check the branch out before configuring:
+
 ```bat
 git clone https://github.com/charmplusplus/reconverse.git
 cd reconverse
+git checkout windows-support
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release ^
       -DRECONVERSE_TRY_ENABLE_COMM_LCI2=OFF ^
       -DRECONVERSE_TRY_ENABLE_COMM_LCW=OFF
 cmake --build build
 ```
 
-Until charmplusplus/reconverse#304 is merged, check out its branch after
-cloning: `git checkout windows-support`.
+If you already configured on another branch, delete `build` first.
 
 Notes:
 
