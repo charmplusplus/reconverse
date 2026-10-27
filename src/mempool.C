@@ -247,6 +247,7 @@ mempool_type* mempool_init(size_t pool_size, mempool_newblockfn allocfn, mempool
   mptr->limit = limit;
   mptr->size = pool_size;
   mptr->mempoolLock = CmiCreateLock();
+  mptr->remote_free = NULL;
   mptr->block_head.mptr = (struct mempool_type*)pool;
   mptr->block_head.mem_hndl = mem_hndl;
   mptr->block_head.size = pool_size;
@@ -282,6 +283,43 @@ void mempool_destroy(mempool_type* mptr)
 }
 
 // append slot_header size before the real memory buffer
+/** The pool a block belongs to */
+mempool_type* mempool_owner(void* ptr_free)
+{
+  slot_header* to_free = (slot_header*)((char*)ptr_free - sizeof(used_header));
+  return to_free->status == -1
+             ? (mempool_type*)(((large_block_header*)(to_free->block_ptr))->mptr)
+             : (mempool_type*)(((block_header*)(to_free->block_ptr))->mptr);
+}
+
+/**
+ * Free a block of another thread's pool without taking its lock: push it on
+ * the pool's remote_free stack (one compare-and-swap). The owner takes the
+ * whole stack (an exchange, so no ABA) and frees each block in its next
+ * allocation, under the lock it takes anyway.
+ */
+void mempool_free_remote(mempool_type* mptr, void* ptr_free)
+{
+  void* head = __atomic_load_n(&mptr->remote_free, __ATOMIC_RELAXED);
+  do {
+    *(void**)ptr_free = head;
+  } while (!__atomic_compare_exchange_n(&mptr->remote_free, &head, ptr_free, 1,
+                                        __ATOMIC_RELEASE, __ATOMIC_RELAXED));
+}
+
+/** With the pool's lock held: free every block other threads handed back */
+static void take_remote_frees(mempool_type* mptr)
+{
+  if (!__atomic_load_n(&mptr->remote_free, __ATOMIC_RELAXED))
+    return;
+  void* p = __atomic_exchange_n(&mptr->remote_free, NULL, __ATOMIC_ACQUIRE);
+  while (p) {
+    void* next = *(void**)p;
+    mempool_free(mptr, p);
+    p = next;
+  }
+}
+
 void* mempool_malloc(mempool_type* mptr, size_t size, int expand)
 {
   size_t size_with_used_header = size + sizeof(used_header); // "bestfit"?
@@ -293,6 +331,7 @@ void* mempool_malloc(mempool_type* mptr, size_t size, int expand)
   }
 
   CmiLock(mptr->mempoolLock);
+  take_remote_frees(mptr);
 
   size_t bestfit_size = cutOffPoints[power];
   DEBUG_PRINT("Request size is %d, power value is %d, size is %d\n", size, power, bestfit_size);
@@ -385,6 +424,7 @@ void* mempool_malloc(mempool_type* mptr, size_t size, int expand)
 void* mempool_large_malloc(mempool_type* mptr, size_t size, int expand)
 {
   CmiLock(mptr->mempoolLock);
+  take_remote_frees(mptr);
 
   size_t expand_size = size + sizeof(large_block_header) + sizeof(used_header);
   DEBUG_PRINT("Mempool-Large block allocation\n");

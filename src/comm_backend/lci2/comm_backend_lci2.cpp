@@ -181,7 +181,16 @@ void CommBackendLCI2::free(void *msg)
   }
   else
   {
-    // For in-pool messages, free from mempool_header position
+    // For in-pool messages, free from mempool_header position. A block of
+    // another PE's pool (a receive buffer this PE did not drain, a message
+    // another PE allocated) goes back without taking that pool's lock
+    if (m_remote_free) {
+      mempool_type* owner = mempool_owner(aligned_addr);
+      if (owner != CpvAccess(mempool)) {
+        mempool_free_remote(owner, aligned_addr);
+        return;
+      }
+    }
     mempool_free_thread(aligned_addr);
   }
 }
@@ -190,6 +199,8 @@ void CommBackendLCI2::init(char **argv) {
   int num_devices = 1;
   CmiGetArgInt(argv, "+lci_ndevices", (int *)&num_devices);
   CmiAssert(num_devices >= 1);
+  m_remote_free = CmiGetArgFlagDesc(argv, "+mempool_remote_free",
+      "free blocks of another PE's message pool through a lock-free list it drains, not under its lock");
   m_dest_device = CmiGetArgFlagDesc(argv, "+lci_dest_device",
       "send each PE-directed message on the device its destination PE polls");
 

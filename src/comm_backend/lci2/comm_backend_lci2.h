@@ -95,6 +95,7 @@ private:
   // another), instead of on the sending thread's device. Assumes every process
   // has the same number of PE threads.
   bool m_dest_device = false;
+  bool m_remote_free = false;  // +mempool_remote_free
   int m_nthreads_per_device = 1;
   bool progressDevice(int dev_idx);
 
