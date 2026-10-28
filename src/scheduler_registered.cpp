@@ -89,13 +89,22 @@ static bool pollNodeQueuesFirst() {
 // iteration drains first.
 static thread_local bool t_progressFoundNothing = false;
 
+// +backend_poll_thread k: only every k-th rank polls -- plus the first rank of
+// each communication device, which nothing else would progress (with k past
+// the ranks per device, devices went unpolled and the run hung). Decided once
+// per thread.
+static thread_local int t_pollsProgress = -1;
+
 bool pollProgress()
 {
   if (t_progressFoundNothing) return false;
+  if (t_pollsProgress < 0)
+    t_pollsProgress = CmiMyRank() % backend_poll_thread == 0 ||
+                      comm_backend::threadMustPoll();
   //progress can deliver messages in the middle of a sweep; run them by the
   //two rules at the top instead of after the local message the sweep would
   //reach next
-  if (CmiMyRank() % backend_poll_thread == 0) {
+  if (t_pollsProgress) {
     if (comm_backend::progress())
       return pollConverseThreadQueue() || pollNodeQueuesFirst();
     t_progressFoundNothing = true;

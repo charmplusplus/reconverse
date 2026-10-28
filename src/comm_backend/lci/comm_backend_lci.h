@@ -55,6 +55,7 @@ public:
                  uintptr_t remote_disp, void *rmr,
                  CompHandler localComp, void *user_context) override;
   bool progress(void) override;
+  bool threadMustPoll() override;
   void barrier(void) override;
   mr_t registerMemory(void *addr, size_t size) override;
   size_t getRMR(mr_t mr, void *addr, size_t size) override;

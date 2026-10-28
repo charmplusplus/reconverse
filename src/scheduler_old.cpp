@@ -220,7 +220,8 @@ void CsdSchedulerOld() {
         }
       }
     }
-    if((CmiMyRank() % backend_poll_thread == 0) && (loop_counter++ == (poll_period - 1)))
+    if((CmiMyRank() % backend_poll_thread == 0 || comm_backend::threadMustPoll()) &&
+       (loop_counter++ == (poll_period - 1)))
     {
       loop_counter = 0;
       comm_backend::progress();
