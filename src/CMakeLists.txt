@@ -18,6 +18,8 @@ target_include_directories(
                      $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
                      
 add_subdirectory(comm_backend)
+# tests/ registers its LCI-only tests on this.
+set(RECONVERSE_ENABLE_COMM_LCI2 ${RECONVERSE_ENABLE_COMM_LCI2} PARENT_SCOPE)
 
 # configure needs to be called after add_subdirectory(comm_backend)
 configure_file(converse_config.h.in

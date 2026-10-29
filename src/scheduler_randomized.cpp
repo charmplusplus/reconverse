@@ -81,7 +81,8 @@ inline bool drainInto(std::vector<void *> &pool, size_t bound, Take take) {
 // any message moved.
 bool fillPool(std::vector<void *> &pool) {
   bool took = CmiSchedulerPollIpc();
-  if (CmiMyRank() % backend_poll_thread == 0) comm_backend::progress();
+  if (CmiMyRank() % backend_poll_thread == 0 || comm_backend::threadMustPoll())
+    comm_backend::progress();
   // shared sources: one message each, the rest stay reachable by other PEs
   took |= drainInto(pool, 1, CmiTakeNodeQueue);
   took |= drainInto(pool, 1, CmiTakeNodePrioQueue);
