@@ -106,7 +106,7 @@ typedef struct mempool_type
   CmiNodeLock mempoolLock;
   // Blocks freed by other threads (+mempool_remote_free): a lock-free stack,
   // linked through each block's first word, that the owner takes whole and
-  // frees under its own lock at its next allocation
+  // frees under its own lock at its next allocation or own-block free
   void* remote_free;
   char padding[CMIPADDING((6 * sizeof(size_t) + sizeof(CmiNodeLock) + sizeof(void*)), 16)];
 } mempool_type;

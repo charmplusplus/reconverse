@@ -334,8 +334,9 @@ static inline void* remote_free_take(mempool_type* mptr)
 /**
  * Free a block of another thread's pool without taking its lock: push it on
  * the pool's remote_free stack (one compare-and-swap). The owner takes the
- * whole stack (an exchange, so no ABA) and frees each block in its next
- * allocation, under the lock it takes anyway.
+ * whole stack (an exchange, so no ABA) and frees each block at its next
+ * allocation or its next free of one of its own blocks, under the lock it
+ * takes there anyway.
  */
 void mempool_free_remote(mempool_type* mptr, void* ptr_free)
 {
@@ -511,6 +512,10 @@ void mempool_free_thread(void* ptr_free)
              ? (mempool_type*)(((large_block_header*)(to_free->block_ptr))->mptr)
              : (mempool_type*)(((block_header*)(to_free->block_ptr))->mptr);
   CmiLock(mptr->mempoolLock);
+  // With +mempool_remote_free only the owner gets here (other threads push
+  // on the stack instead), so a PE that frees but no longer allocates still
+  // drains it. Without the flag the stack is always empty.
+  take_remote_frees(mptr);
   mempool_free(mptr, ptr_free);
   CmiUnlock(mptr->mempoolLock);
 }
