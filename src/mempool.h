@@ -104,7 +104,11 @@ typedef struct mempool_type
   size_t limit;
   size_t size;
   CmiNodeLock mempoolLock;
-  char padding[CMIPADDING((6 * sizeof(size_t) + sizeof(CmiNodeLock)), 16)];
+  // Blocks freed by other threads (+mempool_remote_free): a lock-free stack,
+  // linked through each block's first word, that the owner takes whole and
+  // frees under its own lock at its next allocation or own-block free
+  void* remote_free;
+  char padding[CMIPADDING((6 * sizeof(size_t) + sizeof(CmiNodeLock) + sizeof(void*)), 16)];
 } mempool_type;
 
 #ifdef __cplusplus
@@ -124,6 +128,8 @@ void* mempool_large_malloc(mempool_type* mptr, size_t size, int expand);
 void mempool_free(mempool_type* mptr, void* ptr_free);
 
 void mempool_free_thread(void* ptr_free);
+mempool_type* mempool_owner(void* ptr_free);
+void mempool_free_remote(mempool_type* mptr, void* ptr_free);
 
 #if defined(__cplusplus)
 }

@@ -247,6 +247,7 @@ mempool_type* mempool_init(size_t pool_size, mempool_newblockfn allocfn, mempool
   mptr->limit = limit;
   mptr->size = pool_size;
   mptr->mempoolLock = CmiCreateLock();
+  mptr->remote_free = NULL;
   mptr->block_head.mptr = (struct mempool_type*)pool;
   mptr->block_head.mem_hndl = mem_hndl;
   mptr->block_head.size = pool_size;
@@ -281,6 +282,83 @@ void mempool_destroy(mempool_type* mptr)
   }
 }
 
+/** The pool a block belongs to */
+mempool_type* mempool_owner(void* ptr_free)
+{
+  slot_header* to_free = (slot_header*)((char*)ptr_free - sizeof(used_header));
+  return to_free->status == -1
+             ? (mempool_type*)(((large_block_header*)(to_free->block_ptr))->mptr)
+             : (mempool_type*)(((block_header*)(to_free->block_ptr))->mptr);
+}
+
+/* The remote_free stack's atomics. MSVC lacks the GCC builtins; its
+   _Interlocked*Pointer intrinsics are full barriers, which covers the release
+   on the push and the acquire on the take. */
+#if CMI_MSVC
+#include <intrin.h>
+static inline void* remote_free_peek(mempool_type* mptr)
+{
+  return *(void* volatile*)&mptr->remote_free;
+}
+/* Pushes desired if the head is still *expected; otherwise *expected becomes
+   the head seen */
+static inline int remote_free_cas(mempool_type* mptr, void** expected, void* desired)
+{
+  void* seen = _InterlockedCompareExchangePointer(
+      (void* volatile*)&mptr->remote_free, desired, *expected);
+  if (seen == *expected)
+    return 1;
+  *expected = seen;
+  return 0;
+}
+static inline void* remote_free_take(mempool_type* mptr)
+{
+  return _InterlockedExchangePointer((void* volatile*)&mptr->remote_free, NULL);
+}
+#else
+static inline void* remote_free_peek(mempool_type* mptr)
+{
+  return __atomic_load_n(&mptr->remote_free, __ATOMIC_RELAXED);
+}
+static inline int remote_free_cas(mempool_type* mptr, void** expected, void* desired)
+{
+  return __atomic_compare_exchange_n(&mptr->remote_free, expected, desired, 1,
+                                     __ATOMIC_RELEASE, __ATOMIC_RELAXED);
+}
+static inline void* remote_free_take(mempool_type* mptr)
+{
+  return __atomic_exchange_n(&mptr->remote_free, NULL, __ATOMIC_ACQUIRE);
+}
+#endif
+
+/**
+ * Free a block of another thread's pool without taking its lock: push it on
+ * the pool's remote_free stack (one compare-and-swap). The owner takes the
+ * whole stack (an exchange, so no ABA) and frees each block at its next
+ * allocation or its next free of one of its own blocks, under the lock it
+ * takes there anyway.
+ */
+void mempool_free_remote(mempool_type* mptr, void* ptr_free)
+{
+  void* head = remote_free_peek(mptr);
+  do {
+    *(void**)ptr_free = head;
+  } while (!remote_free_cas(mptr, &head, ptr_free));
+}
+
+/** With the pool's lock held: free every block other threads handed back */
+static void take_remote_frees(mempool_type* mptr)
+{
+  if (!remote_free_peek(mptr))
+    return;
+  void* p = remote_free_take(mptr);
+  while (p) {
+    void* next = *(void**)p;
+    mempool_free(mptr, p);
+    p = next;
+  }
+}
+
 // append slot_header size before the real memory buffer
 void* mempool_malloc(mempool_type* mptr, size_t size, int expand)
 {
@@ -293,6 +371,7 @@ void* mempool_malloc(mempool_type* mptr, size_t size, int expand)
   }
 
   CmiLock(mptr->mempoolLock);
+  take_remote_frees(mptr);
 
   size_t bestfit_size = cutOffPoints[power];
   DEBUG_PRINT("Request size is %d, power value is %d, size is %d\n", size, power, bestfit_size);
@@ -385,6 +464,7 @@ void* mempool_malloc(mempool_type* mptr, size_t size, int expand)
 void* mempool_large_malloc(mempool_type* mptr, size_t size, int expand)
 {
   CmiLock(mptr->mempoolLock);
+  take_remote_frees(mptr);
 
   size_t expand_size = size + sizeof(large_block_header) + sizeof(used_header);
   DEBUG_PRINT("Mempool-Large block allocation\n");
@@ -432,6 +512,10 @@ void mempool_free_thread(void* ptr_free)
              ? (mempool_type*)(((large_block_header*)(to_free->block_ptr))->mptr)
              : (mempool_type*)(((block_header*)(to_free->block_ptr))->mptr);
   CmiLock(mptr->mempoolLock);
+  // With +mempool_remote_free only the owner gets here (other threads push
+  // on the stack instead), so a PE that frees but no longer allocates still
+  // drains it. Without the flag the stack is always empty.
+  take_remote_frees(mptr);
   mempool_free(mptr, ptr_free);
   CmiUnlock(mptr->mempoolLock);
 }
