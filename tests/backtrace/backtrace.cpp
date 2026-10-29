@@ -9,13 +9,13 @@
 
 static volatile int *null_pointer = NULL;
 
-__attribute__((noinline)) void backtrace_test_leaf(int how) {
+CMI_NOINLINE void backtrace_test_leaf(int how) {
   if (how == 1)
     *null_pointer = 42;
   CmiAbort("backtrace test: deliberate abort");
 }
 
-__attribute__((noinline)) void backtrace_test_middle(int how) {
+CMI_NOINLINE void backtrace_test_middle(int how) {
   backtrace_test_leaf(how);
   printf("unreachable %d\n", how);
 }

@@ -81,7 +81,8 @@ inline bool drainInto(std::vector<void *> &pool, size_t bound, Take take) {
 // any message moved.
 bool fillPool(std::vector<void *> &pool) {
   bool took = CmiSchedulerPollIpc();
-  if (CmiMyRank() % backend_poll_thread == 0) comm_backend::progress();
+  if (CmiMyRank() % backend_poll_thread == 0 || comm_backend::threadMustPoll())
+    comm_backend::progress();
   // shared sources: one message each, the rest stay reachable by other PEs
   took |= drainInto(pool, 1, CmiTakeNodeQueue);
   took |= drainInto(pool, 1, CmiTakeNodePrioQueue);
@@ -102,7 +103,11 @@ bool fillPool(std::vector<void *> &pool) {
 // reduction is below 2^-50 for any pool size that fits in memory.
 void *drawFromPool(RandomizedState &st) {
   std::vector<void *> &pool = st.pool;
+#if CMI_MSVC
+  size_t i = (size_t)__umulh(st.rng(), (unsigned long long)pool.size());
+#else
   size_t i = (size_t)(((unsigned __int128)st.rng() * pool.size()) >> 64);
+#endif
   void *msg = pool[i];
   pool[i] = pool.back();
   pool.pop_back();

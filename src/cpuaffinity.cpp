@@ -852,6 +852,16 @@ void CmiInitCPUAffinity(char **argv) {
 
 void CmiCheckAffinity(void) {}
 
+// Declared unconditionally in converse.h too. Binding is unsupported without
+// hwloc, which the -1 says, as in classic Converse's unsupported platforms.
+int CmiSetCPUAffinity(int core) { return -1; }
+int CmiSetCPUAffinityLogical(int core) { return -1; }
+int CmiPrintCPUAffinity(void) {
+  CmiPrintf("Warning: CmiPrintCPUAffinity not supported: this build has no "
+            "hwloc.\n");
+  return -1;
+}
+
 // Declared unconditionally in converse.h, so it needs a definition here too:
 // without one, any program calling it fails to link in a build with no hwloc
 // (tests/physical_nodes did). hwloc is what reports the machine-wide PU count,

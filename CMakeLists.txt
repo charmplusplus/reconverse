@@ -40,8 +40,8 @@ option(RECONVERSE_TRY_ENABLE_COMM_LCI2 "whether to enable the LCIv2 backend" ON)
 option(RECONVERSE_AUTOFETCH_LCI2
         "whether to autofetch LCIv2 if LCI2 cannot be found" OFF)
 set(RECONVERSE_AUTOFETCH_LCI2_TAG
-    "d366a4053c204182e5129eefd4c9d71d63a06d68"
-    CACHE STRING "The tag to fetch for LCIv2") # uiuc-hpc/lci master, 2026-10-20: LCT_pmi_abort (#209), downstream CI on OFI tcp (#210)
+    "1287c59c1c9dad78d6966b6af5eeeb3d7df5ec8c"
+    CACHE STRING "The tag to fetch for LCIv2") # uiuc-hpc/lci master, 2026-10-24: OFI providers that need FI_CONTEXT and have 4-byte CQ data, i.e. native psm2 (#214)
 
 option(RECONVERSE_TRY_ENABLE_COMM_LCW "whether to enable the LCW backend" ON)
 option(RECONVERSE_AUTOFETCH_LCW
@@ -157,7 +157,12 @@ endif()
 # Add Library
 # ##############################################################################
 
-find_package(Threads REQUIRED)
+# Windows threads are part of the system, so there is no thread library to
+# find; FindThreads, run from Cygwin for a Charm++ build, looks for pthreads
+# and fails.
+if(NOT CHARM_OS STREQUAL "win")
+  find_package(Threads REQUIRED)
+endif()
 
 if(RECONVERSE_ENABLE_XPMEM)
   find_package(PkgConfig QUIET)
@@ -208,11 +213,26 @@ set_target_properties(reconverse PROPERTIES CXX_STANDARD 17)
 target_compile_features(reconverse PUBLIC cxx_std_17)
 add_subdirectory(include)
 add_subdirectory(src)
-target_link_libraries(reconverse PUBLIC Threads::Threads)
+if(TARGET Threads::Threads)
+  target_link_libraries(reconverse PUBLIC Threads::Threads)
+endif()
 # Stack traces (backtrace.cpp) name functions inside the executable only if
 # its symbols are exported; on Linux that takes -rdynamic at the final link.
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   target_link_options(reconverse INTERFACE -rdynamic)
+endif()
+# Rank 0 runs on the main thread, whose stack size is fixed in the executable
+# header. Windows defaults it to 1 MB; give it the 8 MB the other PE threads
+# get (CmiStartThreads) and that Linux and macOS main threads have. It is
+# reserved address space, committed only as the stack grows.
+#
+# /DEBUG is the counterpart of -rdynamic above: it writes a PDB beside the
+# executable, which is what lets backtrace.cpp name the executable's own
+# functions. It does not change the generated code, but it does switch the
+# linker's dead-code and identical-code folding off unless they are asked for.
+if(MSVC)
+  target_link_options(reconverse INTERFACE /STACK:8388608 /DEBUG
+                      $<$<NOT:$<CONFIG:Debug>>:/OPT:REF /OPT:ICF>)
 endif()
 
 if(RECONVERSE_ENABLE_XPMEM)

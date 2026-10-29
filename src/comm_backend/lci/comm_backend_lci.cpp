@@ -15,6 +15,9 @@ struct ThreadContext {
   int thread_id;
   int device_idx;
   lci::device_t tls_device;
+  // The first thread of each device: progress() only polls the caller's own
+  // device, so a device none of whose threads poll is never progressed
+  bool device_poller;
 };
 
 thread_local ThreadContext g_thread_context;
@@ -299,6 +302,7 @@ void CommBackendLCI::initThread(int thread_id, int num_threads) {
   CmiAssert(device_id < m_devices.size());
   detail::g_thread_context.device_idx = device_id;
   detail::g_thread_context.tls_device = m_devices[device_id];
+  detail::g_thread_context.device_poller = thread_id % nthreads_per_device == 0;
 }
 
 void CommBackendLCI::exitThread() {
@@ -395,6 +399,10 @@ void CommBackendLCI::issueRput(int rank, const void *local_buf, size_t size,
     localComp({local_buf, size, user_context});
     delete args;
   }
+}
+
+bool CommBackendLCI::threadMustPoll() {
+  return detail::g_thread_context.device_poller;
 }
 
 bool CommBackendLCI::progress(void) {

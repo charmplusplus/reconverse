@@ -66,7 +66,12 @@ static void finishSetup_(CmiIpcManager* meta) {
   meta->ready.store(true, std::memory_order_release);
 }
 
+// No backend on Windows: reconverse runs a single process there, so the pool
+// would never have a peer. +ipc stops in CmiIpcStartup for a single-process
+// job, and CmiMakeIpcManager refuses below.
+#ifndef _WIN32
 #include "cmishm.cpp"
+#endif
 #if CMK_HAS_XPMEM
 #include "cmixpmem.cpp"
 #endif
@@ -435,7 +440,9 @@ void CmiIpcInit(char** argv) {
   // Register every backend's handlers whichever one is in use: handler ids
   // are assigned in call order and have to match across processes, and two
   // hosts in one job can disagree about whether xpmem is available.
+#ifndef _WIN32
   ipcInitShm_(argv);
+#endif
 #if CMK_HAS_XPMEM
   ipcInitXpmem_(argv);
 #endif
@@ -578,6 +585,15 @@ bool CmiIpcTrySendAndFree(int destNode, int destRank, int messageSize,
 }
 
 CmiIpcManager* CmiMakeIpcManager(CthThread th) {
+#ifdef _WIN32
+  // Only a Charm++ build with --enable-shmem gets here. Reconverse's own +ipc
+  // stops in CmiIpcStartup, since a Windows job is always a single process.
+  (void)th;
+  CmiAbort("the shared-memory IPC pool is not available on Windows, where "
+           "reconverse runs a single process; build Charm++ without "
+           "--enable-shmem");
+  return nullptr;
+#else
   putSleeper_(th);
 
   // ensure all sleepers are reg'd
@@ -624,4 +640,5 @@ CmiIpcManager* CmiMakeIpcManager(CthThread th) {
     CmiNodeAllBarrier();
     return CsvAccess(managers_).back().get();
   }
+#endif
 }
