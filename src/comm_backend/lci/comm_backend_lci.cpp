@@ -201,8 +201,12 @@ void CommBackendLCI::init(char **argv) {
   int num_devices = 1;
   CmiGetArgInt(argv, "+lci_ndevices", (int *)&num_devices);
   CmiAssert(num_devices >= 1);
-  m_remote_free = CmiGetArgFlagDesc(argv, "+mempool_remote_free",
-      "free blocks of another PE's message pool through a lock-free list it drains, not under its lock");
+  // On unless +nomempool_remote_free; +mempool_remote_free is still accepted,
+  // from launch lines written before it was the default.
+  CmiGetArgFlagDesc(argv, "+mempool_remote_free",
+      "free blocks of another PE's message pool through a lock-free list it drains, not under its lock (default)");
+  m_remote_free = !CmiGetArgFlagDesc(argv, "+nomempool_remote_free",
+      "free blocks of another PE's message pool under its lock");
 
   // Slingshot (cxi): hardware RX matching aborts once NIC list entries run out
   // ("LE resources not recovered"); hybrid falls back to software matching.

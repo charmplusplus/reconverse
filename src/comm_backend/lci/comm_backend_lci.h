@@ -91,7 +91,7 @@ private:
   std::unordered_set<void *> m_liveMrs;
   void deregisterAllMemory();
 
-  bool m_remote_free = false;  // +mempool_remote_free
+  bool m_remote_free = true;  // off with +nomempool_remote_free
 
   lci::device_t getThreadLocalDevice();
   lci::mr_t getThreadLocalMR(mr_t mr);

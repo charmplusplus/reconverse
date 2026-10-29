@@ -112,6 +112,7 @@ The example executables are located in the build/test/<program_name> folders. Yo
 - **`+randomized_msgq`**: run messages in a uniformly random order, for shaking out message-order races. See [Randomized message order](#randomized-message-order-randomized_msgq). Cannot be combined with `+old-scheduler`.
 - **`+randomized_seed <N>`**: base seed for `+randomized_msgq`. Defaults to a value taken from the wall clock; the startup banner prints the seed in use.
 - **`+glibc_tuned_malloc`**: on glibc systems, raise glibc's malloc thresholds at startup (`mallopt`: mmap threshold 32 MB, trim threshold 1 GB, top pad 256 MB) and print `Reconverse> glibc malloc (+glibc_tuned_malloc): ...`. Off by default; accepted and ignored on other C libraries. See [glibc malloc tuning](#glibc-malloc-tuning-glibc_tuned_malloc).
+- **`+nomempool_remote_free`**: with the LCI backend, a PE that frees a message from another PE's pool (a receive buffer another thread polled in, or a message another PE allocated) takes that pool's lock, as before. By default it instead pushes the block on a lock-free stack that the owner empties under its own lock the next time it allocates or frees one of its own blocks. `+mempool_remote_free`, the flag that turned this on before it was the default, is still accepted.
 
 ### glibc malloc tuning (`+glibc_tuned_malloc`)
 
