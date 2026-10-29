@@ -4,6 +4,7 @@ This is a clean reimplementation of Converse without the complexities and deadco
 
 ## Documentation
 
+- [Reconverse on Windows](README.windows.md): building and testing a single-process Reconverse with MSVC.
 - [Converse and Reconverse](doc/converse-and-reconverse.md): how reconverse differs from classic Converse, with a block diagram of the modules and their interfaces, a side-by-side comparison, API compatibility notes, and what returns for AMPI (isomalloc, migratable threads).
 
 ## Build Reconverse

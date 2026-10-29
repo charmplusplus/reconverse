@@ -189,3 +189,46 @@ jobs:
             done
           done
           exit $status
+
+  # Windows, built with MSVC. There is no communication backend there (LCI and
+  # LCW off): a job is a single process whose PEs are threads. Charm++ builds
+  # on this for NAMD's Windows users (reconverse-win-x86_64).
+  windows-msvc:
+    runs-on: windows-latest
+    name: Windows (MSVC, single process)
+
+    steps:
+      - uses: actions/checkout@v7
+
+      # cl, link and ml64 (the fcontext sources are MASM), and Visual Studio's
+      # CMake and Ninja, on PATH for the steps below.
+      - uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Build
+        run: |
+          cmake -Bbuild -GNinja -DCMAKE_BUILD_TYPE=Debug `
+              -DRECONVERSE_TRY_ENABLE_COMM_LCI2=OFF `
+              -DRECONVERSE_TRY_ENABLE_COMM_LCW=OFF .
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cmake --build build --target all
+
+      # Every test that runs in one process. A multi-process test goes through
+      # RECONVERSE_TEST_LAUNCHER (mpirun), which this runner does not have:
+      # either CTest could not resolve its command, or the launcher is among
+      # its arguments. Those are listed and left out, so a new test is picked
+      # up or skipped by the same rule without editing this file.
+      #
+      # The CCS tests are left out too. Their server listens on a TCP port,
+      # which on a Windows desktop raises a firewall prompt that only an
+      # administrator can answer; this job should run what Windows developers
+      # without one can run themselves.
+      - name: Test (single process)
+        run: |
+          $launcher = 'mpirun'
+          $tests = (ctest --test-dir build --show-only=json-v1 | ConvertFrom-Json).tests
+          $skip = @($tests | Where-Object { -not $_.command -or ($_.command -contains $launcher) -or
+                                            $_.name -like 'ccs*' } |
+                    ForEach-Object { $_.name })
+          Write-Host "Skipped: multi-process or CCS ($($skip.Count)): $($skip -join ', ')"
+          $exclude = '^(' + (($skip | ForEach-Object { [regex]::Escape($_) }) -join '|') + ')$'
+          ctest --test-dir build --output-on-failure --timeout 120 -E $exclude
