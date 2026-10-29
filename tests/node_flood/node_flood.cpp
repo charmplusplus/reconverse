@@ -1,8 +1,9 @@
 // A stream of node-level messages must not starve a PE's own work (#268).
 //
-// The registered scheduler takes node-level messages ahead of the PE's own
-// queued work, up to +node_queue_max in a row. Here the node queue never
-// empties: a few node messages re-send themselves to this process forever.
+// Both schedulers take node-level messages ahead of the PE's own queued work,
+// up to +node_queue_max in a row (#268, and #273 for +old-scheduler). Here
+// the node queue never empties: a few node messages re-send themselves to
+// this process forever.
 // Meanwhile every PE runs a local message that re-sends itself to the PE
 // `count` times. The test passes when every PE finishes its local count; if
 // node messages could starve local work it would hang instead.

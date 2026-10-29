@@ -132,7 +132,7 @@ int _Cmi_numnodes_global;
 int Cmi_nodestartGlobal;
 int backend_poll_freq;
 int thread_queue_max; // +thread_queue_max: old scheduler, consecutive thread-queue messages before the priority queue gets a turn
-int node_queue_max; // +node_queue_max: registered scheduler, consecutive node-queue messages before the PE's own work gets a turn
+int node_queue_max; // +node_queue_max: consecutive node-queue messages before the PE's own work gets a turn (both schedulers)
 int backend_poll_thread;
 
 void (*CmiTraceFn)(char **argv) = nullptr;
@@ -651,7 +651,7 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
   if (thread_queue_max < 1) thread_queue_max = 1;
   node_queue_max = 16;
   CmiGetArgIntDesc(argv, "+node_queue_max", &node_queue_max,
-                   "registered scheduler: after N consecutive node-queue messages, run one of the PE's own");
+                   "after N consecutive node-queue messages, run one of the PE's own");
   if (node_queue_max < 1) node_queue_max = 1;
   if (backend_poll_freq < 1) backend_poll_freq = 1;
   backend_poll_thread = 1; // default to every thread
