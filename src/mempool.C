@@ -282,7 +282,6 @@ void mempool_destroy(mempool_type* mptr)
   }
 }
 
-// append slot_header size before the real memory buffer
 /** The pool a block belongs to */
 mempool_type* mempool_owner(void* ptr_free)
 {
@@ -292,6 +291,46 @@ mempool_type* mempool_owner(void* ptr_free)
              : (mempool_type*)(((block_header*)(to_free->block_ptr))->mptr);
 }
 
+/* The remote_free stack's atomics. MSVC lacks the GCC builtins; its
+   _Interlocked*Pointer intrinsics are full barriers, which covers the release
+   on the push and the acquire on the take. */
+#if CMI_MSVC
+#include <intrin.h>
+static inline void* remote_free_peek(mempool_type* mptr)
+{
+  return *(void* volatile*)&mptr->remote_free;
+}
+/* Pushes desired if the head is still *expected; otherwise *expected becomes
+   the head seen */
+static inline int remote_free_cas(mempool_type* mptr, void** expected, void* desired)
+{
+  void* seen = _InterlockedCompareExchangePointer(
+      (void* volatile*)&mptr->remote_free, desired, *expected);
+  if (seen == *expected)
+    return 1;
+  *expected = seen;
+  return 0;
+}
+static inline void* remote_free_take(mempool_type* mptr)
+{
+  return _InterlockedExchangePointer((void* volatile*)&mptr->remote_free, NULL);
+}
+#else
+static inline void* remote_free_peek(mempool_type* mptr)
+{
+  return __atomic_load_n(&mptr->remote_free, __ATOMIC_RELAXED);
+}
+static inline int remote_free_cas(mempool_type* mptr, void** expected, void* desired)
+{
+  return __atomic_compare_exchange_n(&mptr->remote_free, expected, desired, 1,
+                                     __ATOMIC_RELEASE, __ATOMIC_RELAXED);
+}
+static inline void* remote_free_take(mempool_type* mptr)
+{
+  return __atomic_exchange_n(&mptr->remote_free, NULL, __ATOMIC_ACQUIRE);
+}
+#endif
+
 /**
  * Free a block of another thread's pool without taking its lock: push it on
  * the pool's remote_free stack (one compare-and-swap). The owner takes the
@@ -300,19 +339,18 @@ mempool_type* mempool_owner(void* ptr_free)
  */
 void mempool_free_remote(mempool_type* mptr, void* ptr_free)
 {
-  void* head = __atomic_load_n(&mptr->remote_free, __ATOMIC_RELAXED);
+  void* head = remote_free_peek(mptr);
   do {
     *(void**)ptr_free = head;
-  } while (!__atomic_compare_exchange_n(&mptr->remote_free, &head, ptr_free, 1,
-                                        __ATOMIC_RELEASE, __ATOMIC_RELAXED));
+  } while (!remote_free_cas(mptr, &head, ptr_free));
 }
 
 /** With the pool's lock held: free every block other threads handed back */
 static void take_remote_frees(mempool_type* mptr)
 {
-  if (!__atomic_load_n(&mptr->remote_free, __ATOMIC_RELAXED))
+  if (!remote_free_peek(mptr))
     return;
-  void* p = __atomic_exchange_n(&mptr->remote_free, NULL, __ATOMIC_ACQUIRE);
+  void* p = remote_free_take(mptr);
   while (p) {
     void* next = *(void**)p;
     mempool_free(mptr, p);
@@ -320,6 +358,7 @@ static void take_remote_frees(mempool_type* mptr)
   }
 }
 
+// append slot_header size before the real memory buffer
 void* mempool_malloc(mempool_type* mptr, size_t size, int expand)
 {
   size_t size_with_used_header = size + sizeof(used_header); // "bestfit"?
