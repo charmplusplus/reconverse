@@ -3,11 +3,12 @@
 //
 // The body below is a copy of the loops that lived in scheduler.cpp before the
 // queue-registration work. Apart from the two function names, the only changes
-// are the +backend_poll_freq rate handling and the shared-memory IPC drain
-// (CmiSchedulerPollIpc, in both loops); everything else is untouched
-// on purpose. This is the known-good fallback to compare the registered
-// scheduler against, so please resist tidying it. The default implementation
-// is scheduler_registered.cpp.
+// are the +backend_poll_freq rate handling, the shared-memory IPC drain
+// (CmiSchedulerPollIpc, in both loops) and the +thread_queue_max and
+// +node_queue_max bounds on the thread queue and the two node queues;
+// everything else is untouched on purpose. This is the known-good fallback to
+// compare the registered scheduler against, so please resist tidying it. The
+// default implementation is scheduler_registered.cpp.
 
 #include "scheduler.h"
 #include "converse.h"
@@ -38,6 +39,7 @@ void CsdSchedulerOld() {
   if (poll_period < 1) poll_period = 1;
 
   int tq_streak = 0; // consecutive thread-queue messages, see the thread-queue branch below
+  int nq_streak = 0; // consecutive node-level messages, see the node-queue branch below
   while (CmiStopFlag() == 0) {
 
     CcdRaiseCondition(CcdSCHEDLOOP);
@@ -45,10 +47,19 @@ void CsdSchedulerOld() {
     // messages from peer processes on this host (+ipc)
     CmiSchedulerPollIpc();
 
-    // poll node queue
-    if (!nodeQueue->empty()) {
+    // poll node queue (the process's converse node queue), ahead of this PE's
+    // own queues. After +node_queue_max node-level messages in a row (from
+    // here or the node priority queue below), one iteration skips it if the
+    // PE has work of its own, so that a stream of node messages cannot starve
+    // the thread queue (other PEs' messages, CmiExit's among them) or the
+    // priority queue (#273). Any iteration that runs something else, or
+    // nothing, resets the streak.
+    if (!nodeQueue->empty() &&
+        (nq_streak < node_queue_max ||
+         (queue->empty() && QueueEmpty(CpvAccess(CsdSchedQueue))))) {
       auto result = nodeQueue->pop();
       if (result) {
+        nq_streak++;
         void *msg = result.value();
 
         // release idle if necessary
@@ -72,6 +83,7 @@ void CsdSchedulerOld() {
     // priority queue branch below ran something. The registered scheduler has
     // the same bound from its 16:16 slot weights.
     else if (!queue->empty()) {
+      nq_streak = 0; // the PE's own queues get this iteration
       void *msg = nullptr;
       if (tq_streak < thread_queue_max || QueueEmpty(CpvAccess(CsdSchedQueue))) {
         // the count said non-empty; pop() can still come back empty when a
@@ -104,13 +116,21 @@ void CsdSchedulerOld() {
       // line dominates the scheduler loop and so the latency of noticing any
       // message at all. Measured at 1 process x 120 PEs: 4201 ns per idle
       // iteration before, 88 ns after.
-      if (CsdNodeQueueLenGet() > 0 &&
+      //
+      // The node priority queue counts toward the node-level streak above:
+      // once it is reached, the priority queue gets this iteration if it has
+      // work. Before that bound, local work here ran only when the try-lock
+      // happened to fail, so with one PE (no contention) it never ran (#273).
+      if ((nq_streak < node_queue_max ||
+           QueueEmpty(CpvAccess(CsdSchedQueue))) &&
+          CsdNodeQueueLenGet() > 0 &&
           CmiTryLock(CsvAccess(CsdNodeQueueLock)) == 0) {
         if (!QueueEmpty(CsvAccess(CsdNodeQueue))) {
           void* msg = QueueTop(CsvAccess(CsdNodeQueue));
           QueuePop(CsvAccess(CsdNodeQueue));
           CsdNodeQueueLenAdd(-1);
           CmiUnlock(CsvAccess(CsdNodeQueueLock));
+          nq_streak++;
 
           // release idle if necessary
           if (CmiGetIdle()) {
@@ -123,6 +143,7 @@ void CsdSchedulerOld() {
         } 
         else {
           CmiUnlock(CsvAccess(CsdNodeQueueLock));
+          nq_streak = 0;
           //empty queue so check thread prio queue
           if (!QueueEmpty(CpvAccess(CsdSchedQueue))) {
           void *msg = QueueTop(CpvAccess(CsdSchedQueue));
@@ -170,7 +191,9 @@ void CsdSchedulerOld() {
         }        
       } 
       else {
-        // Could not acquire node queue lock, skip to thread prio queue
+        // Could not acquire node queue lock, or the node-level streak gave
+        // the priority queue this turn: skip to thread prio queue
+        nq_streak = 0;
         if (!QueueEmpty(CpvAccess(CsdSchedQueue))) {
           void *msg = QueueTop(CpvAccess(CsdSchedQueue));
           QueuePop(CpvAccess(CsdSchedQueue));
@@ -244,6 +267,7 @@ void CsdSchedulePollOld() {
   ConverseNodeQueue<void *> *nodeQueue = CmiGetNodeQueue();
 
   int tq_streak = 0; // consecutive thread-queue messages, see the thread-queue branch below
+  int nq_streak = 0; // consecutive node-level messages, see the node-queue branch below
   while(1){
 
     CsdPeriodic();
@@ -253,10 +277,19 @@ void CsdSchedulePollOld() {
     // messages from peer processes on this host (+ipc)
     CmiSchedulerPollIpc();
 
-    // poll node queue
-    if (!nodeQueue->empty()) {
+    // poll node queue (the process's converse node queue), ahead of this PE's
+    // own queues. After +node_queue_max node-level messages in a row (from
+    // here or the node priority queue below), one iteration skips it if the
+    // PE has work of its own, so that a stream of node messages cannot starve
+    // the thread queue (other PEs' messages, CmiExit's among them) or the
+    // priority queue (#273). Any iteration that runs something else, or
+    // nothing, resets the streak.
+    if (!nodeQueue->empty() &&
+        (nq_streak < node_queue_max ||
+         (queue->empty() && QueueEmpty(CpvAccess(CsdSchedQueue))))) {
       auto result = nodeQueue->pop();
       if (result) {
+        nq_streak++;
         void *msg = result.value();
 
         // release idle if necessary
@@ -267,7 +300,6 @@ void CsdSchedulePollOld() {
 
         // process event
         CmiHandleMessage(msg);
-
       }
     }
 
@@ -281,6 +313,7 @@ void CsdSchedulePollOld() {
     // priority queue branch below ran something. The registered scheduler has
     // the same bound from its 16:16 slot weights.
     else if (!queue->empty()) {
+      nq_streak = 0; // the PE's own queues get this iteration
       void *msg = nullptr;
       if (tq_streak < thread_queue_max || QueueEmpty(CpvAccess(CsdSchedQueue))) {
         // the count said non-empty; pop() can still come back empty when a
@@ -314,13 +347,21 @@ void CsdSchedulePollOld() {
       // line dominates the scheduler loop and so the latency of noticing any
       // message at all. Measured at 1 process x 120 PEs: 4201 ns per idle
       // iteration before, 88 ns after.
-      if (CsdNodeQueueLenGet() > 0 &&
+      //
+      // The node priority queue counts toward the node-level streak above:
+      // once it is reached, the priority queue gets this iteration if it has
+      // work. Before that bound, local work here ran only when the try-lock
+      // happened to fail, so with one PE (no contention) it never ran (#273).
+      if ((nq_streak < node_queue_max ||
+           QueueEmpty(CpvAccess(CsdSchedQueue))) &&
+          CsdNodeQueueLenGet() > 0 &&
           CmiTryLock(CsvAccess(CsdNodeQueueLock)) == 0) {
         if (!QueueEmpty(CsvAccess(CsdNodeQueue))) {
           void *msg = QueueTop(CsvAccess(CsdNodeQueue));
           QueuePop(CsvAccess(CsdNodeQueue));
           CsdNodeQueueLenAdd(-1);
           CmiUnlock(CsvAccess(CsdNodeQueueLock));
+          nq_streak++;
 
           // release idle if necessary
           if (CmiGetIdle()) {
@@ -334,6 +375,7 @@ void CsdSchedulePollOld() {
         } 
         else {
           CmiUnlock(CsvAccess(CsdNodeQueueLock));
+          nq_streak = 0;
           if (!QueueEmpty(CpvAccess(CsdSchedQueue))) {
           void *msg = QueueTop(CpvAccess(CsdSchedQueue));
           QueuePop(CpvAccess(CsdSchedQueue));
@@ -375,7 +417,9 @@ void CsdSchedulePollOld() {
         }
       } 
       else {
-        // Could not acquire node queue lock, skip to thread prio queue
+        // Could not acquire node queue lock, or the node-level streak gave
+        // the priority queue this turn: skip to thread prio queue
+        nq_streak = 0;
         if (!QueueEmpty(CpvAccess(CsdSchedQueue))) {
           void *msg = QueueTop(CpvAccess(CsdSchedQueue));
           QueuePop(CpvAccess(CsdSchedQueue));
