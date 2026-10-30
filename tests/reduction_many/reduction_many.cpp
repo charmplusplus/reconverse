@@ -17,6 +17,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <atomic>
 
 struct Message {
   CmiMessageHeader header;
@@ -27,7 +28,10 @@ struct Message {
 static int done_idx, start_idx;
 static bool nodeMode = false;
 static int rounds = 50, window = 8;
-static int doneInRound = 0;  // on the root only
+// On the root only. A node reduction's result is handled by whichever PE of
+// node 0 merges its last contribution (a node send, as in classic Converse),
+// so with several PEs per process two results can be handled at once.
+static std::atomic<int> doneInRound{0};
 
 static int contributors() { return nodeMode ? CmiNumNodes() : CmiNumPes(); }
 static int me() { return nodeMode ? CmiMyNode() : CmiMyPe(); }
@@ -68,7 +72,8 @@ static void startHandler(void *vmsg) {
   if (!nodeMode || CmiMyRank() == 0) contribute(round);
 }
 
-// runs on the root once a reduction completes
+// runs on the root once a reduction completes: PE 0 in mode `pe`, any PE of
+// node 0 in mode `node`
 static void doneHandler(void *vmsg) {
   Message *m = (Message *)vmsg;
   if (m->value != expected(m->round, m->slot))
@@ -76,7 +81,9 @@ static void doneHandler(void *vmsg) {
              m->round, m->slot, expected(m->round, m->slot), m->value);
   int round = m->round;
   CmiFree(m);
-  if (++doneInRound < window) return;
+  // only the PE that counts the round's last result goes on; it resets the
+  // count before starting the next round, whose results all come after
+  if (doneInRound.fetch_add(1) + 1 < window) return;
   doneInRound = 0;
   if (round + 1 == rounds) {
     printf("reduction_many: %s, %d reductions (%d rounds of %d in flight) "
