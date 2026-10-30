@@ -82,7 +82,7 @@ What is deliberately not in the picture: no comm thread (progress is a call in e
 | Scheduler | One hard-coded loop in convcore.C polling a fixed set of queues and the machine layer. | Pollable sources register a handler in a slot table (scheduler_registered.cpp). The original loop is kept behind `+old-scheduler`; `+randomized_msgq` delivers in random order for testing. |
 | User-level threads | Cth on QuickThreads or uFcontext/uJcontext; migratable threads with isomalloc stacks, CthPup. | Cth on boost fcontext (vendored boost-context, 6,000 code lines of assembly and headers). Same create/suspend/awaken/yield API. Migratable threads (`CthCreateMigratable`, `CthPupThread` through a caller-supplied `CmiPupStream`) once an Isomalloc provider registers with `CthRegisterIsomallocOps`; without one, the migratable flag is accepted and ignored. |
 | Isomalloc | isomalloc.C (2,174 code lines) and memory-isomalloc.C: address-space partition across processes, migratable stacks and heaps. | Not in reconverse: it stays in Charm++ (AMPI stage 1, charm #4064) and plugs in through `CthRegisterIsomallocOps` and `registerIsomallocInit`. |
-| Memory | CmiAlloc with pluggable memory modules (gnu malloc, paranoid, isomalloc, ...); CmiMemoryUsage reports real figures. | CmiAlloc and CmiFree present; messages come from the backend's registered mempool. `CmiMemoryUsage` is a stub returning 0. `+glibc_tuned_malloc` tunes glibc instead. |
+| Memory | CmiAlloc with pluggable memory modules (gnu malloc, paranoid, isomalloc, ...); CmiMemoryUsage reports real figures. | CmiAlloc and CmiFree present; messages come from the backend's registered mempool. The `CmiMemoryUsage` family reports real figures from OS probes (mallinfo2, malloc zone statistics, /proc, Windows), with no memory module behind it. `+glibc_tuned_malloc` tunes glibc instead. |
 | Zero-copy and persistent | Ncpy get/put, device zero-copy, persistent channels, all machine-layer specific. | Same APIs (conv-rdma.h, persistent.h) on the backend's registerMemory, issueRget and issueRput. |
 | Same-host IPC | PXSHM and XPMEM inside the machine layers (netlrts, verbs, gni). | A Converse-level pool, `+ipc`, with shm and xpmem transports, usable by any backend. |
 | Collectives | Spanning-tree broadcast and reductions in the machine-common code; CmiReduce with ID, struct and pup variants. | Spanning-tree broadcast, node broadcast, CmiReduce and CmiNodeReduce with merge functions only. Backend provides a barrier and nothing else. |
@@ -163,7 +163,7 @@ About 210 identifiers from classic's converse.h have no counterpart. The ones a 
 - Reductions: `CmiReduceID`, `CmiReduceStruct`, the pup and delete variants. Only `CmiReduce` and `CmiNodeReduce` with a merge function remain.
 - Idle and comm-thread notification: `CmiNotifyIdle`, `CmiNotifyCommThd*`; use `CcdCallOnCondition(CcdPROCESSOR_STILL_IDLE, ...)`.
 - Conditions: `CcdCallOnConditionOnPE`, `CcdSetResolution`.
-- Memory and debugging: `CmiMemoryMark/Sweep/Check`, `CmiMemoryAtomic*`, `CmiAlignedAlloc`, `CmiPoolAlloc`, `CmiBacktrace*`, `CmiHwlocTopology`; `CmiMemoryUsage` exists but returns 0.
+- Memory and debugging: `CmiMemoryMark/Sweep/Check`, `CmiMemoryAtomic*`, `CmiAlignedAlloc`, `CmiPoolAlloc`, `CmiBacktrace*`, `CmiHwlocTopology`.
 - Handlers: `CmiRegisterHandlerLocal` and `CmiRegisterHandlerGlobal` (only `CmiRegisterHandler`).
 - In-memory checkpoint hooks: `CmiGetRestartPhase` and the restart-phase message filter.
 

@@ -668,13 +668,30 @@ int CmiGetPageSize(void);
 void CmiFree(void *msg);
 #define CmiRdmaAlloc CmiAlloc
 #define CmiRdmaFree CmiFree
-#ifdef _WIN32
-// Bytes of memory the process has committed, as classic Converse reported on
-// Windows. NAMD's memory reports rely on it there, having no /proc to read.
+// Memory usage of the process, in bytes (classic Converse's family).
+// CmiMemoryUsage asks the first probe that answers on this platform:
+//   - glibc 2.33 or later: mallinfo2, the bytes malloc has handed out and not
+//     had back (in its arenas and in blocks it mapped on their own), unless
+//     reconverse links jemalloc;
+//   - macOS: malloc_zone_statistics, the same figure over all malloc zones,
+//     unless reconverse links jemalloc; else the resident size (task_info);
+//   - Windows: the committed private bytes, as classic Converse reported;
+//   - otherwise: the resident size from /proc/self/statm.
+// CmiMemoryUsageReporter names the probe that answered, or "none".
+// CmiMaxMemoryUsageR is the peak resident size of the process since it
+// started (getrusage's ru_maxrss; the peak working set on Windows).
+// CmiMaxMemoryUsage and CmiMinMemoryUsage are the highest and lowest
+// CmiMemoryUsage seen since the last CmiResetMaxMemory / CmiResetMinMemory.
+// No malloc wrapper stands behind them: usage is sampled at each call to
+// CmiMemoryUsage, CmiMaxMemoryUsage, CmiMinMemoryUsage and the resets, so a
+// peak or trough between two calls is missed. The marks are per process.
 CmiUInt8 CmiMemoryUsage(void);
-#else
-#define CmiMemoryUsage() 0
-#endif
+const char *CmiMemoryUsageReporter(void);
+CmiUInt8 CmiMaxMemoryUsageR(void);
+CmiUInt8 CmiMaxMemoryUsage(void);
+void CmiResetMaxMemory(void);
+CmiUInt8 CmiMinMemoryUsage(void);
+void CmiResetMinMemory(void);
 void CmiMemoryMarkBlock(void *blk);
 extern void
     *memory_stack_top; // TODO: replace this with actual memory implementation
