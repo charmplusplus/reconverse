@@ -356,23 +356,46 @@ void CommBackendLCI::issueAm(int rank, const void *local_buf, size_t size, mr_t 
   }
 }
 
+// What getRMR hands out for a registered buffer: the remote memory region on
+// ONE device, and that device's index. A one-sided operation has to use the
+// same device index on both ends (LCI creates devices collectively, so device
+// i of each rank is connected to device i of every other), so the buffer's
+// owner names the device and the initiator posts on it, whichever device the
+// initiator's own thread uses. Handing out every device's region instead made
+// the size grow with +lci_ndevices and outgrow CMK_NOCOPY_DIRECT_BYTES at two
+// devices (#203).
+struct WireRMR {
+  uint32_t device_idx;
+  uint32_t reserved;
+  lci::rmr_t rmr;
+};
+
+static WireRMR readWireRMR(const void *rmr) {
+  WireRMR w{};
+  if (rmr != nullptr)
+    std::memcpy(&w, rmr, sizeof(w));
+  return w;
+}
+
 void CommBackendLCI::issueRget(int rank, const void *local_buf, size_t size,
                                 mr_t local_mr, void* remote_buf, void *rmr,
                                 CompHandler localComp, void *user_context) {
   auto args = new localCallbackArgs{localComp, user_context};
   lci::status_t status;
-  uintptr_t remote_disp = (uintptr_t)remote_buf - getThreadLocalRMR(rmr).base;
+  WireRMR remote = readWireRMR(rmr);
+  int dev = checkedDeviceIndex(remote.device_idx);
+  uintptr_t remote_disp = (uintptr_t)remote_buf - remote.rmr.base;
   // Same reentrancy guard as issueAm: don't spin when called from a completion
   // callback, push to backlog instead.
   bool allow_retry = !detail::g_in_progress_callback;
   do {
     status = lci::post_get_x(rank, const_cast<void *>(local_buf), size,
-                             m_local_comp, remote_disp, getThreadLocalRMR(rmr))
-                 .mr(getThreadLocalMR(local_mr))
-                 .device(getThreadLocalDevice())
+                             m_local_comp, remote_disp, remote.rmr)
+                 .mr(getDeviceMR(local_mr, dev))
+                 .device(m_devices[dev])
                  .user_context(args)
                  .allow_retry(allow_retry)();
-    if (allow_retry) progress();
+    if (allow_retry) progressForPost(dev);
   } while (status.is_retry());
   if (status.is_done()) {
     localComp({local_buf, size, user_context});
@@ -385,6 +408,8 @@ void CommBackendLCI::issueRput(int rank, const void *local_buf, size_t size,
                                 CompHandler localComp, void *user_context) {
   auto args = new localCallbackArgs{localComp, user_context};
   lci::status_t status;
+  WireRMR remote = readWireRMR(rmr);
+  int dev = checkedDeviceIndex(remote.device_idx);
   // Same reentrancy guard as issueAm/issueRget: when called from inside a
   // completion callback this thread already holds m_progress_locks[dev], so the
   // nested progress() below is a no-op. Spinning on retry would then hold that
@@ -392,12 +417,12 @@ void CommBackendLCI::issueRput(int rank, const void *local_buf, size_t size,
   bool allow_retry = !detail::g_in_progress_callback;
   do {
     status = lci::post_put_x(rank, const_cast<void *>(local_buf), size,
-                             m_local_comp, remote_disp, getThreadLocalRMR(rmr))
-                 .mr(getThreadLocalMR(local_mr))
-                 .device(getThreadLocalDevice())
+                             m_local_comp, remote_disp, remote.rmr)
+                 .mr(getDeviceMR(local_mr, dev))
+                 .device(m_devices[dev])
                  .user_context(args)
                  .allow_retry(allow_retry)();
-    if (allow_retry) progress();
+    if (allow_retry) progressForPost(dev);
   } while (status.is_retry());
   if (status.is_done()) {
     localComp({local_buf, size, user_context});
@@ -409,46 +434,44 @@ bool CommBackendLCI::threadMustPoll() {
   return detail::g_thread_context.device_poller;
 }
 
-bool CommBackendLCI::progress(void) {
+bool CommBackendLCI::progressDevice(int dev_idx) {
   // OFI fi_cq_read is not thread-safe. Use a per-device trylock so at most
   // one thread polls each device CQ at a time. Callers that lose the race
   // simply return without making progress — the winning thread covers them.
-  if (!detail::g_thread_context.tls_device.is_empty()) {
-    int dev_idx = detail::g_thread_context.device_idx;
-    bool expected = false;
-    if (!m_progress_locks[dev_idx].v.compare_exchange_strong(
-            expected, true, std::memory_order_acquire,
-            std::memory_order_relaxed)) {
-      return false;
-    }
-    // Mark that completion callbacks fired inside progress_x() are reentrant.
-    // issueAm/issueRget check this flag to avoid spinning (which would hold
-    // m_progress_locks indefinitely and deadlock the TX queue drain path).
-    bool prev_in_cb = detail::g_in_progress_callback;
-    detail::g_in_progress_callback = true;
-    auto ret = lci::progress_x().device(detail::g_thread_context.tls_device)();
-    detail::g_in_progress_callback = prev_in_cb;
-    m_progress_locks[dev_idx].v.store(false, std::memory_order_release);
-    return ret.is_done();
-  } else {
-    bool did_progress = false;
-    for (int i = 0; i < (int)m_devices.size(); i++) {
-      bool expected = false;
-      if (!m_progress_locks[i].v.compare_exchange_strong(
-              expected, true, std::memory_order_acquire,
-              std::memory_order_relaxed)) {
-        continue;
-      }
-      bool prev_in_cb = detail::g_in_progress_callback;
-      detail::g_in_progress_callback = true;
-      auto ret = lci::progress_x().device(m_devices[i])();
-      detail::g_in_progress_callback = prev_in_cb;
-      m_progress_locks[i].v.store(false, std::memory_order_release);
-      if (ret.is_done())
-        did_progress = true;
-    }
-    return did_progress;
+  bool expected = false;
+  if (!m_progress_locks[dev_idx].v.compare_exchange_strong(
+          expected, true, std::memory_order_acquire,
+          std::memory_order_relaxed)) {
+    return false;
   }
+  // Mark that completion callbacks fired inside progress_x() are reentrant.
+  // issueAm/issueRget check this flag to avoid spinning (which would hold
+  // m_progress_locks indefinitely and deadlock the TX queue drain path).
+  bool prev_in_cb = detail::g_in_progress_callback;
+  detail::g_in_progress_callback = true;
+  auto ret = lci::progress_x().device(m_devices[dev_idx])();
+  detail::g_in_progress_callback = prev_in_cb;
+  m_progress_locks[dev_idx].v.store(false, std::memory_order_release);
+  return ret.is_done();
+}
+
+bool CommBackendLCI::progress(void) {
+  if (!detail::g_thread_context.tls_device.is_empty())
+    return progressDevice(detail::g_thread_context.device_idx);
+  bool did_progress = false;
+  for (int i = 0; i < (int)m_devices.size(); i++)
+    if (progressDevice(i))
+      did_progress = true;
+  return did_progress;
+}
+
+// A post retried on another thread's device would otherwise wait for that
+// device's poller to drain it.
+void CommBackendLCI::progressForPost(int dev_idx) {
+  progress();
+  if (dev_idx != detail::g_thread_context.device_idx &&
+      !detail::g_thread_context.tls_device.is_empty())
+    progressDevice(dev_idx);
 }
 
 void CommBackendLCI::barrier(void) {
@@ -475,15 +498,18 @@ mr_t CommBackendLCI::registerMemory(void *addr, size_t size) {
 }
 
 size_t CommBackendLCI::getRMR(mr_t mr, void *addr, size_t size) {
-  lci::mr_t *mrs = (lci::mr_t *)mr;
-  if (addr && size >= sizeof(lci::rmr_t) * m_devices.size()) {
-    for (int i = 0; i < m_devices.size(); i++) {
-      lci::rmr_t rkey = lci::get_rmr(lci::mr_t(mrs[i]));
-      std::memcpy(addr, &rkey, sizeof(lci::rmr_t));
-      addr = (char *)addr + sizeof(lci::rmr_t);
-    }
+  if (addr && size >= sizeof(WireRMR)) {
+    // The owner's own device, so one-sided traffic spreads over the devices
+    // the way the buffers' owners do. A thread that is not a PE uses device 0.
+    int dev = detail::g_thread_context.device_idx;
+    if (dev < 0)
+      dev = 0;
+    WireRMR w{};
+    w.device_idx = dev;
+    w.rmr = lci::get_rmr(getDeviceMR(mr, dev));
+    std::memcpy(addr, &w, sizeof(w));
   }
-  return sizeof(lci::rmr_t) * m_devices.size();
+  return sizeof(WireRMR);
 }
 
 void CommBackendLCI::deregisterMemory(mr_t mr_) {
@@ -529,18 +555,25 @@ lci::device_t CommBackendLCI::getThreadLocalDevice() {
 }
 
 lci::mr_t CommBackendLCI::getThreadLocalMR(mr_t mr) {
+  return getDeviceMR(mr, detail::g_thread_context.device_idx);
+}
+
+lci::mr_t CommBackendLCI::getDeviceMR(mr_t mr, int device_idx) {
   if (mr == MR_NULL) {
     return lci::mr_t();
   }
-  return lci::mr_t(
-      static_cast<lci::mr_impl_t **>(mr)[detail::g_thread_context.device_idx]);
+  return lci::mr_t(static_cast<lci::mr_impl_t **>(mr)[device_idx]);
 }
 
-lci::rmr_t CommBackendLCI::getThreadLocalRMR(void *rmr) {
-  if (rmr == nullptr) {
-    return lci::rmr_t();
-  }
-  return static_cast<lci::rmr_t *>(rmr)[detail::g_thread_context.device_idx];
+// The device a remote buffer's owner named. Every process must run with the
+// same +lci_ndevices; checked in every build, since an index past the end
+// would post on a device that does not exist.
+int CommBackendLCI::checkedDeviceIndex(uint32_t device_idx) {
+  if (device_idx >= m_devices.size())
+    CmiAbort("LCI backend: a remote buffer is registered on device %u, but "
+             "this process has %zu devices; run every process with the same "
+             "+lci_ndevices\n", device_idx, m_devices.size());
+  return (int)device_idx;
 }
 
 } // namespace lci_impl

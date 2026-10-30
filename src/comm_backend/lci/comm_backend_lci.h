@@ -95,7 +95,11 @@ private:
 
   lci::device_t getThreadLocalDevice();
   lci::mr_t getThreadLocalMR(mr_t mr);
-  lci::rmr_t getThreadLocalRMR(void *rmr);
+  lci::mr_t getDeviceMR(mr_t mr, int device_idx);
+  bool progressDevice(int device_idx);
+  // Progress the caller's device and, if different, the one it posts on.
+  void progressForPost(int device_idx);
+  int checkedDeviceIndex(uint32_t device_idx);
 };
 
 } // namespace lci_impl

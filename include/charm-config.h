@@ -19,9 +19,9 @@
  * ccs-server.h, sockRoutines.h and the ccs-client library. */
 #define CMK_CCS_AVAILABLE 1
 
-// Size of the machine-layer buffer in CmiNcpyBuffer::layerInfo.
-// Reconverse uses 8 bytes for mr_t + 16 bytes for rmr + 8 bytes spare = 32.
+// Size of the machine-layer buffer in CmiNcpyBuffer::layerInfo: 8 bytes for
+// mr_t + 32 for the remote region (device index and lci::rmr_t) = 40.
 // This must match CMK_NOCOPY_DIRECT_BYTES in reconverse/include/conv-rdma.h.
-#define CMK_NOCOPY_DIRECT_BYTES 32
+#define CMK_NOCOPY_DIRECT_BYTES 40
 
 #endif
