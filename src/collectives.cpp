@@ -674,7 +674,11 @@ void CmiSendNodeReduce(CmiReduction *red) {
     // because we need to know that a) its a reduction message and b) what
     // reduction ID it is
     CmiSetRedID(msg, red->ReductionID);
-    CmiSyncSendAndFree(red->parent, msg_size, msg);
+    // red->parent is a node, so this is a node send. The PE send this used
+    // to be reached the parent only when PE number red->parent lived there
+    // (one PE per process, or parent node 0); otherwise the parent waited
+    // forever and the node holding that PE overran its remotebuffer.
+    CmiSyncNodeSendAndFree(red->parent, msg_size, msg);
   } else {
     (red->ops.desthandler)(msg);
   }
@@ -689,6 +693,14 @@ void CmiNodeReduceHandler(void *msg) {
   CmiLock(nodeRed.lock);
 
   CmiReduction *reduction = CmiGetCreateNodeReduction(CmiGetRedID(msg));
+
+  // remotebuffer holds exactly numChildren entries; one more contribution
+  // than that is a routing error, and storing it would corrupt the heap
+  if (reduction->messagesReceived >= reduction->numChildren)
+    CmiAbort("Node reduction %u: node %d received contribution %d but has "
+             "only %d children in the node spanning tree",
+             (unsigned)CmiGetRedID(msg), CmiMyNode(),
+             reduction->messagesReceived + 1, reduction->numChildren);
 
   // how are we ensuring the messages arrive in order again?
   reduction->remotebuffer[reduction->messagesReceived] = (char *)msg;
