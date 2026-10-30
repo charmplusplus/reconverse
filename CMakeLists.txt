@@ -221,6 +221,8 @@ endif()
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   target_link_options(reconverse INTERFACE -rdynamic)
 endif()
+# backtrace.cpp calls dladdr, which lives in libdl before glibc 2.34.
+target_link_libraries(reconverse PUBLIC ${CMAKE_DL_LIBS})
 # Rank 0 runs on the main thread, whose stack size is fixed in the executable
 # header. Windows defaults it to 1 MB; give it the 8 MB the other PE threads
 # get (CmiStartThreads) and that Linux and macOS main threads have. It is
