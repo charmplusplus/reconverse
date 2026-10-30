@@ -69,11 +69,10 @@ extern "C" {
 #define PERSIST_BUFFERS_NUM 4
 
 /* Bytes reserved for a serialized remote memory region handle. Must be large
-   enough for whatever comm_backend::getRMR() produces, which for the LCI
-   backend is one lci::rmr_t (24 B) per device -- so this scales with
-   +lci_ndevices, not with anything fixed. At 64 only two devices fit and any run with three or more
-   aborted in fillBufDescs() the moment the persistent path engaged. 2048
-   covers a full 72-core node one device per PE. */
+   enough for whatever comm_backend::getRMR() produces. For the LCI backend
+   that is a device index and one lci::rmr_t (32 B) however many devices
+   there are; it used to be one lci::rmr_t per device, which is why this is
+   sized for a 72-core node with one device per PE. */
 #define CMK_PERSISTENT_RMR_BYTES 2048
 
 /* Reference count base used to mark a persistent receive buffer. CmiFree()
