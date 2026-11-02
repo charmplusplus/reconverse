@@ -662,12 +662,19 @@ void CmiSetRdmaBufferInfo(void *info, const void *ptr, int size,
     // We need to write both the local memory region (mr_t) and the remote
     // memory region (rmr) into the info
     auto mr = comm_backend::registerMemory((void *)ptr, size);
-    CmiAssert(CMK_NOCOPY_DIRECT_BYTES >= sizeof(mr));
+    static_assert(CMK_NOCOPY_DIRECT_BYTES >= sizeof(mr),
+                  "CMK_NOCOPY_DIRECT_BYTES cannot hold an mr_t");
     memcpy(info, &mr, sizeof(mr));
     info = (char *)info + sizeof(mr);
     size_t info_size_left = CMK_NOCOPY_DIRECT_BYTES - sizeof(mr);
     size_t rmr_size = comm_backend::getRMR(mr, info, info_size_left);
-    CmiAssertMsg(rmr_size <= info_size_left, "CMK_NOCOPY_DIRECT_BYTES is too small");
+    // getRMR writes nothing when the space is too small, and the peer would
+    // then read or write through a garbage region, so this check stays in
+    // optimized builds, where CmiAssert is compiled out.
+    if (rmr_size > info_size_left)
+      CmiAbort("CMK_NOCOPY_DIRECT_BYTES (%d) is too small: the backend's remote "
+               "region needs %zu bytes after the %zu-byte mr_t\n",
+               CMK_NOCOPY_DIRECT_BYTES, rmr_size, sizeof(mr));
   }
 }
 

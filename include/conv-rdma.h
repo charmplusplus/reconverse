@@ -43,9 +43,11 @@ extern bool CmiUseCopyBasedRDMA;
 // CmiForwardNodeBcastMsg still stubs out here. Keep that feature off, so
 // readonlies keep being packed inline as before, until it is supported.
 #define CMK_ONESIDED_RO_DISABLE 1
-// 8-byte for mr, 16-byte for rmr
-// TODO: better to use dynamic allocation and PUP
-#define CMK_NOCOPY_DIRECT_BYTES 32
+// The local memory region handle (comm_backend::mr_t, 8 bytes) followed by
+// what comm_backend::getRMR() writes for remote access: for the LCI backend a
+// device index and one lci::rmr_t (4 + 4 + 24 bytes), whatever +lci_ndevices
+// is. Must match CMK_NOCOPY_DIRECT_BYTES in charm-config.h.
+#define CMK_NOCOPY_DIRECT_BYTES 40
 
 /*********************************** Zerocopy Direct API
  * **********************************/
