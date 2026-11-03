@@ -68,6 +68,10 @@ extern int backend_poll_freq;
 extern int thread_queue_max;
 extern int node_queue_max; // registered scheduler: node messages in a row before local work gets a turn
 extern int backend_poll_thread; // every backend_poll_thread threads will call progress
+// +backend_poll_single: poll the network in the scheduler even when the run has
+// one process (by default such a run never registers the poll: nothing
+// arrives over the network, and the backend's barriers poll it themselves)
+extern int backend_poll_single;
 
 // Priority of the message QueueTop would return (smaller runs first), or
 // LLONG_MAX when the queue is empty. queueing.cpp.
