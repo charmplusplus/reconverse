@@ -10,6 +10,7 @@
 #include "cmi-shmem-common.h"
 #include "converse_config.h"
 
+#include <algorithm>
 #include <cstring>
 
 #define CMI_DEST_RANK(msg) ((CmiMsgHeaderBasic*)msg)->destPE
@@ -63,6 +64,22 @@ static void finishSetup_(CmiIpcManager* meta) {
     if (proc != meta->mine && proc >= 0 && proc < (int)meta->peers.size())
       meta->peers[proc] = 1;
   }
+  // Each PE's index among the host's PEs names its return lists in every
+  // peer's segment, and each rank has one receive queue in its own.
+  CmiEnforceMsg(nSize <= kMaxIpcRanks && nPes <= kMaxIpcHostPes,
+                "shared-memory pool: %d PEs per process and %d per host; at "
+                "most %d and %d are supported (kMaxIpcRanks, kMaxIpcHostPes)",
+                nSize, nPes, kMaxIpcRanks, kMaxIpcHostPes);
+  for (int r = 0; r < nSize; r++) {
+    const int pe = CmiNodeFirst(meta->mine) + r;
+    auto& st = meta->pe[r];
+    st.hostIdx = (int)(std::find(pes, pes + nPes, pe) - pes);
+    CmiEnforceMsg(st.hostIdx < nPes, "shared-memory pool: PE %d is not on its "
+                  "own host's PE list", pe);
+    st.cache.resize(CmiNumNodes());
+    for (auto& c : st.cache) c.fill(cmi::ipc::max);
+    st.inbox.reserve(256);
+  }
   meta->ready.store(true, std::memory_order_release);
 }
 
@@ -77,13 +94,32 @@ static void finishSetup_(CmiIpcManager* meta) {
 
 extern void CmiPushNode(void* msg);
 
-inline static CmiIpcBlock* popBlock_(std::atomic<std::uintptr_t>& head,
-                                     void* base);
-inline static bool pushBlock_(std::atomic<std::uintptr_t>& head,
-                              std::uintptr_t value, void* base);
-inline static CmiIpcBlock* popBlockFifo_(ipc_shared_* shared);
-inline static bool pushBlockFifo_(ipc_shared_* shared, std::uintptr_t value);
-static std::uintptr_t allocBlock_(ipc_shared_* meta, std::size_t size);
+// Pushes a block onto one of a segment's lists (see ipc_shared_). Any number
+// of PEs, in any process, may push at once.
+inline static void pushList_(std::atomic<std::uintptr_t>& head,
+                             CmiIpcBlock* block) {
+  auto prev = head.load(std::memory_order_relaxed);
+  do {
+    block->next = prev;
+  } while (!head.compare_exchange_weak(prev, block->orig,
+                                       std::memory_order_release,
+                                       std::memory_order_relaxed));
+}
+
+// Takes a whole list (newest first) and appends it to out, so that popping
+// out from the back yields the oldest block first. Only the list's one taker
+// calls this; it writes the head only when the list is not empty.
+inline static void takeList_(std::atomic<std::uintptr_t>& head,
+                             ipc_shared_* shared,
+                             std::vector<CmiIpcBlock*>& out) {
+  if (head.load(std::memory_order_relaxed) == cmi::ipc::max) return;
+  auto off = head.exchange(cmi::ipc::max, std::memory_order_acquire);
+  while (off != cmi::ipc::max) {
+    auto* block = (CmiIpcBlock*)((char*)shared + off);
+    out.push_back(block);
+    off = block->next;
+  }
+}
 
 void* CmiIpcBlockToMsg(CmiIpcBlock* block, bool init) {
   auto* msg = (char*)CmiIpcBlockToMsg(block);
@@ -175,19 +211,54 @@ inline static bool metadataReady_(CmiIpcManager* meta) {
   return meta && meta->shared[meta->mine].load(std::memory_order_acquire);
 }
 
+// Refills this PE's inbox with everything its receive queue and the process's
+// node queue hold; returns whether it got any.
+static bool refillInbox_(CmiIpcManager* meta, ipc_pe_state_& st) {
+  auto* shared = meta->shared[meta->mine].load(std::memory_order_acquire);
+  takeList_(shared->rq[CmiMyRank()].head, shared, st.inbox);
+  takeList_(shared->node_rq.head, shared, st.inbox);
+  return !st.inbox.empty();
+}
+
 CmiIpcBlock* CmiPopIpcBlock(CmiIpcManager* meta) {
-  if (metadataReady_(meta)) {
-    auto* shared = meta->shared[meta->mine].load(std::memory_order_acquire);
-    return popBlockFifo_(shared);
-  } else {
+  if (!metadataReady_(meta) || !meta->ready.load(std::memory_order_acquire))
     return nullptr;
+  auto& st = meta->pe[CmiMyRank()];
+  if (st.inbox.empty() && !refillInbox_(meta, st)) return nullptr;
+  auto* block = st.inbox.back();
+  st.inbox.pop_back();
+  return block;
+}
+
+int CmiDeliverIpcInbox(CmiIpcManager* meta) {
+  if (!metadataReady_(meta) || !meta->ready.load(std::memory_order_acquire))
+    return 0;
+  auto& st = meta->pe[CmiMyRank()];
+  if (st.inbox.empty() && !refillInbox_(meta, st)) return 0;
+  // Only what this pass took: delivering moves a message onto a local queue,
+  // and the scheduler runs it on a later sweep.
+  int n = 0;
+  while (!st.inbox.empty()) {
+    auto* block = st.inbox.back();
+    st.inbox.pop_back();
+    CmiDeliverIpcBlockMsg(block);
+    n++;
   }
+  return n;
 }
 
 bool CmiPushIpcBlock(CmiIpcManager* meta, CmiIpcBlock* block) {
   auto* shared = meta->shared[block->src].load(std::memory_order_acquire);
   CmiAssert(meta->mine == block->dst);
-  return pushBlockFifo_(shared, block->orig);
+  // CmiMsgToIpcBlock put the destination rank (or the node marker) here
+  const auto rank = CMI_DEST_RANK(CmiIpcBlockToMsg(block));
+  if (rank == cmi::ipc::nodeDatagram) {
+    pushList_(shared->node_rq.head, block);
+  } else {
+    CmiAssert(rank < (CmiUInt4)kMaxIpcRanks);
+    pushList_(shared->rq[rank].head, block);
+  }
+  return true;
 }
 
 std::pair<CmiIpcBlock*, CmiIpcAllocStatus> CmiAllocIpcBlock(CmiIpcManager* meta, int dstProc, std::size_t size) {
@@ -200,32 +271,49 @@ std::pair<CmiIpcBlock*, CmiIpcAllocStatus> CmiAllocIpcBlock(CmiIpcManager* meta,
   }
 
   auto* shared = meta->shared[dstProc].load(std::memory_order_acquire);
-  if (shared == nullptr) {
+  if (shared == nullptr || !meta->ready.load(std::memory_order_acquire)) {
     // the destination's segment hasn't been attached yet (startup window)
     return std::make_pair((CmiIpcBlock*)nullptr, CMI_IPC_TIMEOUT);
   }
   auto bin = whichBin_(size);
-  CmiAssert(bin < kNumCutOffPoints);
+  if (bin >= (std::size_t)kIpcRetBins) {
+    // larger than any block the return lists cover; the caller uses the network
+    return std::make_pair((CmiIpcBlock*)nullptr, CMI_IPC_OUT_OF_MEMORY);
+  }
 
-  auto* block = popBlock_(shared->free[bin], shared);
-  if (block == nullptr) {
+  // This PE's private list of blocks of that size in that segment, refilled
+  // with everything its receivers there have returned since it last looked
+  auto& st = meta->pe[CmiMyRank()];
+  auto& head = st.cache[dstProc][bin];
+  if (head == cmi::ipc::max) {
+    head = shared->ret[st.hostIdx].bin[bin].exchange(
+        cmi::ipc::max, std::memory_order_acquire);
+  }
+  CmiIpcBlock* block;
+  if (head != cmi::ipc::max) {
+    block = (CmiIpcBlock*)((char*)shared + head);
+    head = block->next;
+  } else {
+    // a new block from the segment's heap
+    if (shared->heap.load(std::memory_order_acquire) == cmi::ipc::nil) {
+      // the owner has not initialized its segment yet
+      return std::make_pair((CmiIpcBlock*)nullptr, CMI_IPC_TIMEOUT);
+    }
     auto totalSize = kCutOffPoints[bin];
-    auto offset = allocBlock_(shared, totalSize);
-    switch (offset) {
-      case cmi::ipc::nil:
-        return std::make_pair((CmiIpcBlock*)nullptr, CMI_IPC_TIMEOUT);
-      case cmi::ipc::max:
-        return std::make_pair((CmiIpcBlock*)nullptr, CMI_IPC_OUT_OF_MEMORY);
-      default:
-        break;
+    auto stride = sizeof(CmiIpcBlock) + totalSize;
+    stride += (alignof(CmiIpcBlock) - stride % alignof(CmiIpcBlock)) %
+              alignof(CmiIpcBlock);
+    auto offset = shared->heap.fetch_add(stride, std::memory_order_relaxed);
+    if (offset + stride > shared->max) {
+      return std::make_pair((CmiIpcBlock*)nullptr, CMI_IPC_OUT_OF_MEMORY);
     }
     // the block's address is relative to the share
     block = (CmiIpcBlock*)((char*)shared + offset);
     CmiAssert(((std::uintptr_t)block % alignof(CmiIpcBlock)) == 0);
-    // construct the block
     new (block) CmiIpcBlock(totalSize, offset);
   }
 
+  block->owner = st.hostIdx;
   block->src = dstProc;
   block->dst = thisProc;
 
@@ -234,11 +322,11 @@ std::pair<CmiIpcBlock*, CmiIpcAllocStatus> CmiAllocIpcBlock(CmiIpcManager* meta,
 
 void CmiFreeIpcBlock(CmiIpcManager* meta, CmiIpcBlock* block) {
   auto bin = whichBin_(block->size);
-  CmiAssert(bin < kNumCutOffPoints);
+  CmiAssert(bin < (std::size_t)kIpcRetBins);
+  CmiAssert(block->owner >= 0 && block->owner < kMaxIpcHostPes);
   auto* shared = meta->shared[block->src].load(std::memory_order_acquire);
-  auto& free = shared->free[bin];
-  while (!pushBlock_(free, block->orig, shared))
-    ;
+  // back to the PE that allocated it, which takes its list whole
+  pushList_(shared->ret[block->owner].bin[bin], block);
 }
 
 CmiIpcBlock* CmiIsIpcBlock(CmiIpcManager* meta, void* addr, int node) {
@@ -255,117 +343,6 @@ CmiIpcBlock* CmiIsIpcBlock(CmiIpcManager* meta, void* addr, int node) {
     return nullptr;
   }
 }
-
-static std::uintptr_t allocBlock_(ipc_shared_* meta, std::size_t size) {
-  auto res = meta->heap.exchange(cmi::ipc::nil, std::memory_order_acquire);
-  if (res == cmi::ipc::nil) {
-    return cmi::ipc::nil;
-  } else {
-    auto next = res + size + sizeof(CmiIpcBlock);
-    auto offset = size % alignof(CmiIpcBlock);
-    auto oom = next >= meta->max;
-    auto value = oom ? res : (next + offset);
-    auto status = meta->heap.exchange(value, std::memory_order_release);
-    CmiAssert(status == cmi::ipc::nil);
-    if (oom) {
-      return cmi::ipc::max;
-    } else {
-      return res;
-    }
-  }
-}
-
-inline static CmiIpcBlock* popBlock_(std::atomic<std::uintptr_t>& head,
-                                     void* base) {
-  auto prev = head.exchange(cmi::ipc::nil, std::memory_order_acquire);
-  if (prev == cmi::ipc::nil) {
-    return nullptr;
-  } else if (prev == cmi::ipc::max) {
-    auto check = head.exchange(prev, std::memory_order_release);
-    CmiAssert(check == cmi::ipc::nil);
-    return nullptr;
-  } else {
-    // translate the "home" PE's address into a local one
-    CmiAssert(((std::uintptr_t)base % ALIGN_BYTES) == 0);
-    auto* xlatd = (CmiIpcBlock*)((char*)base + prev);
-    auto check = head.exchange(xlatd->next, std::memory_order_release);
-    CmiAssert(check == cmi::ipc::nil);
-    return xlatd;
-  }
-}
-
-inline static bool pushBlock_(std::atomic<std::uintptr_t>& head,
-                              std::uintptr_t value, void* base) {
-  CmiAssert(value != cmi::ipc::nil);
-  auto prev = head.exchange(cmi::ipc::nil, std::memory_order_acquire);
-  if (prev == cmi::ipc::nil) {
-    return false;
-  }
-  auto* block = (CmiIpcBlock*)((char*)base + value);
-  block->next = prev;
-  auto check = head.exchange(value, std::memory_order_release);
-  CmiAssert(check == cmi::ipc::nil);
-  return true;
-}
-
-// The receive queue is FIFO, unlike the free lists above. A block on a free
-// list is just storage. A block on the receive queue is a message waiting to
-// be delivered, and taking the newest first hands a sender's messages back
-// reversed and leaves the oldest block at the bottom until the queue drains
-// all the way -- under steady inbound traffic, a long time.
-//
-// Same locking as pushBlock_: nil is never a valid list value, so whichever
-// process exchanges a non-nil value out of the head owns the whole list until
-// it puts one back. qtail is read and written only by that owner, which is why
-// it needs no atomicity of its own; the release-store on the head publishes it.
-inline static bool pushBlockFifo_(ipc_shared_* shared, std::uintptr_t value) {
-  CmiAssert(value != cmi::ipc::nil);
-  auto head = shared->queue.exchange(cmi::ipc::nil, std::memory_order_acquire);
-  if (head == cmi::ipc::nil) {
-    // another process holds the list; the caller retries
-    return false;
-  }
-  auto* block = (CmiIpcBlock*)((char*)shared + value);
-  // it goes on the end, so it terminates the chain
-  block->next = cmi::ipc::max;
-  if (head == cmi::ipc::max) {
-    // the queue was empty, so this block is both ends of it
-    CmiAssert(shared->qtail == cmi::ipc::max);
-    head = value;
-  } else {
-    CmiAssert(shared->qtail != cmi::ipc::max);
-    ((CmiIpcBlock*)((char*)shared + shared->qtail))->next = value;
-  }
-  shared->qtail = value;
-  auto check = shared->queue.exchange(head, std::memory_order_release);
-  CmiAssert(check == cmi::ipc::nil);
-  return true;
-}
-
-inline static CmiIpcBlock* popBlockFifo_(ipc_shared_* shared) {
-  CmiAssert(((std::uintptr_t)shared % ALIGN_BYTES) == 0);
-  auto head = shared->queue.exchange(cmi::ipc::nil, std::memory_order_acquire);
-  if (head == cmi::ipc::nil) {
-    // another process holds the list
-    return nullptr;
-  } else if (head == cmi::ipc::max) {
-    auto check = shared->queue.exchange(head, std::memory_order_release);
-    CmiAssert(check == cmi::ipc::nil);
-    return nullptr;
-  }
-  // translate the "home" process's offset into a local address
-  auto* xlatd = (CmiIpcBlock*)((char*)shared + head);
-  auto next = xlatd->next;
-  if (next == cmi::ipc::max) {
-    // that was the last one
-    CmiAssert(shared->qtail == head);
-    shared->qtail = cmi::ipc::max;
-  }
-  auto check = shared->queue.exchange(next, std::memory_order_release);
-  CmiAssert(check == cmi::ipc::nil);
-  return xlatd;
-}
-
 
 // ---------------------------------------------------------------------------
 // setup
