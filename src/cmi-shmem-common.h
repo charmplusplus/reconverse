@@ -45,34 +45,73 @@ CsvStaticDeclare(CmiNodeLock, sleeper_lock);
 using sleeper_map_t = std::vector<CthThread>;
 CsvStaticDeclare(sleeper_map_t, sleepers);
 
-// the data each pe shares with its peers
-// contains pool of free blocks, heap, and receive queue
+// Bounds of the per-PE structures in a segment. A process has at most
+// kMaxIpcRanks PEs, and a host at most kMaxIpcHostPes PEs over all its
+// processes; a run past either does not use the pool (finishSetup_).
+constexpr int kMaxIpcRanks = 256;
+constexpr int kMaxIpcHostPes = 512;
+// Block sizes the per-sender return lists cover: up to 128 KiB, past the
+// largest cutoff a message can be sent at (kDefaultCutoff and its header)
+constexpr int kIpcRetBins = 12;
+
+// One list head per cache line: every list below is written by PEs of
+// several processes, and two on one line would make each writer's atomic
+// operations fight over it.
+struct alignas(64) ipc_list_ {
+  std::atomic<std::uintptr_t> head;
+};
+
+// A sender's return lists in one segment, one per block size.
+struct alignas(64) ipc_return_ {
+  std::array<std::atomic<std::uintptr_t>, kIpcRetBins> bin;
+};
+
+// The data each process shares with its peers: the blocks other processes
+// send it, and how those blocks are allocated and returned.
+//
+// Every list is a stack of segment offsets, ended by cmi::ipc::max, that any
+// number of PEs push onto with a compare-and-swap and that exactly one taker
+// empties at once with an exchange; an exchange of the whole list cannot see
+// a block reused under it, so the lists need no lock and no counter.
+// - rq[rank]: messages for that PE of this process. Senders push; the PE
+//   takes its whole list each scheduler pass and delivers it oldest first.
+//   (One queue and lock for the whole process serialized every sender and
+//   receiver on the host: at ~3 M small messages/s per node over 2 x 23
+//   PEs, a send took 16 us and a delivery a few hundred.)
+// - node_rq: messages for the process as a whole (node datagrams); any of
+//   its PEs takes the list.
+// - ret[sender].bin[b]: blocks of size bin b that sender allocated here and
+//   its receivers have freed. Receivers push; the sender takes the whole
+//   list when its private list of that size runs out.
+// - heap: the offset of the next never-used block, moved by fetch_add.
 struct ipc_shared_ {
-  std::array<std::atomic<std::uintptr_t>, kNumCutOffPoints> free;
-  // messages waiting to be delivered, oldest first. queue is the head and
-  // doubles as the list's lock (see pushBlockFifo_); qtail is the end, so a
-  // sender can append without walking the list. Both hold offsets from this
-  // segment's base, which mean the same thing in every process that has it
-  // mapped. The free lists above need no tail: they are storage, not a
-  // queue, and newest-first is the warmest block to hand back.
-  std::atomic<std::uintptr_t> queue;
-  std::uintptr_t qtail;
   std::atomic<std::uintptr_t> heap;
   std::uintptr_t max;
+  ipc_list_ node_rq;
+  std::array<ipc_list_, kMaxIpcRanks> rq;
+  std::array<ipc_return_, kMaxIpcHostPes> ret;
 
   ipc_shared_(std::uintptr_t begin, std::uintptr_t end)
-      : queue(cmi::ipc::max),
-        qtail(cmi::ipc::max),
-        heap(cmi::ipc::nil),
-        max(end) {
-    for (auto& f : this->free) {
-      f.store(cmi::ipc::max);
-    }
+      : heap(cmi::ipc::nil), max(end) {
+    node_rq.head.store(cmi::ipc::max, std::memory_order_relaxed);
+    for (auto& q : rq) q.head.store(cmi::ipc::max, std::memory_order_relaxed);
+    for (auto& r : ret)
+      for (auto& b : r.bin) b.store(cmi::ipc::max, std::memory_order_relaxed);
     // publish the heap last -- remote peers treat (heap == nil) as "not
     // ready" (timeout), so this release-store is what makes the segment
     // visible for allocation with all other fields initialized
     this->heap.store(begin, std::memory_order_release);
   }
+};
+
+// What one PE keeps for itself, touched by no other thread: its host-local
+// index, a private list of blocks per destination process and size (taken
+// whole from its return list there), and the blocks it took from its receive
+// queue and has not delivered yet, oldest last.
+struct ipc_pe_state_ {
+  int hostIdx = -1;
+  std::vector<std::array<std::uintptr_t, kIpcRetBins>> cache;
+  std::vector<CmiIpcBlock*> inbox;
 };
 
 // Shared state for one IPC pool, common to every backend. Backends derive
@@ -96,6 +135,8 @@ struct CmiIpcManager {
   std::vector<char> peers;
   // number of processes (including this one) on this host
   int nPeers;
+  // per rank of this process, written only by that rank (after setup)
+  std::vector<ipc_pe_state_> pe;
   // base constructor
   CmiIpcManager(std::size_t key_)
       : shared(CmiNumNodes()),
@@ -103,7 +144,8 @@ struct CmiIpcManager {
         key(key_),
         ready(false),
         peers(CmiNumNodes(), 0),
-        nPeers(1) {}
+        nPeers(1),
+        pe(CmiMyNodeSize()) {}
   // virtual destructor may be needed
   virtual ~CmiIpcManager() {}
 };

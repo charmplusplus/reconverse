@@ -1732,12 +1732,15 @@ public:
   // "home" rank of the block
   int src;
   int dst;
+  // the host-local index of the PE that allocated the block: freeing it puts
+  // it back on that PE's return list in the block's segment
+  int owner;
   uintptr_t orig;
   uintptr_t next;
   size_t size;
 
   CmiIpcBlock(size_t size_, uintptr_t orig_)
-      : orig(orig_), next(cmi::ipc::nil), size(size_) {}
+      : owner(-1), orig(orig_), next(cmi::ipc::nil), size(size_) {}
 };
 
 enum CmiIpcAllocStatus {
@@ -1794,6 +1797,10 @@ CmiIpcBlock* CmiMsgToIpcBlock(CmiIpcManager*, char* msg, std::size_t len, int no
 
 // deliver a block as a message
 void CmiDeliverIpcBlockMsg(CmiIpcBlock*);
+
+// takes everything the pool holds for this PE (its receive queue and the
+// process's node queue) and delivers it, oldest first; returns how many
+int CmiDeliverIpcInbox(CmiIpcManager*);
 
 inline const std::size_t& CmiRecommendedIpcBlockCutoff(void) {
   using namespace cmi::ipc;
