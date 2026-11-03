@@ -96,6 +96,7 @@ CsvDeclare(CmiNodeLock, CsdNodeQueueLock);
 double Cmi_startTime;
 CmiSpanningTreeInfo *_topoTree = NULL;
 int CharmLibInterOperate;
+int CmiInteropReturnOnExit;
 int _immediateLock = 0;
 std::atomic<int> _cleanUp = 0;
 void *memory_stack_top;
@@ -347,6 +348,13 @@ void ConverseExit(int exitcode)
     }
   }
 
+  // Return-on-exit mode: the barriers are done; stop the scheduler and return.
+  // ConverseInteropFinalize does the teardown below.
+  if (CmiInteropReturnOnExit) {
+    CsdExitScheduler();
+    return;
+  }
+
   // Now every thread can clean up its thread-local comm state.
   comm_backend::exitThread();
 
@@ -378,6 +386,27 @@ void ConverseExit(int exitcode)
   }
 }
 
+// Teardown for return-on-exit mode. Every PE thread calls it once, after
+// ConverseExit returned and the thread has left CsdScheduler for good. Rank 0
+// waits for the others, finalizes the comm backend and frees the queues, then
+// returns to its caller; the process keeps running.
+void ConverseInteropFinalize() {
+  static std::atomic<int> finalize_arrived{0};
+  comm_backend::exitThread();
+  std::atomic_fetch_add_explicit(&finalize_arrived, 1, std::memory_order_release);
+  if (CmiMyRank() != 0)
+    return;
+  while (std::atomic_load_explicit(&finalize_arrived, std::memory_order_acquire) != CmiMyNodeSize())
+    comm_backend::progress();
+  comm_backend::exit();
+  delete[] Cmi_queues;
+  delete CmiNodeQueue;
+  delete[] CmiHandlerTable;
+  Cmi_queues = nullptr;
+  CmiNodeQueue = nullptr;
+  CmiHandlerTable = nullptr;
+}
+
 void StartInteropScheduler();
 
 // Interop on ranks > 0, as in classic machine-smp.C's call_startfn. Rank 0
@@ -394,6 +423,8 @@ static void interopWorkerLoop() {
   }
   CsdScheduler(-1);
   CmiNodeAllBarrier();
+  if (CmiInteropReturnOnExit)
+    ConverseInteropFinalize();
 }
 
 // pthread entry trampoline for the PE threads created by CmiStartThreads.
