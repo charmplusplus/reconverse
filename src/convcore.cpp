@@ -114,6 +114,7 @@ int backend_poll_freq;
 int thread_queue_max; // +thread_queue_max: old scheduler, consecutive thread-queue messages before the priority queue gets a turn
 int node_queue_max; // +node_queue_max: registered scheduler, consecutive node-queue messages before the PE's own work gets a turn
 int backend_poll_thread;
+int backend_poll_single;
 
 void (*CmiTraceFn)(char **argv) = nullptr;
 
@@ -598,6 +599,8 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
   backend_poll_thread = 1; // default to every thread
   CmiGetArgInt(argv, "+backend_poll_thread", &backend_poll_thread);
   if (backend_poll_thread < 1) backend_poll_thread = 1;
+  backend_poll_single = CmiGetArgFlagDesc(argv, "+backend_poll_single",
+      "poll the network in the scheduler loop even when the run has one process");
 
   // must precede CmiQueueRegisterInitThread(), and so CmiStartThreads()
   CmiSchedulerInitArgs(argv);

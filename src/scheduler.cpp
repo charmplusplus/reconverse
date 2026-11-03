@@ -67,6 +67,14 @@ void CmiSchedulerSetIdle() {
   }
 }
 
+int CmiPeHasPendingWork() {
+  if (!CmiGetQueue(CmiMyRank())->empty()) return 1;
+  if (!QueueEmpty(CpvAccess(CsdSchedQueue))) return 1;
+  if (!CmiGetNodeQueue()->empty() || CsdNodeQueueLenGet() > 0) return 1;
+  CmiIpcManager *manager = CsvAccess(coreIpcManager_);
+  return manager != nullptr && CmiIpcHasPending(manager);
+}
+
 // Messages from peer processes on this host arrive in the shared-memory pool
 // rather than through the network backend, so every loop has to drain it --
 // including CsdSchedulePoll, or a program that waits inside it would never

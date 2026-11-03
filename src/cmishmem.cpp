@@ -247,6 +247,15 @@ int CmiDeliverIpcInbox(CmiIpcManager* meta) {
   return n;
 }
 
+int CmiIpcHasPending(CmiIpcManager* meta) {
+  if (!metadataReady_(meta) || !meta->ready.load(std::memory_order_acquire))
+    return 0;
+  if (!meta->pe[CmiMyRank()].inbox.empty()) return 1;
+  auto* shared = meta->shared[meta->mine].load(std::memory_order_acquire);
+  return shared->rq[CmiMyRank()].head.load(std::memory_order_relaxed) != cmi::ipc::max ||
+         shared->node_rq.head.load(std::memory_order_relaxed) != cmi::ipc::max;
+}
+
 bool CmiPushIpcBlock(CmiIpcManager* meta, CmiIpcBlock* block) {
   auto* shared = meta->shared[block->src].load(std::memory_order_acquire);
   CmiAssert(meta->mine == block->dst);
