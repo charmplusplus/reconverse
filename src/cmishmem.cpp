@@ -291,6 +291,13 @@ std::pair<CmiIpcBlock*, CmiIpcAllocStatus> CmiAllocIpcBlock(CmiIpcManager* meta,
   auto& st = meta->pe[CmiMyRank()];
   auto& head = st.cache[dstProc][bin];
   if (head == cmi::ipc::max) {
+    // A peer maps the segment before its owner initializes it, and an
+    // uninitialized segment is all zeros, which no list here reads as empty.
+    // The owner publishes the heap last, so until it is set nothing in the
+    // segment may be touched.
+    if (shared->heap.load(std::memory_order_acquire) == cmi::ipc::nil) {
+      return std::make_pair((CmiIpcBlock*)nullptr, CMI_IPC_TIMEOUT);
+    }
     head = shared->ret[st.hostIdx].bin[bin].exchange(
         cmi::ipc::max, std::memory_order_acquire);
   }
@@ -299,11 +306,7 @@ std::pair<CmiIpcBlock*, CmiIpcAllocStatus> CmiAllocIpcBlock(CmiIpcManager* meta,
     block = (CmiIpcBlock*)((char*)shared + head);
     head = block->next;
   } else {
-    // a new block from the segment's heap
-    if (shared->heap.load(std::memory_order_acquire) == cmi::ipc::nil) {
-      // the owner has not initialized its segment yet
-      return std::make_pair((CmiIpcBlock*)nullptr, CMI_IPC_TIMEOUT);
-    }
+    // a new block from the segment's heap (initialized: checked above)
     auto totalSize = kCutOffPoints[bin];
     auto stride = sizeof(CmiIpcBlock) + totalSize;
     stride += (alignof(CmiIpcBlock) - stride % alignof(CmiIpcBlock)) %
