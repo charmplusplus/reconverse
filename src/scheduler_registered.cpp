@@ -118,7 +118,12 @@ void CmiQueueRegisterInitThread() {
   handlers.push_back(std::make_pair(pollConverseThreadQueue, 16));
   handlers.push_back(std::make_pair(pollNodePrioQueue, 1));
   handlers.push_back(std::make_pair(pollThreadPrioQueue, 16));
-  handlers.push_back(std::make_pair(pollProgress, backend_poll_freq));
+  //one process in the whole job (not per partition: partitions talk over the
+  //network): nothing arrives over the network (sends within a process use
+  //the queues, and the backend's barriers poll it themselves), and the poll
+  //took about 40 of the 64 slots and one call per sweep
+  if (CmiNumNodesGlobal() > 1 || backend_poll_single)
+    handlers.push_back(std::make_pair(pollProgress, backend_poll_freq));
 #if CMK_TASKQUEUE
   handlers.push_back(std::make_pair(pollTaskQueue, 1));
 #endif
@@ -133,7 +138,8 @@ void CmiQueueRegisterInit() {
   add_handler(pollConverseThreadQueue, 16);
   add_handler(pollNodePrioQueue, 1);
   add_handler(pollThreadPrioQueue, 16);
-  add_handler(pollProgress, backend_poll_freq);
+  if (CmiNumNodesGlobal() > 1 || backend_poll_single)
+    add_handler(pollProgress, backend_poll_freq);
 #if CMK_TASKQUEUE
   add_handler(pollTaskQueue, 1);
 #endif

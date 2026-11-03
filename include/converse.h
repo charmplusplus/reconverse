@@ -550,6 +550,11 @@ void CmiNodeAllBarrier();
 // scheduler
 void CsdExitScheduler();
 int CsdScheduler(int maxmsgs);
+/* Whether this PE has work waiting in its Converse queues: its thread queue,
+ * its prioritized queue, the node queues, or the shared-memory receive queue.
+ * Messages still in the network are not seen. For a handler that would rather
+ * keep running than return to the scheduler while nothing else is waiting. */
+int CmiPeHasPendingWork(void);
 
 /* The scheduler queue: messages ordered by priority value (smaller first,
  * negative before zero before positive), FIFO within one priority value, or
@@ -1522,6 +1527,8 @@ void CmiDeliverIpcBlockMsg(CmiIpcBlock*);
 // takes everything the pool holds for this PE (its receive queue and the
 // process's node queue) and delivers it, oldest first; returns how many
 int CmiDeliverIpcInbox(CmiIpcManager*);
+// Whether this PE's shared-memory receive queue (or its inbox) holds a block
+int CmiIpcHasPending(CmiIpcManager*);
 
 inline const std::size_t& CmiRecommendedIpcBlockCutoff(void) {
   using namespace cmi::ipc;
