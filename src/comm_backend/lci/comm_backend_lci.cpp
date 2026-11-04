@@ -312,7 +312,8 @@ void CommBackendLCI::exit() {
   // send (CommLocalHandler frees the buffer into the sender's pool) or land a
   // receive (LCI allocates the buffer with CmiAlloc, i.e. from the polling
   // thread's pool), so no pool may go away while the devices are up. Rank 0
-  // does it for all ranks; the others are parked in ConverseExit by now.
+  // does it for all ranks; the others have run exitThread and no longer poll
+  // (parked in ConverseExit, or, in return-on-exit mode, exited and joined).
   for (int r = 0; r < CmiMyNodeSize(); r++) {
     mempool_type *&pool = CpvAccessOther(mempool, r);
     if (pool != NULL) {

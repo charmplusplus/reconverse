@@ -339,6 +339,13 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
 
 static CmiStartFn Cmi_startfn;
 extern int CharmLibInterOperate;
+// Set before ConverseInit (MPI interop): ConverseExit synchronizes and stops
+// the scheduler, then returns instead of exiting. Ranks > 0 finalize on their
+// own in interopWorkerLoop. Rank 0 calls ConverseInteropFinalize exactly once,
+// after the CmiNodeAllBarrier that follows its last CsdScheduler pass (the one
+// that pairs with interopWorkerLoop's trailing barrier). It returns after the
+// other PE threads have exited and been joined. Requires CharmLibInterOperate.
+extern int CmiInteropReturnOnExit;
 
 #ifdef __cplusplus
 struct alignas(ALIGN_BYTES) CmiChunkHeader {
@@ -928,6 +935,7 @@ void ConverseExit(int status=0);
 #else
 void ConverseExit(int status);
 #endif
+void ConverseInteropFinalize(void);
 #define CmiMemcpy(dest, src, size) memcpy((dest), (src), (size))
 
 #define setMemoryTypeChare(p) /* empty memory debugging method */

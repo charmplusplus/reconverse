@@ -96,6 +96,7 @@ CsvDeclare(CmiNodeLock, CsdNodeQueueLock);
 double Cmi_startTime;
 CmiSpanningTreeInfo *_topoTree = NULL;
 int CharmLibInterOperate;
+int CmiInteropReturnOnExit;
 int _immediateLock = 0;
 std::atomic<int> _cleanUp = 0;
 void *memory_stack_top;
@@ -287,6 +288,11 @@ void converseRunPe(int rank, int everReturn) {
   * StartCharmScheduler phase (see interopWorkerLoop). Nobody calls
   * ConverseExit here; CharmLibExit ends the run. argv stays allocated because
   * Charm keeps pointers into it.
+  *
+  * Return-on-exit (CmiInteropReturnOnExit, MPI interop through CharmLibInit):
+  * interop as above, but ConverseExit returns instead of ending the process.
+  * Ranks > 0 then call ConverseInteropFinalize and return from their threads;
+  * rank 0 calls it from CharmLibExit, joins them, and returns to the user.
   */
 
   if(!everReturn)
@@ -311,6 +317,42 @@ void converseRunPe(int rank, int everReturn) {
   */
 }
 
+static void CmiJoinPeThreads();
+
+// Node teardown, called once by every PE thread after it has stopped
+// scheduling. Each thread drops its thread-local comm state; ranks > 0 then
+// return. Rank 0 waits for all of them, finalizes the comm backend and frees
+// the node's queues and handler tables. In return-on-exit mode it first joins
+// the other PE threads, which return right after this call, so it can also
+// free their per-PE queues and handler vectors.
+static void CmiNodeTeardown(const char *caller) {
+  static std::atomic<int> arrived{0};
+  comm_backend::exitThread();
+  int n = std::atomic_fetch_add_explicit(&arrived, 1, std::memory_order_release) + 1;
+  if (n > CmiMyNodeSize())
+    CmiAbort("%s called more than once per PE", caller);
+  if (CmiMyRank() != 0)
+    return;
+  // progress() so that backend completions still owed to this node can finish
+  while (std::atomic_load_explicit(&arrived, std::memory_order_acquire) < CmiMyNodeSize())
+    comm_backend::progress();
+  if (CmiInteropReturnOnExit)
+    CmiJoinPeThreads();
+  comm_backend::exit();
+  if (CmiInteropReturnOnExit) {
+    for (int r = 0; r < CmiMyNodeSize(); r++) {
+      delete Cmi_queues[r];
+      delete CmiHandlerTable[r];
+    }
+  }
+  delete[] Cmi_queues;
+  delete CmiNodeQueue;
+  delete[] CmiHandlerTable;
+  Cmi_queues = nullptr;
+  CmiNodeQueue = nullptr;
+  CmiHandlerTable = nullptr;
+}
+
 //function to exit converse and terminate the program
 //waits for all threads to call, then does cleanup on rank 0
 void ConverseExit(int exitcode)
@@ -328,12 +370,9 @@ void ConverseExit(int exitcode)
   // alive so that progress() can drive completion. To coordinate that,
   // rank 0 performs the inter-node barrier and then notifies other threads
   // (via an atomic) that the barrier is complete. After the notification,
-  // every thread performs its per-thread cleanup (exitThread). Finally,
-  // rank 0 waits for all threads to finish exitThread before tearing down
-  // the global comm backend and exiting the process.
+  // every thread runs CmiNodeTeardown, and rank 0 exits the process.
 
   static std::atomic<int> barrier_done{0};
-  static std::atomic<int> exitThread_done{0};
 
   if (CmiMyRank() == 0) {
     // participate in the global barrier (blocks until other nodes arrive)
@@ -347,35 +386,27 @@ void ConverseExit(int exitcode)
     }
   }
 
-  // Now every thread can clean up its thread-local comm state.
-  comm_backend::exitThread();
-
-  // signal we've finished exitThread()
-  std::atomic_fetch_add_explicit(&exitThread_done, 1, std::memory_order_release);
-
-  if (CmiMyRank() == 0) {
-    // wait for all local threads to complete their per-thread cleanup. Use
-    // progress() to avoid deadlock if any backend progress is needed.
-    while (std::atomic_load_explicit(&exitThread_done, std::memory_order_acquire) != CmiMyNodeSize()) {
-      comm_backend::progress();
-    }
-
-    // safe to tear down global comm backend and process-wide structures now
-    comm_backend::exit();
-    delete[] Cmi_queues;
-    delete CmiNodeQueue;
-    delete[] CmiHandlerTable;
-    Cmi_queues = nullptr;
-    CmiNodeQueue = nullptr;
-    CmiHandlerTable = nullptr;
-    exit(exitcode);
-  } else {
-    // Non-rank-0 threads block here indefinitely; rank 0 will terminate the
-    // process once cleanup is done.
-    while (true) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    }
+  // Return-on-exit mode: the barriers are done; stop the scheduler and return.
+  // ConverseInteropFinalize does the teardown.
+  if (CmiInteropReturnOnExit) {
+    CsdExitScheduler();
+    return;
   }
+
+  CmiNodeTeardown("ConverseExit");
+  if (CmiMyRank() == 0)
+    exit(exitcode);
+  // Ranks > 0 block here; rank 0 ends the process.
+  while (true)
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+}
+
+// Return-on-exit teardown. Ranks > 0 call it from interopWorkerLoop, rank 0
+// once from CharmLibExit, each after its last CsdScheduler pass and the
+// CmiNodeAllBarrier that follows it. Rank 0 returns once the node is torn
+// down and the other PE threads are joined; the process keeps running.
+void ConverseInteropFinalize() {
+  CmiNodeTeardown("ConverseInteropFinalize");
 }
 
 void StartInteropScheduler();
@@ -394,13 +425,16 @@ static void interopWorkerLoop() {
   }
   CsdScheduler(-1);
   CmiNodeAllBarrier();
+  if (CmiInteropReturnOnExit)
+    ConverseInteropFinalize();
 }
 
 // pthread entry trampoline for the PE threads created by CmiStartThreads.
 // everReturn is 0 for ranks > 0, meaning these ranks call the start function
 // and never return from ConverseInit, so this never returns in practice --
 // except in interop mode, where converseRunPe returns and the thread follows
-// rank 0's phases.
+// rank 0's phases. In return-on-exit mode it then returns, and rank 0 joins
+// the thread in ConverseInteropFinalize.
 static void *converseRunPeThread(void *arg) {
   converseRunPe((int)(intptr_t)arg, 0);
   if (CharmLibInterOperate)
@@ -413,6 +447,13 @@ static unsigned __stdcall converseRunPeThreadWin(void *arg) {
   converseRunPeThread(arg);
   return 0;
 }
+#endif
+
+// Handles of the PE threads for ranks 1 and up, for CmiJoinPeThreads.
+#ifdef _WIN32
+static std::vector<HANDLE> CmiPeThreads;
+#else
+static std::vector<pthread_t> CmiPeThreads;
 #endif
 
 void CmiStartThreads() {
@@ -450,8 +491,7 @@ void CmiStartThreads() {
     if (th == 0)
       CmiAbort("CmiStartThreads: _beginthreadex: %s (%d)", strerror(errno),
                errno);
-    // Detached, as on POSIX: nothing ever joins a PE thread.
-    CloseHandle((HANDLE)th);
+    CmiPeThreads.push_back((HANDLE)th);
   }
 #else
   // Create threads for ranks 1 and up, run rank 0 on main thread (like original Converse)
@@ -461,12 +501,8 @@ void CmiStartThreads() {
     if (err != 0)
       CmiAbort("CmiStartThreads: pthread_attr_init: %s (%d)", strerror(err),
                err);
-    // std::thread objects were detached right after creation; a detached
-    // pthread is the same lifetime contract, with nothing left to join.
-    err = pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-    if (err != 0)
-      CmiAbort("CmiStartThreads: pthread_attr_setdetachstate: %s (%d)",
-               strerror(err), err);
+    // Joinable (the default). Only return-on-exit mode joins them; otherwise
+    // they never return, and the process ends in ConverseExit.
     if (pe_stacksize > 0) {
       err = pthread_attr_setstacksize(&attr, pe_stacksize);
       if (err != 0)
@@ -479,9 +515,27 @@ void CmiStartThreads() {
     if (err != 0)
       CmiAbort("CmiStartThreads: pthread_create: %s (%d)", strerror(err), err);
     pthread_attr_destroy(&attr);
+    CmiPeThreads.push_back(pid);
   }
 #endif
 
+}
+
+// Rank 0, return-on-exit mode: wait for the other PE threads to finish.
+static void CmiJoinPeThreads() {
+#ifdef _WIN32
+  for (HANDLE h : CmiPeThreads) {
+    WaitForSingleObject(h, INFINITE);
+    CloseHandle(h);
+  }
+#else
+  for (pthread_t t : CmiPeThreads) {
+    int err = pthread_join(t, nullptr);
+    if (err != 0)
+      CmiAbort("CmiJoinPeThreads: pthread_join: %s (%d)", strerror(err), err);
+  }
+#endif
+  CmiPeThreads.clear();
 }
 
 // argument form: ./prog +pe <N>
@@ -679,6 +733,9 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
   Cmi_startfn = fn;
   // CharmLibInterOperate is not reset here: CharmBeginInit sets it before
   // calling ConverseInit, and it is zero-initialized for everyone else.
+  // Ranks > 0 call ConverseInteropFinalize only from interopWorkerLoop.
+  if (CmiInteropReturnOnExit && !CharmLibInterOperate)
+    CmiAbort("CmiInteropReturnOnExit requires CharmLibInterOperate");
   Cmi_usched = usched;
   Cmi_initret = initret;
 

@@ -92,7 +92,7 @@ What is deliberately not in the picture: no comm thread (progress is a call in e
 | Checkpoint and restart | Disk checkpoint, in-memory checkpoint with restart-phase hooks in converse.h. | Disk checkpoint through Charm++ unchanged (tests/charm++/chkpt passes in the Mac sweep). The converse-side in-memory checkpoint hooks are absent. |
 | Tracing and replay | Projections tracing, record-replay. | Both work. Recording on reconverse needs per-record flushing (`+recplay-logsize`). |
 | GPUs | hapi, device zero-copy in the cuda arch overlay. | Same, through reconverse-linux-x86_64-cuda; GPU-aware load balancing merged 2026-09. |
-| Interoperability | MPI interop, user-driven interop. | User-driven interop added 2026-10-19 (reconverse #288, charm #4055). MPI interop absent on the Converse side; slated to return. |
+| Interoperability | MPI interop, user-driven interop. | User-driven interop added 2026-10-19 (reconverse #288, charm #4055). MPI interop through CharmLibInit and CharmLibExit (reconverse #318, charm #4130): ConverseExit returns under `CmiInteropReturnOnExit`, so the program keeps using MPI afterwards; world communicator only. |
 | AMPI | Full, with thread migration and isomalloc-based privatization. | Stage 0 (charm #4051, 2026-10-19): builds and runs, non-migrating. Stage 1 (charm #4064 with reconverse #298, in review): migratable threads and isomalloc, migration tests on. |
 | Abort | charmrun kills the job on CmiAbort; stack trace printed. | CmiAbort aborts the local process; with the srun or lcrun launchers other ranks could survive (reconverse #285). Fixes in flight: LCT_pmi_abort (uiuc-hpc/lci #209) plus a backend abortAll call; stack traces on abort and fatal signals in reconverse #294. |
 | Build | ./build with the classic configure, or CMake. | CMake only (`./build charm++ reconverse-linux-x86_64`); reconverse builds as a shared library with its own CMake project and fetches or finds LCI. |
@@ -175,7 +175,7 @@ About 210 identifiers from classic's converse.h have no counterpart. The ones a 
 - **Seed balancers**: a re-port of the classic strategies as an opt-in (reconverse #185 plan).
 - **Job-wide abort**: LCI #209 and the reconverse abortAll call, so CmiAbort ends every rank under srun and lcrun.
 - **Stack traces** on CmiAbort and fatal signals, rewritten (reconverse #294), and **Converse futures** (Cfuture), ported (reconverse #295), both for standalone Converse programs and crash reports.
-- **Interoperation with MPI programs** (CharmLibInit): decided 2026-10-20 to return; no date yet.
+- **Interoperation with MPI programs** (CharmLibInit): decided 2026-10-20 to return; reconverse #318 with charm #4130 bring it back for MPI_COMM_WORLD only (no sub-communicators).
 
 ### Gone by decision
 
