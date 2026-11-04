@@ -47,12 +47,17 @@ CsvStaticDeclare(sleeper_map_t, sleepers);
 
 // Bounds of the per-PE structures in a segment. A process has at most
 // kMaxIpcRanks PEs, and a host at most kMaxIpcHostPes PEs over all its
-// processes; a run past either does not use the pool (finishSetup_).
+// processes; a run past either stops at start-up with an error
+// (finishSetup_).
 constexpr int kMaxIpcRanks = 256;
 constexpr int kMaxIpcHostPes = 512;
-// Block sizes the per-sender return lists cover: up to 128 KiB, past the
-// largest cutoff a message can be sent at (kDefaultCutoff and its header)
-constexpr int kIpcRetBins = 12;
+// Block sizes the per-sender return lists cover: kCutOffPoints[0..15], up to
+// 2 MiB. Sixteen 8-byte heads fill the two cache lines one sender's lists
+// take anyway, so covering fewer would save no space. ++ipccutoff is capped
+// so that a message at the cutoff, with its headers, still fits the largest
+// of them (initSegmentSize_).
+constexpr int kIpcRetBins = 16;
+static_assert(kIpcRetBins <= (int)kNumCutOffPoints, "more return bins than block sizes");
 
 // One list head per cache line: every list below is written by PEs of
 // several processes, and two on one line would make each writer's atomic
@@ -192,6 +197,17 @@ inline void initSegmentSize_(char** argv) {
   if (CmiGetArgLongDesc(argv, "++" CMI_IPC_CUTOFF_ARG, &value, CMI_IPC_CUTOFF_DESC)) {
     auto bin = whichBin_((std::size_t)value);
     CmiEnforceMsg(bin < kNumCutOffPoints, "ipc cutoff out of range!");
+    // A block holds the message and its headers, so a cutoff in the largest
+    // bin the return lists cover would put messages at the cutoff past it.
+    constexpr std::size_t maxBin = kIpcRetBins - 2;
+    if (bin > maxBin) {
+      if (CmiMyPe() == 0) {
+        CmiPrintf("Converse> ++ipccutoff %ld is above the pool's largest, %zu; "
+                  "using %zu.\n", (long)value, kCutOffPoints[maxBin],
+                  kCutOffPoints[maxBin]);
+      }
+      bin = maxBin;
+    }
     CpvAccess(kRecommendedCutoff) = kCutOffPoints[bin];
   } else {
     // Two ceilings, and the default is the lower. One is capacity: a message

@@ -112,8 +112,9 @@ inline static void pushList_(std::atomic<std::uintptr_t>& head,
 }
 
 // Takes a whole list (newest first) and appends it to out, so that popping
-// out from the back yields the oldest block first. Only the list's one taker
-// calls this; it writes the head only when the list is not empty.
+// out from the back yields the oldest block first. The exchange hands the
+// whole list to one caller, so several takers (the PEs sharing node_rq) each
+// get a disjoint part; the head is written only when the list is not empty.
 inline static void takeList_(std::atomic<std::uintptr_t>& head,
                              ipc_shared_* shared,
                              std::vector<CmiIpcBlock*>& out) {
@@ -306,15 +307,20 @@ std::pair<CmiIpcBlock*, CmiIpcAllocStatus> CmiAllocIpcBlock(CmiIpcManager* meta,
     block = (CmiIpcBlock*)((char*)shared + head);
     head = block->next;
   } else {
-    // a new block from the segment's heap (initialized: checked above)
+    // a new block from the segment's heap (initialized: checked above). The
+    // heap moves only when the block fits, so a large request that does not
+    // leaves the rest of the segment to smaller ones.
     auto totalSize = kCutOffPoints[bin];
     auto stride = sizeof(CmiIpcBlock) + totalSize;
     stride += (alignof(CmiIpcBlock) - stride % alignof(CmiIpcBlock)) %
               alignof(CmiIpcBlock);
-    auto offset = shared->heap.fetch_add(stride, std::memory_order_relaxed);
-    if (offset + stride > shared->max) {
-      return std::make_pair((CmiIpcBlock*)nullptr, CMI_IPC_OUT_OF_MEMORY);
-    }
+    auto offset = shared->heap.load(std::memory_order_relaxed);
+    do {
+      if (offset + stride > shared->max) {
+        return std::make_pair((CmiIpcBlock*)nullptr, CMI_IPC_OUT_OF_MEMORY);
+      }
+    } while (!shared->heap.compare_exchange_weak(offset, offset + stride,
+                                                 std::memory_order_relaxed));
     // the block's address is relative to the share
     block = (CmiIpcBlock*)((char*)shared + offset);
     CmiAssert(((std::uintptr_t)block % alignof(CmiIpcBlock)) == 0);
