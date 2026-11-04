@@ -66,29 +66,41 @@ struct alignas(64) ipc_list_ {
   std::atomic<std::uintptr_t> head;
 };
 
-// A sender's return lists in one segment, one per block size.
+// One sender's lists of empty blocks in one segment, a list per block size.
 struct alignas(64) ipc_return_ {
   std::array<std::atomic<std::uintptr_t>, kIpcRetBins> bin;
 };
 
-// The data each process shares with its peers: the blocks other processes
-// send it, and how those blocks are allocated and returned.
+// The header of one process's segment. Each process creates one segment and
+// every other process on the host maps it. A message sent to this process is
+// copied into a block in this segment, and the receiving PE runs it in place.
 //
-// Every list is a stack of segment offsets, ended by cmi::ipc::max, that any
-// number of PEs push onto with a compare-and-swap and that exactly one taker
-// empties at once with an exchange; an exchange of the whole list cannot see
-// a block reused under it, so the lists need no lock and no counter.
-// - rq[rank]: messages for that PE of this process. Senders push; the PE
-//   takes its whole list each scheduler pass and delivers it oldest first.
-//   (One queue and lock for the whole process serialized every sender and
-//   receiver on the host: at ~3 M small messages/s per node over 2 x 23
-//   PEs, a send took 16 us and a delivery a few hundred.)
-// - node_rq: messages for the process as a whole (node datagrams); any of
-//   its PEs takes the list.
-// - ret[sender].bin[b]: blocks of size bin b that sender allocated here and
-//   its receivers have freed. Receivers push; the sender takes the whole
-//   list when its private list of that size runs out.
-// - heap: the offset of the next never-used block, moved by fetch_add.
+// - heap: offset of the segment's unused space. A sender that has no empty
+//   block of the size it needs carves a new one here (compare-and-swap; the
+//   offset moves only if the block fits).
+// - rq[rank]: full blocks, holding messages for that PE of this process.
+//   Senders push; only that PE takes from it.
+// - node_rq: full blocks holding node-level messages (CmiSyncNodeSend*). Any
+//   PE of this process may take from it.
+// - ret[sender].bin[b]: empty blocks of size b. They are the blocks that PE
+//   `sender` (indexed among all the host's PEs) carved from this segment;
+//   this process's PEs push each one back here when they free the message
+//   in it. Only `sender` takes from it, and reuses the blocks for its next
+//   messages to this process. A block therefore always goes back to the PE
+//   that carved it, never to another sender.
+//
+// Each list is a linked stack of segment offsets, ended by cmi::ipc::max.
+// Any number of PEs push with a compare-and-swap, and holds no lock while
+// doing so. A taker never removes a single block: it exchanges the head for
+// "empty" and gets every block on the list at once. Since no other PE can
+// reach those blocks after that, no PE can reuse a block while the taker
+// follows its next pointer, which is what makes the lists safe without a
+// lock.
+//
+// (Earlier, one receive queue per process and one free list per block size
+// served every sender and receiver on the host, and each list's head doubled
+// as its lock; at ~3 M small messages/s per node over 2 x 23 PEs, a send
+// took 16 us.)
 struct ipc_shared_ {
   std::atomic<std::uintptr_t> heap;
   std::uintptr_t max;
@@ -109,10 +121,13 @@ struct ipc_shared_ {
   }
 };
 
-// What one PE keeps for itself, touched by no other thread: its host-local
-// index, a private list of blocks per destination process and size (taken
-// whole from its return list there), and the blocks it took from its receive
-// queue and has not delivered yet, oldest last.
+// What one PE keeps in its own memory, touched by no other thread:
+// - hostIdx: its index among the host's PEs, which names its ret[] lists.
+// - cache[proc][b]: empty blocks of size b in process proc's segment, ready
+//   for its next sends there. When it runs out, the PE refills it by taking
+//   its whole ret[hostIdx].bin[b] list in that segment.
+// - inbox: full blocks it took from its receive queue and has not delivered
+//   yet, oldest last.
 struct ipc_pe_state_ {
   int hostIdx = -1;
   std::vector<std::array<std::uintptr_t, kIpcRetBins>> cache;
