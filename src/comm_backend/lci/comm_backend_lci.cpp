@@ -3,6 +3,7 @@
 #include "lct.h"
 #include "comm_backend/lci/comm_backend_lci.h"
 #include <cstdlib>
+#include <memory>
 #include <vector>
 
 CpvDeclare(mempool_type*, mempool);
@@ -51,6 +52,28 @@ void remoteCallback(lci::status_t status) {
   handler({status.get_buffer(), status.get_size(), nullptr});
 }
 
+// For alloc_mempool_block, which the mempool calls without a backend.
+static CommBackendLCI *g_lci_backend = nullptr;
+
+// What an mr_t from registerMemory() points to: the buffer, and one LCI
+// registration per device, each made the first time a transfer asks for that
+// device (getDeviceMR). A transfer reads one device's registration on each
+// side, the device the buffer's owner exported (see WireRMR), so registering
+// on every device up front cost +lci_ndevices registrations per buffer where
+// one or two were used.
+struct LazyMR {
+  void *addr;
+  size_t size;
+  std::unique_ptr<std::atomic<lci::mr_impl_t *>[]> slots; // null: not yet
+
+  LazyMR(void *addr_, size_t size_, size_t ndevices)
+      : addr(addr_), size(size_),
+        slots(new std::atomic<lci::mr_impl_t *>[ndevices]) {
+    for (size_t i = 0; i < ndevices; i++)
+      slots[i].store(nullptr, std::memory_order_relaxed);
+  }
+};
+
 void *alloc_mempool_block(size_t *size, void **mem_hndl, int expand_flag)
 {
     size_t alloc_size =  expand_flag ? mempool_options.mempool_expand_size : mempool_options.mempool_init_size;
@@ -69,7 +92,7 @@ void *alloc_mempool_block(size_t *size, void **mem_hndl, int expand_flag)
         CmiAbort("alloc_mempool_block: posix_memalign failed");
     }
     // Keep the registration handle so the block can be deregistered at teardown.
-    *mem_hndl = registerMemory(pool, *size);
+    *mem_hndl = g_lci_backend->registerMemoryAllDevices(pool, *size);
     return pool;
 }
 
@@ -250,6 +273,7 @@ void CommBackendLCI::init(char **argv) {
   m_remote_comp = lci::alloc_handler(remoteCallback);
   m_rcomp = lci::register_rcomp(m_remote_comp);
   lci::set_allocator(&m_allocator);
+  g_lci_backend = this;
   barrier();
 }
 
@@ -484,17 +508,25 @@ void CommBackendLCI::barrier(void) {
   lci::free_comp(&comp);
 }
 
+// Registers nothing yet: getDeviceMR registers on a device when a transfer
+// first needs it, and getRMR does for the device it exports.
 mr_t CommBackendLCI::registerMemory(void *addr, size_t size) {
-  auto mrs = new lci::mr_impl_t *[m_devices.size()];
-  for (int i = 0; i < m_devices.size(); i++) {
-    mrs[i] =
-        lci::register_memory_x(addr, size).device(m_devices[i])().get_impl();
-  }
+  auto region = new LazyMR(addr, size, m_devices.size());
   {
     std::lock_guard<std::mutex> lock(m_liveMrsMutex);
-    m_liveMrs.insert(mrs);
+    m_liveMrs.insert(region);
   }
-  return mrs;
+  return region;
+}
+
+// The message pool's blocks. Any thread may send from a block, on its own
+// device, so the block is registered on every device when it is allocated,
+// not on the send path the first time a device sends from it.
+mr_t CommBackendLCI::registerMemoryAllDevices(void *addr, size_t size) {
+  mr_t mr = registerMemory(addr, size);
+  for (int i = 0; i < (int)m_devices.size(); i++)
+    getDeviceMR(mr, i);
+  return mr;
 }
 
 size_t CommBackendLCI::getRMR(mr_t mr, void *addr, size_t size) {
@@ -512,37 +544,38 @@ size_t CommBackendLCI::getRMR(mr_t mr, void *addr, size_t size) {
   return sizeof(WireRMR);
 }
 
-void CommBackendLCI::deregisterMemory(mr_t mr_) {
+void CommBackendLCI::deregisterMemory(mr_t mr) {
   {
     std::lock_guard<std::mutex> lock(m_liveMrsMutex);
-    m_liveMrs.erase(mr_);
+    m_liveMrs.erase(mr);
   }
-  lci::mr_t *mrs = (lci::mr_t *)mr_;
-  for (int i = 0; i < m_devices.size(); i++) {
-    lci::mr_t mr(mrs[i]);
-    lci::deregister_memory(&mr);
+  releaseRegion(mr);
+}
+
+// Deregisters the devices a region was registered on, and frees it.
+void CommBackendLCI::releaseRegion(mr_t mr) {
+  auto region = static_cast<LazyMR *>(mr);
+  for (int i = 0; i < (int)m_devices.size(); i++) {
+    lci::mr_impl_t *impl = region->slots[i].load(std::memory_order_acquire);
+    if (impl != nullptr) {
+      lci::mr_t m(impl);
+      lci::deregister_memory(&m);
+    }
   }
-  delete[] mrs;
+  delete region;
 }
 
 // Release any memory regions the application never handed back, e.g. buffers
 // registered with CK_BUFFER_NODEREG. Must run while the devices are still alive
-// (deregisterMemory walks m_devices), so exit() calls this before free_device.
+// (releaseRegion walks m_devices), so exit() calls this before free_device.
 void CommBackendLCI::deregisterAllMemory() {
   std::unordered_set<void *> leftovers;
   {
     std::lock_guard<std::mutex> lock(m_liveMrsMutex);
     leftovers.swap(m_liveMrs);
   }
-  // Deregister outside the lock: deregisterMemory() takes it too.
-  for (void *mr : leftovers) {
-    lci::mr_t *mrs = (lci::mr_t *)mr;
-    for (int i = 0; i < m_devices.size(); i++) {
-      lci::mr_t m(mrs[i]);
-      lci::deregister_memory(&m);
-    }
-    delete[] mrs;
-  }
+  for (void *mr : leftovers)
+    releaseRegion(mr);
 }
 
 lci::device_t CommBackendLCI::getThreadLocalDevice() {
@@ -554,15 +587,38 @@ lci::device_t CommBackendLCI::getThreadLocalDevice() {
   }
 }
 
+// The registration for the device getThreadLocalDevice() posts on: device 0
+// for a thread without one, whose device_idx is -1 after exitThread().
 lci::mr_t CommBackendLCI::getThreadLocalMR(mr_t mr) {
-  return getDeviceMR(mr, detail::g_thread_context.device_idx);
+  int dev = detail::g_thread_context.tls_device.is_empty()
+                ? 0
+                : detail::g_thread_context.device_idx;
+  return getDeviceMR(mr, dev);
 }
 
+// Registers the region on the device the first time it is asked for. Two
+// threads can ask at once, e.g. the initiators of two gets from one buffer:
+// both register, the first to publish wins, and the other releases its own.
 lci::mr_t CommBackendLCI::getDeviceMR(mr_t mr, int device_idx) {
   if (mr == MR_NULL) {
     return lci::mr_t();
   }
-  return lci::mr_t(static_cast<lci::mr_impl_t **>(mr)[device_idx]);
+  auto region = static_cast<LazyMR *>(mr);
+  std::atomic<lci::mr_impl_t *> &slot = region->slots[device_idx];
+  lci::mr_impl_t *impl = slot.load(std::memory_order_acquire);
+  if (impl == nullptr) {
+    lci::mr_impl_t *mine = lci::register_memory_x(region->addr, region->size)
+                               .device(m_devices[device_idx])()
+                               .get_impl();
+    if (slot.compare_exchange_strong(impl, mine, std::memory_order_acq_rel,
+                                     std::memory_order_acquire)) {
+      impl = mine;
+    } else {
+      lci::mr_t lost(mine);
+      lci::deregister_memory(&lost);
+    }
+  }
+  return lci::mr_t(impl);
 }
 
 // The device a remote buffer's owner named. Every process must run with the

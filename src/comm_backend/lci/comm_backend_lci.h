@@ -58,6 +58,8 @@ public:
   bool threadMustPoll() override;
   void barrier(void) override;
   mr_t registerMemory(void *addr, size_t size) override;
+  // registerMemory, then registered on every device at once
+  mr_t registerMemoryAllDevices(void *addr, size_t size);
   size_t getRMR(mr_t mr, void *addr, size_t size) override;
   void deregisterMemory(mr_t mr) override;
 
@@ -90,6 +92,7 @@ private:
   std::mutex m_liveMrsMutex;
   std::unordered_set<void *> m_liveMrs;
   void deregisterAllMemory();
+  void releaseRegion(mr_t mr);
 
   bool m_remote_free = true;  // off with +nomempool_remote_free
 
