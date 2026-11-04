@@ -19,7 +19,16 @@ CpvDeclare(std::size_t, kRecommendedCutoff);
 }  // namespace cmi
 
 CpvStaticDeclare(std::size_t, kSegmentSize);
+// whether ++ipcpoolsize set kSegmentSize; if not, sizeSegmentForHost_ sets it
+CpvStaticDeclare(int, kSegmentSizeGiven);
 constexpr std::size_t kDefaultSegmentSize = 8 * 1024 * 1024;
+// Without ++ipcpoolsize, a region gets this much for every PE that can send
+// to it (every PE of the host's other processes), and at least
+// kDefaultSegmentSize. A freed block goes back only to the PE that allocated
+// it, so a region's space is in effect divided among its senders. POSIX shared
+// memory and xpmem both back a region with pages that are allocated when
+// first written, so space no sender reaches costs address space, not memory.
+constexpr std::size_t kSegmentPerSender = 512 * 1024;
 
 // Where the pool stops paying for itself. Carrying a message costs one memcpy
 // into the destination's segment, which grows with the message, while the
@@ -45,13 +54,14 @@ CsvStaticDeclare(CmiNodeLock, sleeper_lock);
 using sleeper_map_t = std::vector<CthThread>;
 CsvStaticDeclare(sleeper_map_t, sleepers);
 
-// Bounds of the per-PE structures in a segment. A process has at most
-// kMaxIpcRanks PEs, and a host at most kMaxIpcHostPes PEs over all its
-// processes; a run past either stops at start-up with an error
-// (finishSetup_).
-constexpr int kMaxIpcRanks = 256;
-constexpr int kMaxIpcHostPes = 512;
-// Block sizes the per-sender return lists cover: kCutOffPoints[0..15], up to
+// Bounds of the per-PE structures in a region. When a host runs more than one
+// process, each may have at most kMaxIpcRanks PEs and the host at most
+// kMaxIpcHostPes over all of them; a run past either stops at start-up with
+// an error (finishSetup_). Each rank costs a region 64 bytes and each host PE
+// 128, so these limits make the header about 160 KiB.
+constexpr int kMaxIpcRanks = 512;
+constexpr int kMaxIpcHostPes = 1024;
+// Block sizes the per-sender free lists cover: kCutOffPoints[0..15], up to
 // 2 MiB. Sixteen 8-byte heads fill the two cache lines one sender's lists
 // take anyway, so covering fewer would save no space. ++ipccutoff is capped
 // so that a message at the cutoff, with its headers, still fits the largest
@@ -59,48 +69,31 @@ constexpr int kMaxIpcHostPes = 512;
 constexpr int kIpcRetBins = 16;
 static_assert(kIpcRetBins <= (int)kNumCutOffPoints, "more return bins than block sizes");
 
-// One list head per cache line: every list below is written by PEs of
-// several processes, and two on one line would make each writer's atomic
-// operations fight over it.
+// One receive-queue head per cache line: every list below is written by PEs
+// of several processes, and two heads on one line would make each writer's
+// atomic operations fight over it. One sender's free lists share two lines
+// (ipc_return_), since a block of each size returns to the same sender.
 struct alignas(64) ipc_list_ {
   std::atomic<std::uintptr_t> head;
 };
 
-// One sender's lists of empty blocks in one segment, a list per block size.
+// One sender's free lists in one segment, a list per block size.
 struct alignas(64) ipc_return_ {
   std::array<std::atomic<std::uintptr_t>, kIpcRetBins> bin;
 };
 
-// The header of one process's segment. Each process creates one segment and
-// every other process on the host maps it. A message sent to this process is
-// copied into a block in this segment, and the receiving PE runs it in place.
-//
-// - heap: offset of the segment's unused space. A sender that has no empty
-//   block of the size it needs carves a new one here (compare-and-swap; the
-//   offset moves only if the block fits).
-// - rq[rank]: full blocks, holding messages for that PE of this process.
-//   Senders push; only that PE takes from it.
-// - node_rq: full blocks holding node-level messages (CmiSyncNodeSend*). Any
-//   PE of this process may take from it.
-// - ret[sender].bin[b]: empty blocks of size b. They are the blocks that PE
-//   `sender` (indexed among all the host's PEs) carved from this segment;
-//   this process's PEs push each one back here when they free the message
-//   in it. Only `sender` takes from it, and reuses the blocks for its next
-//   messages to this process. A block therefore always goes back to the PE
-//   that carved it, never to another sender.
-//
-// Each list is a linked stack of segment offsets, ended by cmi::ipc::max.
-// Any number of PEs push with a compare-and-swap, and holds no lock while
-// doing so. A taker never removes a single block: it exchanges the head for
-// "empty" and gets every block on the list at once. Since no other PE can
-// reach those blocks after that, no PE can reuse a block while the taker
-// follows its next pointer, which is what makes the lists safe without a
-// lock.
-//
-// (Earlier, one receive queue per process and one free list per block size
-// served every sender and receiver on the host, and each list's head doubled
-// as its lock; at ~3 M small messages/s per node over 2 x 23 PEs, a send
-// took 16 us.)
+// The header of one process's segment. doc/shared-memory-ipc.md describes
+// the design; in short:
+// - heap: offset of the start of the segment's unused space; max is its end.
+// - rq[rank]: blocks holding messages for that PE of this process. Senders
+//   push; only that PE takes.
+// - node_rq: blocks holding node-level messages; any PE of this process
+//   takes.
+// - ret[i].bin[b]: empty blocks of size b that host PE i allocated here and
+//   that have since been freed. This process's PEs push; only PE i takes.
+// Every list is a stack of segment offsets ended by cmi::ipc::max. Blocks are
+// pushed one at a time with a compare-and-swap, and taken only as a whole
+// list, by one exchange; no shared list ever has a single block removed.
 struct ipc_shared_ {
   std::atomic<std::uintptr_t> heap;
   std::uintptr_t max;
@@ -123,10 +116,11 @@ struct ipc_shared_ {
 
 // What one PE keeps in its own memory, touched by no other thread:
 // - hostIdx: its index among the host's PEs, which names its ret[] lists.
-// - cache[proc][b]: empty blocks of size b in process proc's segment, ready
-//   for its next sends there. When it runs out, the PE refills it by taking
-//   its whole ret[hostIdx].bin[b] list in that segment.
-// - inbox: full blocks it took from its receive queue and has not delivered
+// - cache[h][b]: empty blocks of size b in the segment of the host's h-th
+//   process (CmiIpcManager::hostProc), ready for its next sends there. When
+//   one runs out, the PE refills it by taking its whole ret[hostIdx].bin[b]
+//   list in that segment.
+// - inbox: blocks it took from its receive queues and has not delivered
 //   yet, oldest last.
 struct ipc_pe_state_ {
   int hostIdx = -1;
@@ -153,6 +147,9 @@ struct CmiIpcManager {
   // peers[node] is nonzero for every *other* process sharing this host, so
   // the send path can rule out a network destination with one load
   std::vector<char> peers;
+  // hostProc[node] is the index of that process among this host's processes
+  // (this one included), or -1 for a process on another host
+  std::vector<int> hostProc;
   // number of processes (including this one) on this host
   int nPeers;
   // per rank of this process, written only by that rank (after setup)
@@ -164,6 +161,7 @@ struct CmiIpcManager {
         key(key_),
         ready(false),
         peers(CmiNumNodes(), 0),
+        hostProc(CmiNumNodes(), -1),
         nPeers(1),
         pe(CmiMyNodeSize()) {}
   // virtual destructor may be needed
@@ -184,9 +182,14 @@ inline std::size_t whichBin_(std::size_t size) {
   return static_cast<std::size_t>(it - begin);  // kNumCutOffPoints if none
 }
 
+// offset of a segment's first block, just past its header
+inline static std::uintptr_t segmentBegin_(void) {
+  return (std::uintptr_t)(sizeof(ipc_shared_) +
+                          (sizeof(ipc_shared_) % ALIGN_BYTES));
+}
+
 inline static void initIpcShared_(ipc_shared_* shared) {
-  auto begin = (std::uintptr_t)(sizeof(ipc_shared_) +
-                                (sizeof(ipc_shared_) % ALIGN_BYTES));
+  auto begin = segmentBegin_();
   CmiAssert(begin != cmi::ipc::nil);
   auto end = begin + CpvAccess(kSegmentSize);
   new (shared) ipc_shared_(begin, end);
@@ -203,17 +206,21 @@ inline void initSegmentSize_(char** argv) {
   using namespace cmi::ipc;
   CpvInitialize(std::size_t, kRecommendedCutoff);
   CpvInitialize(std::size_t, kSegmentSize);
+  CpvInitialize(int, kSegmentSizeGiven);
 
   CmiInt8 value;
   auto flag =
       CmiGetArgLongDesc(argv, "++" CMI_IPC_POOL_SIZE_ARG, &value, CMI_IPC_POOL_SIZE_DESC);
+  CpvAccess(kSegmentSizeGiven) = flag ? 1 : 0;
+  // without ++ipcpoolsize, sizeSegmentForHost_ grows this once the host's
+  // layout is known; the default cutoff below only ever needs the minimum
   CpvAccess(kSegmentSize) = flag ? (std::size_t)value : kDefaultSegmentSize;
   CmiEnforceMsg(CpvAccess(kSegmentSize), "segment size must be non-zero!");
   if (CmiGetArgLongDesc(argv, "++" CMI_IPC_CUTOFF_ARG, &value, CMI_IPC_CUTOFF_DESC)) {
     auto bin = whichBin_((std::size_t)value);
     CmiEnforceMsg(bin < kNumCutOffPoints, "ipc cutoff out of range!");
     // A block holds the message and its headers, so a cutoff in the largest
-    // bin the return lists cover would put messages at the cutoff past it.
+    // bin the free lists cover would put messages at the cutoff past it.
     constexpr std::size_t maxBin = kIpcRetBins - 2;
     if (bin > maxBin) {
       if (CmiMyPe() == 0) {
@@ -235,6 +242,21 @@ inline void initSegmentSize_(char** argv) {
     auto byCapacity = kCutOffPoints[(bin >= 0) ? bin : 0];
     CpvAccess(kRecommendedCutoff) = std::min(byCapacity, kDefaultCutoff);
   }
+}
+
+// Without ++ipcpoolsize, sizes this process's segment for the host's layout:
+// kSegmentPerSender for each PE of the host's other processes, and at least
+// kDefaultSegmentSize. Every process on a host computes the same value, which
+// matters because any of them may create and size a peer's segment. Runs on
+// every PE, once the topology is known.
+inline static void sizeSegmentForHost_(void) {
+  if (CpvAccess(kSegmentSizeGiven)) return;
+  int* pes;
+  int nPes;
+  CmiGetPesOnPhysicalNode(CmiPhysicalNodeID(CmiMyPe()), &pes, &nPes);
+  const auto senders = (std::size_t)std::max(nPes - CmiMyNodeSize(), 0);
+  CpvAccess(kSegmentSize) =
+      std::max(kDefaultSegmentSize, senders * kSegmentPerSender);
 }
 
 inline static void printIpcStartupMessage_(const char* implName) {

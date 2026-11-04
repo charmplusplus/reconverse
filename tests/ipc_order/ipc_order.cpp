@@ -24,9 +24,7 @@
  * process's segment and is the only one that takes from it, so a block never
  * reaches its destination by a second hop through another PE. With k PEs per
  * process, rank r of process 0 sends its burst to rank r of process 1, and
- * each of the k receivers checks its own burst. (Before the per-PE queues,
- * every PE in a process drained one queue, and two messages could cross on
- * the way; the test then ran with one PE per process only.)
+ * each of the k receivers checks its own burst.
  */
 #include <converse.h>
 #include <stdio.h>

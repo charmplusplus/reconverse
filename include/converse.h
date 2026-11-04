@@ -1690,7 +1690,7 @@ void CmiInterSyncNodeSendAndFreeFn(int destNode, int partition, int messageSize,
 #define CMI_IPC_CUTOFF_ARG "ipccutoff"
 #define CMI_IPC_CUTOFF_DESC "max message size for cmi-shmem (in bytes)"
 #define CMI_IPC_POOL_SIZE_ARG "ipcpoolsize"
-#define CMI_IPC_POOL_SIZE_DESC "size of cmi-shmem pool (in bytes)"
+#define CMI_IPC_POOL_SIZE_DESC "size of each process's cmi-shmem pool (in bytes; default 512 KiB per PE of the host's other processes, at least 8 MiB)"
 
 /* Charm++'s charmrun forwards the ipc settings to the compute nodes through
    these environment variables, so they have to be part of the converse.h
@@ -1729,11 +1729,12 @@ constexpr auto defaultTimeout = 4;
 // CmiIpcBlock itself.
 struct alignas(ALIGN_BYTES) CmiIpcBlock {
 public:
-  // "home" rank of the block
-  int src;
-  int dst;
+  // the process whose segment holds the block: the receiver
+  int segment_proc;
+  // the process that allocated the block: the sender
+  int sender_proc;
   // the host-local index of the PE that allocated the block: freeing it puts
-  // it back on that PE's return list in the block's segment
+  // it back on that PE's free list in the block's segment
   int owner;
   uintptr_t orig;
   uintptr_t next;
@@ -1842,10 +1843,18 @@ CLINKAGE const char *CmiIpcImplName(void);
 /* Processes sharing this host, this one included (1 when IPC is off). */
 CLINKAGE int CmiIpcNumPeers(void);
 /* Messages this PE has put into, and taken out of, the pool. Intended for
-   tests and diagnostics: a PE takes messages out of the pool on behalf of
-   its whole process, so the two do not balance per PE. */
+   tests and diagnostics. A PE takes out the messages addressed to it, plus
+   whichever node-level messages it happens to take for its process. */
 CLINKAGE long CmiIpcMessagesSent(void);
 CLINKAGE long CmiIpcMessagesReceived(void);
+/* Messages this PE sent over the network instead because the destination's
+   segment had no block for them: the segment's unused space was used up, and
+   this PE had no freed block of that size there (see
+   doc/shared-memory-ipc.md, "Memory use"). */
+CLINKAGE long CmiIpcPoolFullSends(void);
+/* Bytes of this process's segment that senders have cut into blocks so far.
+   Blocks are never returned to the unused space, so this only grows. */
+CLINKAGE size_t CmiIpcPoolBytesUsed(void);
 
 /* Keep this PE's sends off the shared-memory pool until the matching
    CmiIpcEndNetworkOnly(); nestable.

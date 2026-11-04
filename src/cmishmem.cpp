@@ -26,6 +26,10 @@ CsvStaticDeclare(int, ipcRequested_);
 CpvStaticDeclare(int, ipcInitDone_);
 CpvStaticDeclare(long, ipcSent_);
 CpvStaticDeclare(long, ipcRecvd_);
+// sends that found the destination's segment full (CmiIpcPoolFullSends)
+CpvStaticDeclare(long, ipcPoolFull_);
+// whether this process has printed the notice for a full segment
+static std::atomic<bool> ipcPoolFullNoticed_{false};
 // Nesting depth of CmiIpcBeginNetworkOnly(): while it is nonzero this PE's
 // sends stay on the backend, so they cannot overtake a network operation the
 // caller already has in flight.
@@ -61,12 +65,15 @@ static void finishSetup_(CmiIpcManager* meta) {
   meta->nPeers = nProcs;
   for (int i = 0; i < nProcs; i++) {
     const int proc = CmiNodeOf(pes[i * nSize]);
-    if (proc != meta->mine && proc >= 0 && proc < (int)meta->peers.size())
-      meta->peers[proc] = 1;
+    if (proc < 0 || proc >= (int)meta->peers.size()) continue;
+    meta->hostProc[proc] = i;
+    if (proc != meta->mine) meta->peers[proc] = 1;
   }
-  // Each PE's index among the host's PEs names its return lists in every
-  // peer's segment, and each rank has one receive queue in its own.
-  CmiEnforceMsg(nSize <= kMaxIpcRanks && nPes <= kMaxIpcHostPes,
+  // Each PE's index among the host's PEs names its free lists in every
+  // peer's segment, and each rank has one receive queue in its own. A
+  // process alone on its host never uses either, so the limits do not apply
+  // to it (and the receive path skips the pool, see hasPeers_).
+  CmiEnforceMsg(nProcs <= 1 || (nSize <= kMaxIpcRanks && nPes <= kMaxIpcHostPes),
                 "shared-memory pool: %d PEs per process and %d per host; at "
                 "most %d and %d are supported (kMaxIpcRanks, kMaxIpcHostPes)",
                 nSize, nPes, kMaxIpcRanks, kMaxIpcHostPes);
@@ -76,7 +83,7 @@ static void finishSetup_(CmiIpcManager* meta) {
     st.hostIdx = (int)(std::find(pes, pes + nPes, pe) - pes);
     CmiEnforceMsg(st.hostIdx < nPes, "shared-memory pool: PE %d is not on its "
                   "own host's PE list", pe);
-    st.cache.resize(CmiNumNodes());
+    st.cache.resize(nProcs);
     for (auto& c : st.cache) c.fill(cmi::ipc::max);
     st.inbox.reserve(256);
   }
@@ -156,7 +163,8 @@ CmiIpcBlock* CmiMsgToIpcBlock(CmiIpcManager* manager, char* src, std::size_t len
   char* dst;
   CmiIpcBlock* block;
   // check whether we miraculously got a usable block
-  if ((block = CmiIsIpcBlock(manager, BLKSTART(src), node)) && (node == block->src)) {
+  if ((block = CmiIsIpcBlock(manager, BLKSTART(src), node)) &&
+      (node == block->segment_proc)) {
     dst = src;
   } else {
     std::pair<CmiIpcBlock*, CmiIpcAllocStatus> status;
@@ -176,7 +184,8 @@ CmiIpcBlock* CmiMsgToIpcBlock(CmiIpcManager* manager, char* src, std::size_t len
     if (block == nullptr) {
       return nullptr;
     } else {
-      CmiAssert((block->dst == manager->mine) && (manager->mine == CmiMyNode()));
+      CmiAssert((block->sender_proc == manager->mine) &&
+                (manager->mine == CmiMyNode()));
       dst = (char*)CmiIpcBlockToMsg(block, true);
       memcpy(dst, src, len);
       CmiFree(src);
@@ -217,6 +226,14 @@ inline static bool metadataReady_(CmiIpcManager* meta) {
   return meta && meta->shared[meta->mine].load(std::memory_order_acquire);
 }
 
+// Whether the pool is set up and this process shares its host with another,
+// the only case in which anything can arrive through it. A process alone on
+// its host may have more ranks than its segment has receive queues.
+inline static bool hasPeers_(CmiIpcManager* meta) {
+  return metadataReady_(meta) && meta->ready.load(std::memory_order_acquire) &&
+         meta->nPeers > 1;
+}
+
 // Refills this PE's inbox with everything its receive queue and the process's
 // node queue hold; returns whether it got any.
 static bool refillInbox_(CmiIpcManager* meta, ipc_pe_state_& st) {
@@ -227,8 +244,7 @@ static bool refillInbox_(CmiIpcManager* meta, ipc_pe_state_& st) {
 }
 
 CmiIpcBlock* CmiPopIpcBlock(CmiIpcManager* meta) {
-  if (!metadataReady_(meta) || !meta->ready.load(std::memory_order_acquire))
-    return nullptr;
+  if (!hasPeers_(meta)) return nullptr;
   auto& st = meta->pe[CmiMyRank()];
   if (st.inbox.empty() && !refillInbox_(meta, st)) return nullptr;
   auto* block = st.inbox.back();
@@ -237,8 +253,7 @@ CmiIpcBlock* CmiPopIpcBlock(CmiIpcManager* meta) {
 }
 
 int CmiDeliverIpcInbox(CmiIpcManager* meta) {
-  if (!metadataReady_(meta) || !meta->ready.load(std::memory_order_acquire))
-    return 0;
+  if (!hasPeers_(meta)) return 0;
   auto& st = meta->pe[CmiMyRank()];
   if (st.inbox.empty() && !refillInbox_(meta, st)) return 0;
   // Only what this pass took: delivering moves a message onto a local queue,
@@ -254,8 +269,8 @@ int CmiDeliverIpcInbox(CmiIpcManager* meta) {
 }
 
 bool CmiPushIpcBlock(CmiIpcManager* meta, CmiIpcBlock* block) {
-  auto* shared = meta->shared[block->src].load(std::memory_order_acquire);
-  CmiAssert(meta->mine == block->dst);
+  auto* shared = meta->shared[block->segment_proc].load(std::memory_order_acquire);
+  CmiAssert(meta->mine == block->sender_proc);
   // CmiMsgToIpcBlock put the destination rank (or the node marker) here
   const auto rank = CMI_DEST_RANK(CmiIpcBlockToMsg(block));
   if (rank == cmi::ipc::nodeDatagram) {
@@ -283,14 +298,14 @@ std::pair<CmiIpcBlock*, CmiIpcAllocStatus> CmiAllocIpcBlock(CmiIpcManager* meta,
   }
   auto bin = whichBin_(size);
   if (bin >= (std::size_t)kIpcRetBins) {
-    // larger than any block the return lists cover; the caller uses the network
+    // larger than any block the free lists cover; the caller uses the network
     return std::make_pair((CmiIpcBlock*)nullptr, CMI_IPC_OUT_OF_MEMORY);
   }
 
   // This PE's private list of blocks of that size in that segment, refilled
-  // with everything its receivers there have returned since it last looked
+  // with everything its receivers there have freed since it last looked
   auto& st = meta->pe[CmiMyRank()];
-  auto& head = st.cache[dstProc][bin];
+  auto& head = st.cache[meta->hostProc[dstProc]][bin];
   if (head == cmi::ipc::max) {
     // A peer maps the segment before its owner initializes it, and an
     // uninitialized segment is all zeros, which no list here reads as empty.
@@ -317,6 +332,18 @@ std::pair<CmiIpcBlock*, CmiIpcAllocStatus> CmiAllocIpcBlock(CmiIpcManager* meta,
     auto offset = shared->heap.load(std::memory_order_relaxed);
     do {
       if (offset + stride > shared->max) {
+        // The segment's unused space is used up, and this PE has no freed
+        // block of this size there: the message goes over the network.
+        // Other senders' freed blocks are not available to this one.
+        if (CpvInitialized(ipcPoolFull_)) CpvAccess(ipcPoolFull_)++;
+        if (!ipcPoolFullNoticed_.exchange(true, std::memory_order_relaxed)) {
+          CmiPrintf("Converse> +ipc: PE %d found process %d's shared-memory "
+                    "segment full (%zu bytes); sends to it that find no "
+                    "freed block of their size go over the network. "
+                    "++ipcpoolsize sets the segment size.\n",
+                    CmiMyPe(), dstProc,
+                    (std::size_t)(shared->max - segmentBegin_()));
+        }
         return std::make_pair((CmiIpcBlock*)nullptr, CMI_IPC_OUT_OF_MEMORY);
       }
     } while (!shared->heap.compare_exchange_weak(offset, offset + stride,
@@ -328,8 +355,8 @@ std::pair<CmiIpcBlock*, CmiIpcAllocStatus> CmiAllocIpcBlock(CmiIpcManager* meta,
   }
 
   block->owner = st.hostIdx;
-  block->src = dstProc;
-  block->dst = thisProc;
+  block->segment_proc = dstProc;
+  block->sender_proc = thisProc;
 
   return std::make_pair(block, CMI_IPC_SUCCESS);
 }
@@ -338,7 +365,7 @@ void CmiFreeIpcBlock(CmiIpcManager* meta, CmiIpcBlock* block) {
   auto bin = whichBin_(block->size);
   CmiAssert(bin < (std::size_t)kIpcRetBins);
   CmiAssert(block->owner >= 0 && block->owner < kMaxIpcHostPes);
-  auto* shared = meta->shared[block->src].load(std::memory_order_acquire);
+  auto* shared = meta->shared[block->segment_proc].load(std::memory_order_acquire);
   // back to the PE that allocated it, which takes its list whole
   pushList_(shared->ret[block->owner].bin[bin], block);
 }
@@ -416,6 +443,7 @@ void CmiIpcInit(char** argv) {
   CpvAccess(ipcInitDone_) = 1;
   CpvInitialize(long, ipcSent_);
   CpvInitialize(long, ipcRecvd_);
+  CpvInitialize(long, ipcPoolFull_);
   CpvInitialize(int, ipcNetworkOnly_);
 
   CsvInitialize(ipc_manager_map_, managers_);
@@ -524,6 +552,18 @@ CLINKAGE long CmiIpcMessagesReceived(void) {
   return CpvInitialized(ipcRecvd_) ? CpvAccess(ipcRecvd_) : 0;
 }
 
+CLINKAGE long CmiIpcPoolFullSends(void) {
+  return CpvInitialized(ipcPoolFull_) ? CpvAccess(ipcPoolFull_) : 0;
+}
+
+CLINKAGE size_t CmiIpcPoolBytesUsed(void) {
+  auto* manager = CsvAccess(coreIpcManager_);
+  if (!metadataReady_(manager)) return 0;
+  auto* shared = manager->shared[manager->mine].load(std::memory_order_acquire);
+  auto heap = shared->heap.load(std::memory_order_relaxed);
+  return heap == cmi::ipc::nil ? 0 : (size_t)(heap - segmentBegin_());
+}
+
 CLINKAGE void CmiIpcBeginNetworkOnly(void) {
   // Uninitialized means CmiIpcInit has not run, so there is no pool to keep
   // sends off of and nothing to do.
@@ -580,6 +620,9 @@ CmiIpcManager* CmiMakeIpcManager(CthThread th) {
            "--enable-shmem");
   return nullptr;
 #else
+  // every PE, before the segments exist: any process may create and size a
+  // peer's segment, so all of them must agree on its size
+  sizeSegmentForHost_();
   putSleeper_(th);
 
   // ensure all sleepers are reg'd
