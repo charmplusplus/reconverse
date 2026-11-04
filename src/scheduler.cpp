@@ -74,10 +74,9 @@ void CmiSchedulerSetIdle() {
 bool CmiSchedulerPollIpc() {
   CmiIpcManager *manager = CsvAccess(coreIpcManager_);
   if (manager == nullptr) return false;
-  CmiIpcBlock *block = CmiPopIpcBlock(manager);
-  if (block == nullptr) return false;
-  CmiDeliverIpcBlockMsg(block);
-  return true;
+  // every block waiting for this PE: one at a time per pass left messages
+  // queued for hundreds of microseconds under heavy traffic
+  return CmiDeliverIpcInbox(manager) > 0;
 }
 
 /**

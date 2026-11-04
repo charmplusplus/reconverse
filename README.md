@@ -5,6 +5,7 @@ This is a clean reimplementation of Converse without the complexities and deadco
 ## Documentation
 
 - [Reconverse on Windows](README.windows.md): building and testing a single-process Reconverse with MSVC.
+- [Shared-memory IPC](doc/shared-memory-ipc.md): how the `+ipc` pool works: segments and blocks, its lists and why they need no lock, the send, receive and free paths, message order, memory use and start-up.
 - [Converse and Reconverse](doc/converse-and-reconverse.md): how reconverse differs from classic Converse, with a block diagram of the modules and their interfaces, a side-by-side comparison, API compatibility notes, and what returns for AMPI (isomalloc, migratable threads).
 
 ## Build Reconverse
@@ -107,8 +108,8 @@ The example executables are located in the build/test/<program_name> folders. Yo
 - **`+backend <lci|lcw>`**: select the communication backend at runtime. If not specified, Reconverse will use the first available backend in the order of LCI, LCW.
 - **`+ipc`** / **`+noipc`**: send messages between processes that share a host through shared memory instead of the communication backend. Off by default; see [Shared-memory IPC](#shared-memory-ipc-ipc).
 - **`+ipcmode <auto|shm|xpmem>`**: pick the mechanism backing the shared-memory pool. Implies `+ipc`.
-- **`++ipcpoolsize <bytes>`**: size of each process's shared-memory pool (8 MiB by default).
-- **`++ipccutoff <bytes>`**: largest message the pool will carry. Messages above it go over the communication backend. Defaults to 32 KiB, or to a bin below `poolsize / 25` when that is smaller.
+- **`++ipcpoolsize <bytes>`**: size of each process's shared-memory pool. By default, 512 KiB for each PE of the host's other processes, and at least 8 MiB (see [Memory use](doc/shared-memory-ipc.md#memory-use)).
+- **`++ipccutoff <bytes>`**: largest message the pool will carry. Messages above it go over the communication backend. Defaults to 32 KiB, or to a bin below `poolsize / 25` when that is smaller. At most 1 MiB; a larger value is capped there, with a notice.
 - **`+randomized_msgq`**: run messages in a uniformly random order, for shaking out message-order races. See [Randomized message order](#randomized-message-order-randomized_msgq). Cannot be combined with `+old-scheduler`.
 - **`+randomized_seed <N>`**: base seed for `+randomized_msgq`. Defaults to a value taken from the wall clock; the startup banner prints the seed in use.
 - **`+glibc_tuned_malloc`**: on glibc systems, raise glibc's malloc thresholds at startup (`mallopt`: mmap threshold 32 MB, trim threshold 1 GB, top pad 256 MB) and print `Reconverse> glibc malloc (+glibc_tuned_malloc): ...`. Off by default; accepted and ignored on other C libraries. See [glibc malloc tuning](#glibc-malloc-tuning-glibc_tuned_malloc).
@@ -152,10 +153,17 @@ before. Turn it on with `+ipc`:
 $ srun -n 4 ./reconverse_ping_ack +pe 8 +ipc
 ```
 
-Messages fall back to the communication backend, silently and per message,
-whenever the pool cannot carry them: the destination is on another host, the
-message is larger than `++ipccutoff`, or the pool is momentarily full. A
-program therefore never has to know whether IPC is on.
+Messages fall back to the communication backend, per message, whenever the
+pool cannot carry them: the destination is on another host, the message is
+larger than `++ipccutoff`, or the destination's pool is full. A program
+therefore never has to know whether IPC is on.
+
+A pool fills for good, not for a moment. A freed block goes back only to the
+PE that allocated it, so once a process's pool has been cut into blocks, a
+sender with no freed block of the right size there uses the network for its
+messages to that process. The first such send in a process prints a notice,
+and `CmiIpcPoolFullSends` counts them; `++ipcpoolsize` raises the size. See
+[Memory use](doc/shared-memory-ipc.md#memory-use).
 
 ### Mechanisms
 
@@ -216,6 +224,10 @@ const char *CmiIpcImplName(void); /* "posixshm", "xpmem", or "none" */
 int CmiIpcNumPeers(void);         /* processes on this host, this one included */
 long CmiIpcMessagesSent(void);    /* messages this PE put into the pool */
 long CmiIpcMessagesReceived(void);/* messages this PE took out of it */
+long CmiIpcPoolFullSends(void);   /* sends this PE made over the network
+                                     because the destination's pool was full */
+size_t CmiIpcPoolBytesUsed(void); /* bytes of this process's pool cut into
+                                     blocks so far */
 ```
 
 `tests/ipc` uses these to check that traffic really took the pool.
@@ -252,21 +264,20 @@ holds the data by the time the acknowledgement is delivered.
   collective to startup and prints the usual topology line.
 * Cross-partition sends (`CmiInterSyncSend` and friends) always use the
   communication backend.
-* Messages to one destination can be reordered relative to each other, in two
-  ways. A message under the cutoff and one over it travel by different routes,
-  so they can cross. And a process has one receive queue, which every PE in it
-  drains, so when a process runs several PEs a block taken by a PE other than
-  the destination reaches that destination by a second hop and can arrive
-  after a block taken later. What does not happen is wholesale reversal: the
-  queue is FIFO, so a burst that goes entirely through the pool, from one PE
-  to a process running one PE, arrives in the order it was sent
-  (`tests/ipc_order` checks this), and no message has to wait for the queue to
-  drain before anything looks at it. Converse has never ordered messages
+* Messages from one PE to another that both go through the pool arrive in the
+  order sent, with any number of PEs per process: each PE has its own receive
+  queue and is the only one that takes from it (`tests/ipc_order` checks
+  this). But a message under the cutoff and one over it travel by different
+  routes, so they can cross, and so can a message sent while the destination's
+  pool is full and one sent after. Converse has never ordered messages
   between PEs, so none of this breaks a guarantee, but a program that happened
   to rely on the ordering the network backend gave it will notice. A one-sided
   put is reordered against pool messages the same way, and there it *can*
   break a program: see [Ordering a notification behind a one-sided
   put](#ordering-a-notification-behind-a-one-sided-put).
+* When a host runs more than one process, each may have at most 512 PEs and
+  the host at most 1,024 (`kMaxIpcRanks`, `kMaxIpcHostPes`); a larger run
+  stops at start-up with an error. `++ipccutoff` is at most 1 MiB.
 * A process killed outright (not `CmiExit`) leaves its POSIX shared memory
   segment behind in `/dev/shm`; a clean exit unlinks it. `xpmem` has nothing
   to leave behind.

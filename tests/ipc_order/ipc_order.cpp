@@ -20,11 +20,11 @@
  * with the pool off reports what it saw and fails only if a message is lost,
  * duplicated or corrupted -- the backend makes no ordering promise either.
  *
- * One PE per process, deliberately. Every PE in a process drains the same
- * queue, so with two of them a block taken by the PE that is not the
- * destination reaches that destination's queue by a second hop, and two
- * messages can cross. That is a property of the drain, not of the queue, and
- * it is not what this test is about.
+ * Several PEs per process work too: each PE has its own receive queue in its
+ * process's segment and is the only one that takes from it, so a block never
+ * reaches its destination by a second hop through another PE. With k PEs per
+ * process, rank r of process 0 sends its burst to rank r of process 1, and
+ * each of the k receivers checks its own burst.
  */
 #include <converse.h>
 #include <stdio.h>
@@ -53,13 +53,14 @@ struct DoneMsg {
   int firstGot;      // ...and what came
   int whenFirstSent; // where in the burst message 0 ended up (1 = first out)
   int poolRecvd;     // how many of the burst the pool delivered
+  int receiver;      // the PE that sends this report
 };
 
 CpvDeclare(int, seqHIdx);
 CpvDeclare(int, doneHIdx);
 CpvDeclare(int, exitHIdx);
 
-// PE 1's tally of the burst.
+// A receiver's tally of its burst.
 CpvDeclare(int, received);
 CpvDeclare(int, expected);
 CpvDeclare(int, inversions);
@@ -67,6 +68,8 @@ CpvDeclare(int, firstExpected);
 CpvDeclare(int, firstGot);
 CpvDeclare(int, whenFirstSent);
 CpvDeclare(long, recvBefore);
+// PE 0: receivers that have reported
+CpvDeclare(int, doneCount);
 
 static int expectIpc;
 
@@ -113,6 +116,7 @@ static void seqHandler(void *vmsg) {
   d->firstGot = CpvAccess(firstGot);
   d->whenFirstSent = CpvAccess(whenFirstSent);
   d->poolRecvd = (int)(CmiIpcMessagesReceived() - CpvAccess(recvBefore));
+  d->receiver = CmiMyPe();
   CmiSyncSendAndFree(0, sizeof(DoneMsg), d);
 }
 
@@ -123,6 +127,7 @@ static void doneHandler(void *vmsg) {
   const int firstGot = d->firstGot;
   const int whenFirstSent = d->whenFirstSent;
   const int poolRecvd = d->poolRecvd;
+  const int receiver = d->receiver;
   CmiFree(vmsg);
 
   // The pool is only known to have carried the whole burst if it delivered
@@ -130,9 +135,9 @@ static void doneHandler(void *vmsg) {
   // backend, and a burst split across two routes says nothing about either.
   const int allThroughPool = (poolRecvd >= BURST);
 
-  CmiPrintf("ipc_order: %d messages, %d delivered by the pool, %d out of "
-            "order, first of the burst came out %d%s\n",
-            BURST, poolRecvd, inversions, whenFirstSent,
+  CmiPrintf("ipc_order: PE %d: %d messages, %d delivered by the pool, %d out "
+            "of order, first of the burst came out %d%s\n",
+            receiver, BURST, poolRecvd, inversions, whenFirstSent,
             allThroughPool ? "" : " (order not checked: mixed routes)");
 
   if (expectIpc && !allThroughPool)
@@ -149,6 +154,9 @@ static void doneHandler(void *vmsg) {
              "oldest one waiting for the queue to drain.",
              inversions, BURST, firstExpected, firstGot, whenFirstSent, BURST);
 
+  // Stop once every receiver has reported
+  if (++CpvAccess(doneCount) < CmiNumPes() / 2)
+    return;
   void *stop = CmiAlloc(sizeof(CmiMessageHeader));
   CmiSetHandler(stop, CpvAccess(exitHIdx));
   CmiSyncBroadcastAllAndFree(sizeof(CmiMessageHeader), stop);
@@ -179,15 +187,17 @@ static void ipcOrderInit(int argc, char **argv) {
   CpvInitialize(int, firstGot);
   CpvInitialize(int, whenFirstSent);
   CpvInitialize(long, recvBefore);
+  CpvInitialize(int, doneCount);
+  CpvAccess(doneCount) = 0;
   CpvAccess(received) = CpvAccess(expected) = CpvAccess(inversions) = 0;
   CpvAccess(firstExpected) = CpvAccess(firstGot) = -1;
   CpvAccess(whenFirstSent) = -1;
   CpvAccess(recvBefore) = CmiIpcMessagesReceived();
 
-  if (CmiNumPes() != 2 || CmiNumNodes() != 2)
-    CmiAbort("ipc_order needs exactly 2 PEs in 2 processes on one host. Run "
-             "it as: <launcher> -n 2 ./reconverse_ipc_order +pe 2 +ipc "
-             "+expect-ipc");
+  if (CmiNumNodes() != 2 || CmiNumPes() != 2 * CmiMyNodeSize())
+    CmiAbort("ipc_order needs 2 processes on one host with the same number "
+             "of PEs each. Run it as: <launcher> -n 2 ./reconverse_ipc_order "
+             "+pe 2 +ipc +expect-ipc (or +pe 2k for k PEs per process)");
 
   if (expectIpc && !CmiIpcEnabled())
     CmiAbort("ipc_order: PE %d: +expect-ipc, but the shared-memory pool is "
@@ -198,11 +208,13 @@ static void ipcOrderInit(int argc, char **argv) {
     CmiPrintf("ipc_order: %d messages of %d bytes, pool %s\n", BURST,
               (int)sizeof(SeqMsg), CmiIpcEnabled() ? CmiIpcImplName() : "off");
 
-  // Both PEs have to be ready for the burst, and PE 1's counter has to be
-  // taken, before any of it is sent.
+  // Every PE has to be ready for the burst, and every receiver's counter has
+  // to be taken, before any of it is sent.
   CmiBarrier();
 
-  if (CmiMyPe() == 1) {
+  // Process 1's PEs receive; rank r of process 0 sends to rank r of process 1
+  const int k = CmiMyNodeSize();
+  if (CmiMyNode() == 1) {
     // Stay out of the scheduler while PE 0 sends, so the whole burst is
     // queued before any of it is taken out.
     const double until = CmiWallTimer() + STALL_SECONDS;
@@ -216,7 +228,7 @@ static void ipcOrderInit(int argc, char **argv) {
     CmiSetHandler(m, CpvAccess(seqHIdx));
     m->seq = seq;
     m->pattern = patternFor(seq);
-    CmiSyncSendAndFree(1, sizeof(SeqMsg), m);
+    CmiSyncSendAndFree(k + CmiMyRank(), sizeof(SeqMsg), m);
   }
 }
 

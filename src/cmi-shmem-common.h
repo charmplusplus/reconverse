@@ -19,7 +19,16 @@ CpvDeclare(std::size_t, kRecommendedCutoff);
 }  // namespace cmi
 
 CpvStaticDeclare(std::size_t, kSegmentSize);
+// whether ++ipcpoolsize set kSegmentSize; if not, sizeSegmentForHost_ sets it
+CpvStaticDeclare(int, kSegmentSizeGiven);
 constexpr std::size_t kDefaultSegmentSize = 8 * 1024 * 1024;
+// Without ++ipcpoolsize, a region gets this much for every PE that can send
+// to it (every PE of the host's other processes), and at least
+// kDefaultSegmentSize. A freed block goes back only to the PE that allocated
+// it, so a region's space is in effect divided among its senders. POSIX shared
+// memory and xpmem both back a region with pages that are allocated when
+// first written, so space no sender reaches costs address space, not memory.
+constexpr std::size_t kSegmentPerSender = 512 * 1024;
 
 // Where the pool stops paying for itself. Carrying a message costs one memcpy
 // into the destination's segment, which grows with the message, while the
@@ -45,34 +54,78 @@ CsvStaticDeclare(CmiNodeLock, sleeper_lock);
 using sleeper_map_t = std::vector<CthThread>;
 CsvStaticDeclare(sleeper_map_t, sleepers);
 
-// the data each pe shares with its peers
-// contains pool of free blocks, heap, and receive queue
+// Bounds of the per-PE structures in a region. When a host runs more than one
+// process, each may have at most kMaxIpcRanks PEs and the host at most
+// kMaxIpcHostPes over all of them; a run past either stops at start-up with
+// an error (finishSetup_). Each rank costs a region 64 bytes and each host PE
+// 128, so these limits make the header about 160 KiB.
+constexpr int kMaxIpcRanks = 512;
+constexpr int kMaxIpcHostPes = 1024;
+// Block sizes the per-sender free lists cover: kCutOffPoints[0..15], up to
+// 2 MiB. Sixteen 8-byte heads fill the two cache lines one sender's lists
+// take anyway, so covering fewer would save no space. ++ipccutoff is capped
+// so that a message at the cutoff, with its headers, still fits the largest
+// of them (initSegmentSize_).
+constexpr int kIpcRetBins = 16;
+static_assert(kIpcRetBins <= (int)kNumCutOffPoints, "more return bins than block sizes");
+
+// One receive-queue head per cache line: every list below is written by PEs
+// of several processes, and two heads on one line would make each writer's
+// atomic operations fight over it. One sender's free lists share two lines
+// (ipc_return_), since a block of each size returns to the same sender.
+struct alignas(64) ipc_list_ {
+  std::atomic<std::uintptr_t> head;
+};
+
+// One sender's free lists in one segment, a list per block size.
+struct alignas(64) ipc_return_ {
+  std::array<std::atomic<std::uintptr_t>, kIpcRetBins> bin;
+};
+
+// The header of one process's segment. doc/shared-memory-ipc.md describes
+// the design; in short:
+// - heap: offset of the start of the segment's unused space; max is its end.
+// - rq[rank]: blocks holding messages for that PE of this process. Senders
+//   push; only that PE takes.
+// - node_rq: blocks holding node-level messages; any PE of this process
+//   takes.
+// - ret[i].bin[b]: empty blocks of size b that host PE i allocated here and
+//   that have since been freed. This process's PEs push; only PE i takes.
+// Every list is a stack of segment offsets ended by cmi::ipc::max. Blocks are
+// pushed one at a time with a compare-and-swap, and taken only as a whole
+// list, by one exchange; no shared list ever has a single block removed.
 struct ipc_shared_ {
-  std::array<std::atomic<std::uintptr_t>, kNumCutOffPoints> free;
-  // messages waiting to be delivered, oldest first. queue is the head and
-  // doubles as the list's lock (see pushBlockFifo_); qtail is the end, so a
-  // sender can append without walking the list. Both hold offsets from this
-  // segment's base, which mean the same thing in every process that has it
-  // mapped. The free lists above need no tail: they are storage, not a
-  // queue, and newest-first is the warmest block to hand back.
-  std::atomic<std::uintptr_t> queue;
-  std::uintptr_t qtail;
   std::atomic<std::uintptr_t> heap;
   std::uintptr_t max;
+  ipc_list_ node_rq;
+  std::array<ipc_list_, kMaxIpcRanks> rq;
+  std::array<ipc_return_, kMaxIpcHostPes> ret;
 
   ipc_shared_(std::uintptr_t begin, std::uintptr_t end)
-      : queue(cmi::ipc::max),
-        qtail(cmi::ipc::max),
-        heap(cmi::ipc::nil),
-        max(end) {
-    for (auto& f : this->free) {
-      f.store(cmi::ipc::max);
-    }
+      : heap(cmi::ipc::nil), max(end) {
+    node_rq.head.store(cmi::ipc::max, std::memory_order_relaxed);
+    for (auto& q : rq) q.head.store(cmi::ipc::max, std::memory_order_relaxed);
+    for (auto& r : ret)
+      for (auto& b : r.bin) b.store(cmi::ipc::max, std::memory_order_relaxed);
     // publish the heap last -- remote peers treat (heap == nil) as "not
     // ready" (timeout), so this release-store is what makes the segment
     // visible for allocation with all other fields initialized
     this->heap.store(begin, std::memory_order_release);
   }
+};
+
+// What one PE keeps in its own memory, touched by no other thread:
+// - hostIdx: its index among the host's PEs, which names its ret[] lists.
+// - cache[h][b]: empty blocks of size b in the segment of the host's h-th
+//   process (CmiIpcManager::hostProc), ready for its next sends there. When
+//   one runs out, the PE refills it by taking its whole ret[hostIdx].bin[b]
+//   list in that segment.
+// - inbox: blocks it took from its receive queues and has not delivered
+//   yet, oldest last.
+struct ipc_pe_state_ {
+  int hostIdx = -1;
+  std::vector<std::array<std::uintptr_t, kIpcRetBins>> cache;
+  std::vector<CmiIpcBlock*> inbox;
 };
 
 // Shared state for one IPC pool, common to every backend. Backends derive
@@ -94,8 +147,13 @@ struct CmiIpcManager {
   // peers[node] is nonzero for every *other* process sharing this host, so
   // the send path can rule out a network destination with one load
   std::vector<char> peers;
+  // hostProc[node] is the index of that process among this host's processes
+  // (this one included), or -1 for a process on another host
+  std::vector<int> hostProc;
   // number of processes (including this one) on this host
   int nPeers;
+  // per rank of this process, written only by that rank (after setup)
+  std::vector<ipc_pe_state_> pe;
   // base constructor
   CmiIpcManager(std::size_t key_)
       : shared(CmiNumNodes()),
@@ -103,7 +161,9 @@ struct CmiIpcManager {
         key(key_),
         ready(false),
         peers(CmiNumNodes(), 0),
-        nPeers(1) {}
+        hostProc(CmiNumNodes(), -1),
+        nPeers(1),
+        pe(CmiMyNodeSize()) {}
   // virtual destructor may be needed
   virtual ~CmiIpcManager() {}
 };
@@ -122,9 +182,14 @@ inline std::size_t whichBin_(std::size_t size) {
   return static_cast<std::size_t>(it - begin);  // kNumCutOffPoints if none
 }
 
+// offset of a segment's first block, just past its header
+inline static std::uintptr_t segmentBegin_(void) {
+  return (std::uintptr_t)(sizeof(ipc_shared_) +
+                          (sizeof(ipc_shared_) % ALIGN_BYTES));
+}
+
 inline static void initIpcShared_(ipc_shared_* shared) {
-  auto begin = (std::uintptr_t)(sizeof(ipc_shared_) +
-                                (sizeof(ipc_shared_) % ALIGN_BYTES));
+  auto begin = segmentBegin_();
   CmiAssert(begin != cmi::ipc::nil);
   auto end = begin + CpvAccess(kSegmentSize);
   new (shared) ipc_shared_(begin, end);
@@ -141,15 +206,30 @@ inline void initSegmentSize_(char** argv) {
   using namespace cmi::ipc;
   CpvInitialize(std::size_t, kRecommendedCutoff);
   CpvInitialize(std::size_t, kSegmentSize);
+  CpvInitialize(int, kSegmentSizeGiven);
 
   CmiInt8 value;
   auto flag =
       CmiGetArgLongDesc(argv, "++" CMI_IPC_POOL_SIZE_ARG, &value, CMI_IPC_POOL_SIZE_DESC);
+  CpvAccess(kSegmentSizeGiven) = flag ? 1 : 0;
+  // without ++ipcpoolsize, sizeSegmentForHost_ grows this once the host's
+  // layout is known; the default cutoff below only ever needs the minimum
   CpvAccess(kSegmentSize) = flag ? (std::size_t)value : kDefaultSegmentSize;
   CmiEnforceMsg(CpvAccess(kSegmentSize), "segment size must be non-zero!");
   if (CmiGetArgLongDesc(argv, "++" CMI_IPC_CUTOFF_ARG, &value, CMI_IPC_CUTOFF_DESC)) {
     auto bin = whichBin_((std::size_t)value);
     CmiEnforceMsg(bin < kNumCutOffPoints, "ipc cutoff out of range!");
+    // A block holds the message and its headers, so a cutoff in the largest
+    // bin the free lists cover would put messages at the cutoff past it.
+    constexpr std::size_t maxBin = kIpcRetBins - 2;
+    if (bin > maxBin) {
+      if (CmiMyPe() == 0) {
+        CmiPrintf("Converse> ++ipccutoff %ld is above the pool's largest, %zu; "
+                  "using %zu.\n", (long)value, kCutOffPoints[maxBin],
+                  kCutOffPoints[maxBin]);
+      }
+      bin = maxBin;
+    }
     CpvAccess(kRecommendedCutoff) = kCutOffPoints[bin];
   } else {
     // Two ceilings, and the default is the lower. One is capacity: a message
@@ -162,6 +242,21 @@ inline void initSegmentSize_(char** argv) {
     auto byCapacity = kCutOffPoints[(bin >= 0) ? bin : 0];
     CpvAccess(kRecommendedCutoff) = std::min(byCapacity, kDefaultCutoff);
   }
+}
+
+// Without ++ipcpoolsize, sizes this process's segment for the host's layout:
+// kSegmentPerSender for each PE of the host's other processes, and at least
+// kDefaultSegmentSize. Every process on a host computes the same value, which
+// matters because any of them may create and size a peer's segment. Runs on
+// every PE, once the topology is known.
+inline static void sizeSegmentForHost_(void) {
+  if (CpvAccess(kSegmentSizeGiven)) return;
+  int* pes;
+  int nPes;
+  CmiGetPesOnPhysicalNode(CmiPhysicalNodeID(CmiMyPe()), &pes, &nPes);
+  const auto senders = (std::size_t)std::max(nPes - CmiMyNodeSize(), 0);
+  CpvAccess(kSegmentSize) =
+      std::max(kDefaultSegmentSize, senders * kSegmentPerSender);
 }
 
 inline static void printIpcStartupMessage_(const char* implName) {
