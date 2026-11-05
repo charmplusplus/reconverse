@@ -14,8 +14,9 @@
 struct ccd_cond_callback {
   CcdCondFn fn;
   void *arg;
+  int id;  // the handle CcdCallOnCondition returned; unique within its list
 
-  ccd_cond_callback(CcdCondFn f, void *a) : fn{f}, arg{a} {}
+  ccd_cond_callback(CcdCondFn f, void *a, int i) : fn{f}, arg{a}, id{i} {}
 };
 
 /**
@@ -37,6 +38,7 @@ struct ccd_periodic_callback {
 struct ccd_cblist {
   std::deque<ccd_cond_callback> elems{};
   bool flag = false;
+  int nextId = 1;  // handles are never positions: erasing one element does not move another's
 };
 
 /*Make sure this matches the CcdPERIODIC_* list in converse.h*/
@@ -55,12 +57,17 @@ static bool isTimed(int condnum) {
   return (condnum >= CcdPERIODIC_FIRST && condnum < CcdPERIODIC_LAST);
 }
 
-/** Remove element referred to by given list index idx. */
-static inline void remove_elem(ccd_cblist &l, int condnum, int idx) {
-  if (isTimed(condnum))
-    _ccd_num_timed_cond_cbs--;
-
-  l.elems.erase(l.elems.begin() + idx);
+/** Remove the element with the given handle; nothing if it is gone (already
+ *  triggered, or cancelled before). */
+static inline void remove_elem(ccd_cblist &l, int condnum, int id) {
+  for (auto it = l.elems.begin(); it != l.elems.end(); ++it) {
+    if (it->id != id)
+      continue;
+    if (isTimed(condnum))
+      _ccd_num_timed_cond_cbs--;
+    l.elems.erase(it);
+    return;
+  }
 }
 
 /** Remove n elements from the beginning of the list. */
@@ -74,14 +81,15 @@ static inline void remove_n_elems(ccd_cblist &l, int condnum, size_t n) {
   l.elems.erase(l.elems.begin(), l.elems.begin() + n);
 }
 
-/** Append callback to the given cblist, and return the index. */
+/** Append callback to the given cblist, and return its handle. */
 static inline int append_elem(ccd_cblist &l, int condnum, CcdCondFn fn,
                               void *arg) {
   if (isTimed(condnum))
     _ccd_num_timed_cond_cbs++;
 
-  l.elems.emplace_back(fn, arg);
-  return l.elems.size() - 1;
+  const int id = l.nextId++;
+  l.elems.emplace_back(fn, arg, id);
+  return id;
 }
 
 /**
@@ -248,17 +256,19 @@ int CcdCallOnConditionKeep(int condnum, CcdCondFn fnp, void *arg) {
 }
 
 /**
- * Cancel a previously registered conditional callback
+ * Cancel a previously registered conditional callback, by the handle
+ * CcdCallOnCondition returned
  */
-void CcdCancelCallOnCondition(int condnum, int idx) {
-  remove_elem(conds.condcb[condnum], condnum, idx);
+void CcdCancelCallOnCondition(int condnum, int handle) {
+  remove_elem(conds.condcb[condnum], condnum, handle);
 }
 
 /**
- * Cancel a previously registered conditional callback
+ * Cancel a previously registered conditional callback, by the handle
+ * CcdCallOnConditionKeep returned
  */
-void CcdCancelCallOnConditionKeep(int condnum, int idx) {
-  remove_elem(conds.condcb_keep[condnum], condnum, idx);
+void CcdCancelCallOnConditionKeep(int condnum, int handle) {
+  remove_elem(conds.condcb_keep[condnum], condnum, handle);
 }
 
 /**

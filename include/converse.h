@@ -1030,8 +1030,10 @@ CLINKAGE void CcdCallFnAfter(CcdVoidFn fnp, void *arg, double msecs);
 void CcdCallFnAfterOnPE(CcdVoidFn fnp, void *arg, double msecs, int pe);
 int CcdCallOnCondition(int condnum, CcdCondFn fnp, void *arg);
 int CcdCallOnConditionKeep(int condnum, CcdCondFn fnp, void *arg);
-void CcdCancelCallOnCondition(int condnum, int idx);
-void CcdCancelCallOnConditionKeep(int condnum, int idx);
+// handle: what the matching CcdCallOnCondition* returned; cancelling a callback
+// does not change any other callback's handle
+void CcdCancelCallOnCondition(int condnum, int handle);
+void CcdCancelCallOnConditionKeep(int condnum, int handle);
 void CcdRaiseCondition(int condnum);
 void CcdCallBacks(void);
 
