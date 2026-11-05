@@ -45,6 +45,8 @@ static int remote_dereg_handler_idx;
 static int get_request_handler_idx;
 static int put_data_handler_idx;
 static int put_done_handler_idx;
+static int reg_and_put_handler_idx;
+static int reg_and_get_handler_idx;
 
 // Invoked when this PE has to deregister the local memory
 static void remoteDeregHandler(ConverseRdmaMsg *deregMsg) {
@@ -284,6 +286,9 @@ static void memcpyAnyPtr(void *dst, const void *src, size_t size) {
   memcpy(dst, src, size);
 }
 
+static void regAndPutHandler(ConverseRdmaMsg *msg);
+static void regAndGetHandler(ConverseRdmaMsg *msg);
+
 // Rget/Rput operations are implemented as normal converse messages
 // This method is invoked during converse initialization to initialize these
 // message handlers
@@ -292,6 +297,8 @@ void CmiOnesidedDirectInit(void) {
   get_request_handler_idx = CmiRegisterHandler((CmiHandler)getRequestHandler);
   put_data_handler_idx = CmiRegisterHandler((CmiHandler)putDataHandler);
   put_done_handler_idx = CmiRegisterHandler((CmiHandler)putDoneHandler);
+  reg_and_put_handler_idx = CmiRegisterHandler((CmiHandler)regAndPutHandler);
+  reg_and_get_handler_idx = CmiRegisterHandler((CmiHandler)regAndGetHandler);
   zc_pup_handler_idx = CmiRegisterHandler((CmiHandler)zcPupHandler);
 }
 
@@ -533,15 +540,85 @@ void CommRgetLocalHandler(comm_backend::Status status) {
     CmiFree(ncpyOpInfo);
 }
 
+// RDMA get from a registered remote source into the local destination.
+static void rdmaIssueGet(NcpyOperationInfo *ncpyOpInfo, size_t len) {
+  auto mr = *(comm_backend::mr_t *)ncpyOpInfo->destLayerInfo;
+  void *rmr = ncpyOpInfo->srcLayerInfo + sizeof(comm_backend::mr_t);
+  comm_backend::issueRget(CmiNodeToGlobal(CmiNodeOf(ncpyOpInfo->srcPe)),
+                          ncpyOpInfo->destPtr,
+                          len, mr, (void*)ncpyOpInfo->srcPtr, rmr,
+                          CommRgetLocalHandler, ncpyOpInfo);
+}
+
+// RDMA put from the local source into a registered remote destination.
+static void rdmaIssuePut(NcpyOperationInfo *ncpyOpInfo, size_t len) {
+  auto mr = *(comm_backend::mr_t *)ncpyOpInfo->srcLayerInfo;
+  void *rmr = ncpyOpInfo->destLayerInfo + sizeof(comm_backend::mr_t);
+  comm_backend::issueRput(CmiNodeToGlobal(CmiNodeOf(ncpyOpInfo->destPe)),
+                          ncpyOpInfo->srcPtr,
+                          len, mr, 0, rmr,
+                          CommRputLocalHandler, ncpyOpInfo);
+}
+
+// The remote buffer of an RDMA operation is not registered (CMK_BUFFER_UNREG
+// or CMK_BUFFER_NOREG), so its layerInfo holds no memory region. Send the
+// NcpyOperationInfo to the buffer's owner, which registers the buffer and
+// performs the opposite operation (regAndPutHandler, regAndGetHandler).
+static void sendRegRequest(NcpyOperationInfo *ncpyOpInfo, int ownerPe,
+                           int handler) {
+  int ncpyOpInfoSize = ncpyOpInfo->ncpyOpInfoSize;
+  ConverseRdmaMsg *regMsg =
+      (ConverseRdmaMsg *)CmiAlloc(sizeof(ConverseRdmaMsg) + ncpyOpInfoSize);
+  memcpy((char *)regMsg + sizeof(ConverseRdmaMsg), (char *)ncpyOpInfo,
+         ncpyOpInfoSize);
+  if (ncpyOpInfo->freeMe == CMK_FREE_NCPYOPINFO)
+    CmiFree(ncpyOpInfo);
+  CmiSetHandler(regMsg, handler);
+  CmiSyncSendAndFree(ownerPe, sizeof(ConverseRdmaMsg) + ncpyOpInfoSize,
+                     regMsg);
+}
+
+// The NcpyOperationInfo of a registration request, copied out of the message
+// so that it outlives the handler; the completion handler frees it.
+static NcpyOperationInfo *takeRegRequest(ConverseRdmaMsg *msg) {
+  NcpyOperationInfo *embedded =
+      (NcpyOperationInfo *)((char *)msg + sizeof(ConverseRdmaMsg));
+  int ncpyOpInfoSize = embedded->ncpyOpInfoSize;
+  NcpyOperationInfo *ncpyOpInfo = (NcpyOperationInfo *)CmiAlloc(ncpyOpInfoSize);
+  memcpy((char *)ncpyOpInfo, (char *)embedded, ncpyOpInfoSize);
+  CmiFree(msg);
+  resetNcpyOpInfoPointers(ncpyOpInfo);
+  ncpyOpInfo->freeMe = CMK_FREE_NCPYOPINFO;
+  return ncpyOpInfo;
+}
+
+// On the source of a get whose source was unregistered: register the source
+// and put it to the destination. The single ack is raised here.
+static void regAndPutHandler(ConverseRdmaMsg *msg) {
+  NcpyOperationInfo *ncpyOpInfo = takeRegRequest(msg);
+  CmiSetRdmaBufferInfo(ncpyOpInfo->srcLayerInfo + CmiGetRdmaCommonInfoSize(),
+                       ncpyOpInfo->srcPtr, ncpyOpInfo->srcSize,
+                       ncpyOpInfo->srcRegMode);
+  ncpyOpInfo->isSrcRegistered = 1;
+  rdmaIssuePut(ncpyOpInfo,
+               std::min(ncpyOpInfo->srcSize, ncpyOpInfo->destSize));
+}
+
+// On the destination of a put whose destination was unregistered: register
+// the destination and get from the source. The single ack is raised here.
+static void regAndGetHandler(ConverseRdmaMsg *msg) {
+  NcpyOperationInfo *ncpyOpInfo = takeRegRequest(msg);
+  CmiSetRdmaBufferInfo(ncpyOpInfo->destLayerInfo + CmiGetRdmaCommonInfoSize(),
+                       ncpyOpInfo->destPtr, ncpyOpInfo->destSize,
+                       ncpyOpInfo->destRegMode);
+  ncpyOpInfo->isDestRegistered = 1;
+  rdmaIssueGet(ncpyOpInfo,
+               std::min(ncpyOpInfo->srcSize, ncpyOpInfo->destSize));
+}
+
 /* Perform an RDMA Get operation into the local destination address from the
  * remote source address*/
 void CmiIssueRget(NcpyOperationInfo *ncpyOpInfo) {
-// #if CMK_USE_LRTS && CMK_ONESIDED_IMPL
-//   // Use network RDMA for a PE on a remote host
-//   LrtsIssueRget(ncpyOpInfo);
-// #else
-//   CmiIssueRgetCopyBased(ncpyOpInfo);
-// #endif
   int target_node = CmiNodeOf(ncpyOpInfo->srcPe);
   // A posted destination buffer may be smaller than the source: the zerocopy
   // post API lets the receiver choose its own length. The transfer is bounded
@@ -558,13 +635,13 @@ void CmiIssueRget(NcpyOperationInfo *ncpyOpInfo) {
     status.user_context = ncpyOpInfo;
     CommRgetLocalHandler(status);
   } else if (!CmiUseCopyBasedRDMA) {
-    auto mr = *(comm_backend::mr_t *)ncpyOpInfo->destLayerInfo;
-    void *rmr = ncpyOpInfo->srcLayerInfo + sizeof(comm_backend::mr_t);
-    comm_backend::issueRget(CmiNodeToGlobal(CmiNodeOf(ncpyOpInfo->srcPe)),
-                            ncpyOpInfo->destPtr,
-                            len, mr, (void*)ncpyOpInfo->srcPtr, rmr,
-                            CommRgetLocalHandler, ncpyOpInfo);
-    // printf("reconverse rgets from src pe %d to dest pe %d, baseptr %p, srcptr %p, dstptr %p, size %zu\n", ncpyOpInfo->srcPe, ncpyOpInfo->destPe, comm_backend::getRMRBase(rmr), ncpyOpInfo->srcPtr, ncpyOpInfo->destPtr, ncpyOpInfo->srcSize);
+    if (ncpyOpInfo->isSrcRegistered == 0) {
+      // The completion runs on the source, so Charm++ sees a reverse operation.
+      setReverseModeForNcpyOpInfo(ncpyOpInfo);
+      sendRegRequest(ncpyOpInfo, ncpyOpInfo->srcPe, reg_and_put_handler_idx);
+    } else {
+      rdmaIssueGet(ncpyOpInfo, len);
+    }
   } else {
     CmiIssueRgetCopyBased(ncpyOpInfo);
   }
@@ -573,34 +650,26 @@ void CmiIssueRget(NcpyOperationInfo *ncpyOpInfo) {
 /* Perform an RDMA Put operation into the remote destination address from the
  * local source address */
 void CmiIssueRput(NcpyOperationInfo *ncpyOpInfo) {
-// #if CMK_USE_LRTS && CMK_ONESIDED_IMPL
-//   // Use network RDMA for a PE on a remote host
-//   LrtsIssueRput(ncpyOpInfo);
-// #else
-//   CmiIssueRputCopyBased(ncpyOpInfo);
-// #endif
-int target_node = CmiNodeOf(ncpyOpInfo->destPe);
-// See CmiIssueRget: a posted destination may be smaller than the source, so
-// the transfer length is bounded by both sides.
-size_t len = std::min(ncpyOpInfo->srcSize, ncpyOpInfo->destSize);
-if (target_node == CmiMyNode()) {
-  // loopback: use GPU-aware copy if either pointer is a device allocation
-  memcpyAnyPtr((void *)ncpyOpInfo->destPtr, ncpyOpInfo->srcPtr, len);
-  comm_backend::Status status;
-  status.local_buf = ncpyOpInfo->srcPtr;
-  status.size = len;
-  status.user_context = ncpyOpInfo;
-  CommRputLocalHandler(status);
-} else if (!CmiUseCopyBasedRDMA) {
-  auto mr = *(comm_backend::mr_t *)ncpyOpInfo->srcLayerInfo;
-  void *rmr = ncpyOpInfo->destLayerInfo + sizeof(comm_backend::mr_t);
-  comm_backend::issueRput(CmiNodeToGlobal(CmiNodeOf(ncpyOpInfo->destPe)),
-                          ncpyOpInfo->srcPtr,
-                          len, mr, 0, rmr,
-                          CommRputLocalHandler, ncpyOpInfo);
-} else {
-  CmiIssueRputCopyBased(ncpyOpInfo);
-}
+  int target_node = CmiNodeOf(ncpyOpInfo->destPe);
+  // See CmiIssueRget: a posted destination may be smaller than the source, so
+  // the transfer length is bounded by both sides.
+  size_t len = std::min(ncpyOpInfo->srcSize, ncpyOpInfo->destSize);
+  if (target_node == CmiMyNode()) {
+    // loopback: use GPU-aware copy if either pointer is a device allocation
+    memcpyAnyPtr((void *)ncpyOpInfo->destPtr, ncpyOpInfo->srcPtr, len);
+    comm_backend::Status status;
+    status.local_buf = ncpyOpInfo->srcPtr;
+    status.size = len;
+    status.user_context = ncpyOpInfo;
+    CommRputLocalHandler(status);
+  } else if (!CmiUseCopyBasedRDMA) {
+    if (ncpyOpInfo->isDestRegistered == 0)
+      sendRegRequest(ncpyOpInfo, ncpyOpInfo->destPe, reg_and_get_handler_idx);
+    else
+      rdmaIssuePut(ncpyOpInfo, len);
+  } else {
+    CmiIssueRputCopyBased(ncpyOpInfo);
+  }
 }
 
 /* De-register registered memory for pointer */
