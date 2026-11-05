@@ -5,6 +5,10 @@ CpvDeclare(int, test);
 CpvDeclare(int, exitHandlerId);
 CpvDeclare(int, cancelledIdx);
 CpvDeclare(int, cancelledKeepIdx);
+CpvDeclare(int, survivorFired);
+CpvDeclare(int, survivorKeepFired);
+CpvDeclare(int, staleHandle);
+CpvDeclare(int, lateFired);
 CpvDeclare(int, remoteFired);
 CpvDeclare(int, nodeHandlerId);
 CpvDeclare(int, 1sHandlerId);
@@ -27,9 +31,18 @@ void mediumHandler(void *vmsg) {
          CmiMyRank());
 }
 
+// A one-shot callback that fired at 1 s: its handle is stale by now.
+void staleHandler(void *) {}
+void lateSurvivor(void *) { CpvAccess(lateFired)++; }
+
 void callAfter7s(void *vmsg, double) {
   printf("7s (ccd call after) HANDLER CALLED at time %lf on PE %d\n",
          CmiWallTimer(), CmiMyRank());
+  // Cancelling a handle whose callback has already fired and been removed must
+  // not touch a callback registered since (CkArray::springCleaning re-registers
+  // after each firing and ~CkArray cancels the handle it holds).
+  CcdCallOnCondition(CcdPERIODIC_1s, lateSurvivor, 0);
+  CcdCancelCallOnCondition(CcdPERIODIC_1s, CpvAccess(staleHandle));
 }
 
 void longHandler(void *vmsg) {
@@ -37,6 +50,17 @@ void longHandler(void *vmsg) {
          CmiMyRank());
   if (!CpvAccess(remoteFired))
     CmiAbort("conds: no CcdCallFnAfterOnPE callback reached PE %d in 10 s",
+             CmiMyPe());
+  if (CpvAccess(survivorFired) != 1)
+    CmiAbort("conds: the callback registered between two cancelled ones fired "
+             "%d times on PE %d, expected once", CpvAccess(survivorFired),
+             CmiMyPe());
+  if (CpvAccess(survivorKeepFired) < 1)
+    CmiAbort("conds: the keep callback registered between two cancelled ones "
+             "never fired on PE %d", CmiMyPe());
+  if (CpvAccess(lateFired) != 1)
+    CmiAbort("conds: the callback registered after a stale handle was cancelled "
+             "fired %d times on PE %d, expected once", CpvAccess(lateFired),
              CmiMyPe());
   Message *msg = (Message *)CmiAlloc(sizeof(Message));
   msg->header.handlerId = CpvAccess(exitHandlerId);
@@ -57,6 +81,12 @@ void cancelledKeepHandler(void *) {
   CmiAbort("conds: a cancelled CcdCallOnConditionKeep callback fired on PE %d",
            CmiMyPe());
 }
+// Registered between two callbacks that are then cancelled in registration
+// order: a handle must still name its own callback after an earlier one is
+// removed (CkArray cancels its spring-cleaning callback in its destructor, and
+// arrays are destroyed in any order).
+void survivorHandler(void *) { CpvAccess(survivorFired)++; }
+void survivorKeepHandler(void *) { CpvAccess(survivorKeepFired)++; }
 void remoteAfter(void *arg, double) {
   int registrant = (int)(size_t)arg;
   if (CmiMyPe() != registrant)
@@ -78,6 +108,25 @@ CmiStartFn mymain(int argc, char **argv) {
   CpvAccess(cancelledKeepIdx) =
       CcdCallOnConditionKeep(CcdPERIODIC_1s, cancelledKeepHandler, 0);
   CcdCancelCallOnConditionKeep(CcdPERIODIC_1s, CpvAccess(cancelledKeepIdx));
+  CpvInitialize(int, staleHandle);
+  CpvInitialize(int, lateFired);
+  CpvAccess(lateFired) = 0;
+  CpvAccess(staleHandle) = CcdCallOnCondition(CcdPERIODIC_1s, staleHandler, 0);
+  // Three registrations; the first and the third are cancelled, in that order.
+  CpvInitialize(int, survivorFired);
+  CpvInitialize(int, survivorKeepFired);
+  CpvAccess(survivorFired) = 0;
+  CpvAccess(survivorKeepFired) = 0;
+  int first = CcdCallOnCondition(CcdPERIODIC_1s, cancelledHandler, 0);
+  CcdCallOnCondition(CcdPERIODIC_1s, survivorHandler, 0);
+  int third = CcdCallOnCondition(CcdPERIODIC_1s, cancelledHandler, 0);
+  CcdCancelCallOnCondition(CcdPERIODIC_1s, first);
+  CcdCancelCallOnCondition(CcdPERIODIC_1s, third);
+  int firstKeep = CcdCallOnConditionKeep(CcdPERIODIC_1s, cancelledKeepHandler, 0);
+  CcdCallOnConditionKeep(CcdPERIODIC_1s, survivorKeepHandler, 0);
+  int thirdKeep = CcdCallOnConditionKeep(CcdPERIODIC_1s, cancelledKeepHandler, 0);
+  CcdCancelCallOnConditionKeep(CcdPERIODIC_1s, firstKeep);
+  CcdCancelCallOnConditionKeep(CcdPERIODIC_1s, thirdKeep);
   int target = (CmiMyRank() + 1) % CmiMyNodeSize() + CmiNodeFirst(CmiMyNode());
   CcdCallFnAfterOnPE(remoteAfter, (void *)(size_t)CmiMyPe(), 500, target);
 
