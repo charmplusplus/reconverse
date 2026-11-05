@@ -5,7 +5,8 @@ This is a clean reimplementation of Converse without the complexities and deadco
 ## Documentation
 
 - [Reconverse on Windows](README.windows.md): building and testing a single-process Reconverse with MSVC.
-- [Shared-memory IPC](doc/shared-memory-ipc.md): how the `+ipc` pool works: segments and blocks, its lists and why they need no lock, the send, receive and free paths, message order, memory use and start-up.
+- [Reconverse internals](doc/internals/README.md): how the runtime works inside, one chapter per subsystem. Chapters so far:
+  - [Shared-memory IPC](doc/internals/shared-memory-ipc.md): how the `+ipc` pool works: segments and blocks, its lists and why they need no lock, the send, receive and free paths, message order, memory use and start-up.
 - [Converse and Reconverse](doc/converse-and-reconverse.md): how reconverse differs from classic Converse, with a block diagram of the modules and their interfaces, a side-by-side comparison, API compatibility notes, and what returns for AMPI (isomalloc, migratable threads).
 
 ## Build Reconverse
@@ -108,7 +109,7 @@ The example executables are located in the build/test/<program_name> folders. Yo
 - **`+backend <lci|lcw>`**: select the communication backend at runtime. If not specified, Reconverse will use the first available backend in the order of LCI, LCW.
 - **`+ipc`** / **`+noipc`**: send messages between processes that share a host through shared memory instead of the communication backend. Off by default; see [Shared-memory IPC](#shared-memory-ipc-ipc).
 - **`+ipcmode <auto|shm|xpmem>`**: pick the mechanism backing the shared-memory pool. Implies `+ipc`.
-- **`++ipcpoolsize <bytes>`**: size of each process's shared-memory pool. By default, 512 KiB for each PE of the host's other processes, and at least 8 MiB (see [Memory use](doc/shared-memory-ipc.md#memory-use)).
+- **`++ipcpoolsize <bytes>`**: size of each process's shared-memory pool. By default, 512 KiB for each PE of the host's other processes, and at least 8 MiB (see [Memory use](doc/internals/shared-memory-ipc.md#memory-use)).
 - **`++ipccutoff <bytes>`**: largest message the pool will carry. Messages above it go over the communication backend. Defaults to 32 KiB, or to a bin below `poolsize / 25` when that is smaller. At most 1 MiB; a larger value is capped there, with a notice.
 - **`+randomized_msgq`**: run messages in a uniformly random order, for shaking out message-order races. See [Randomized message order](#randomized-message-order-randomized_msgq). Cannot be combined with `+old-scheduler`.
 - **`+randomized_seed <N>`**: base seed for `+randomized_msgq`. Defaults to a value taken from the wall clock; the startup banner prints the seed in use.
@@ -163,7 +164,7 @@ PE that allocated it, so once a process's pool has been cut into blocks, a
 sender with no freed block of the right size there uses the network for its
 messages to that process. The first such send in a process prints a notice,
 and `CmiIpcPoolFullSends` counts them; `++ipcpoolsize` raises the size. See
-[Memory use](doc/shared-memory-ipc.md#memory-use).
+[Memory use](doc/internals/shared-memory-ipc.md#memory-use).
 
 ### Mechanisms
 

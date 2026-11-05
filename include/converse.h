@@ -1858,7 +1858,7 @@ CLINKAGE long CmiIpcMessagesReceived(void);
 /* Messages this PE sent over the network instead because the destination's
    segment had no block for them: the segment's unused space was used up, and
    this PE had no freed block of that size there (see
-   doc/shared-memory-ipc.md, "Memory use"). */
+   doc/internals/shared-memory-ipc.md, "Memory use"). */
 CLINKAGE long CmiIpcPoolFullSends(void);
 /* Bytes of this process's segment that senders have cut into blocks so far.
    Blocks are never returned to the unused space, so this only grows. */
