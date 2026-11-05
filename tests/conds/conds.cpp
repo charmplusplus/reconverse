@@ -7,6 +7,8 @@ CpvDeclare(int, cancelledIdx);
 CpvDeclare(int, cancelledKeepIdx);
 CpvDeclare(int, survivorFired);
 CpvDeclare(int, survivorKeepFired);
+CpvDeclare(int, staleHandle);
+CpvDeclare(int, lateFired);
 CpvDeclare(int, remoteFired);
 CpvDeclare(int, nodeHandlerId);
 CpvDeclare(int, 1sHandlerId);
@@ -29,9 +31,18 @@ void mediumHandler(void *vmsg) {
          CmiMyRank());
 }
 
+// A one-shot callback that fired at 1 s: its handle is stale by now.
+void staleHandler(void *) {}
+void lateSurvivor(void *) { CpvAccess(lateFired)++; }
+
 void callAfter7s(void *vmsg, double) {
   printf("7s (ccd call after) HANDLER CALLED at time %lf on PE %d\n",
          CmiWallTimer(), CmiMyRank());
+  // Cancelling a handle whose callback has already fired and been removed must
+  // not touch a callback registered since (CkArray::springCleaning re-registers
+  // after each firing and ~CkArray cancels the handle it holds).
+  CcdCallOnCondition(CcdPERIODIC_1s, lateSurvivor, 0);
+  CcdCancelCallOnCondition(CcdPERIODIC_1s, CpvAccess(staleHandle));
 }
 
 void longHandler(void *vmsg) {
@@ -47,6 +58,10 @@ void longHandler(void *vmsg) {
   if (CpvAccess(survivorKeepFired) < 1)
     CmiAbort("conds: the keep callback registered between two cancelled ones "
              "never fired on PE %d", CmiMyPe());
+  if (CpvAccess(lateFired) != 1)
+    CmiAbort("conds: the callback registered after a stale handle was cancelled "
+             "fired %d times on PE %d, expected once", CpvAccess(lateFired),
+             CmiMyPe());
   Message *msg = (Message *)CmiAlloc(sizeof(Message));
   msg->header.handlerId = CpvAccess(exitHandlerId);
   msg->header.messageSize = sizeof(Message);
@@ -93,6 +108,10 @@ CmiStartFn mymain(int argc, char **argv) {
   CpvAccess(cancelledKeepIdx) =
       CcdCallOnConditionKeep(CcdPERIODIC_1s, cancelledKeepHandler, 0);
   CcdCancelCallOnConditionKeep(CcdPERIODIC_1s, CpvAccess(cancelledKeepIdx));
+  CpvInitialize(int, staleHandle);
+  CpvInitialize(int, lateFired);
+  CpvAccess(lateFired) = 0;
+  CpvAccess(staleHandle) = CcdCallOnCondition(CcdPERIODIC_1s, staleHandler, 0);
   // Three registrations; the first and the third are cancelled, in that order.
   CpvInitialize(int, survivorFired);
   CpvInitialize(int, survivorKeepFired);
