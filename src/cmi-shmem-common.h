@@ -82,7 +82,7 @@ struct alignas(64) ipc_return_ {
   std::array<std::atomic<std::uintptr_t>, kIpcRetBins> bin;
 };
 
-// The header of one process's segment. doc/shared-memory-ipc.md describes
+// The header of one process's segment. doc/internals/shared-memory-ipc.md describes
 // the design; in short:
 // - heap: offset of the start of the segment's unused space; max is its end.
 // - rq[rank]: blocks holding messages for that PE of this process. Senders
