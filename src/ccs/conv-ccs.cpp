@@ -37,6 +37,12 @@ static void initHandlerRec(CcsHandlerRec *c,const char *name) {
 static void callHandlerRec(CcsHandlerRec *c, int reqLen, const void *reqData)
 {
   c->nCalls++;
+  if (c->fnOld == NULL) {
+    /* registered with CcsRegisterHandlerFn: call it directly, as the non-charm4py
+       build does; only the old charm4py's handlers take the forwarded-message form */
+    (c->fn)(c->userPtr, reqLen, reqData);
+    return;
+  }
   //structure of message: reserved header + handler name length (up to 32) + data length (up to 1024)
   //+handler name + data
   //get handler name and length (up to 32)
