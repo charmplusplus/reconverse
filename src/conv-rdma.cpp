@@ -558,6 +558,9 @@ void CommRgetLocalHandler(comm_backend::Status status) {
     CmiFree(ncpyOpInfo);
 }
 
+static thread_local int g_rdma_bulk = 0;
+void CmiRdmaSetBulk(int bulk) { g_rdma_bulk = bulk; }
+
 /* Perform an RDMA Get operation into the local destination address from the
  * remote source address*/
 void CmiIssueRget(NcpyOperationInfo *ncpyOpInfo) {
@@ -585,10 +588,16 @@ void CmiIssueRget(NcpyOperationInfo *ncpyOpInfo) {
   } else if (!CmiUseCopyBasedRDMA) {
     auto mr = *(comm_backend::mr_t *)ncpyOpInfo->destLayerInfo;
     void *rmr = ncpyOpInfo->srcLayerInfo + sizeof(comm_backend::mr_t);
-    comm_backend::issueRget(CmiNodeToGlobal(CmiNodeOf(ncpyOpInfo->srcPe)),
-                            ncpyOpInfo->destPtr,
-                            len, mr, (void*)ncpyOpInfo->srcPtr, rmr,
-                            CommRgetLocalHandler, ncpyOpInfo);
+    if (g_rdma_bulk)
+      comm_backend::issueRgetBulk(CmiNodeToGlobal(CmiNodeOf(ncpyOpInfo->srcPe)),
+                                  ncpyOpInfo->destPtr,
+                                  len, mr, (void*)ncpyOpInfo->srcPtr, rmr,
+                                  CommRgetLocalHandler, ncpyOpInfo);
+    else
+      comm_backend::issueRget(CmiNodeToGlobal(CmiNodeOf(ncpyOpInfo->srcPe)),
+                              ncpyOpInfo->destPtr,
+                              len, mr, (void*)ncpyOpInfo->srcPtr, rmr,
+                              CommRgetLocalHandler, ncpyOpInfo);
     // printf("reconverse rgets from src pe %d to dest pe %d, baseptr %p, srcptr %p, dstptr %p, size %zu\n", ncpyOpInfo->srcPe, ncpyOpInfo->destPe, comm_backend::getRMRBase(rmr), ncpyOpInfo->srcPtr, ncpyOpInfo->destPtr, ncpyOpInfo->srcSize);
   } else {
     CmiIssueRgetCopyBased(ncpyOpInfo);

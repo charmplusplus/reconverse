@@ -74,6 +74,12 @@ void issueAm(int rank, const void *local_buf, size_t size, mr_t mr,
 void issueRget(int rank, const void *local_buf, size_t size, mr_t local_mr,
                void* remote_buf, void *rmr, CompHandler localComp, void *user_context);
 /**
+ * @brief A remote get of bulk state (CmiRdmaSetBulk): the backend may issue it
+ * in bounded pieces behind the other gets. Thread-safe.
+ */
+void issueRgetBulk(int rank, const void *local_buf, size_t size, mr_t local_mr,
+                   void* remote_buf, void *rmr, CompHandler localComp, void *user_context);
+/**
  * @brief Issue a remote put operation. Thread-safe.
  */
 void issueRput(int rank, const void *local_buf, size_t size, mr_t local_mr,

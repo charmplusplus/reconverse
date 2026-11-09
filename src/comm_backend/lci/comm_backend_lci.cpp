@@ -4,6 +4,8 @@
 #include "lct.h"
 #include "comm_backend/lci/comm_backend_lci.h"
 #include <cstdlib>
+#include <deque>
+#include <mutex>
 #include <vector>
 namespace comm_backend { extern SignalHandler g_signal_handler; }   // comm_backend_internal.cpp
 
@@ -70,6 +72,157 @@ void remoteCallback(lci::status_t status) {
   auto am_handler = static_cast<AmHandler>(status.get_tag());
   auto handler = g_handlers[am_handler];
   handler({status.get_buffer(), status.get_size(), nullptr});
+}
+
+// The fabric's single-message maximum: LCI's net-context attribute, which its
+// backend clamps to the provider's (2 GB on cxi). LCI hands a one-sided put or
+// get of any size to one fabric operation, so a transfer above the attribute
+// goes in pieces here. (Added 2026-10-31 while chasing truncated slabs on two
+// nodes; those turned out to be a registration that ended at a 256 MB mapping
+// unit, not a message-size limit: pieces of 8 MB changed nothing.)
+static size_t maxMsgSize() {
+  static const size_t m = lci::get_default_net_context().get_attr_max_msg_size();
+  return m;
+}
+
+// The pieces of one get or put, posted together: the caller's completion
+// fires once, with the whole buffer, when the last piece has completed.
+struct pieceArgs {
+  CompHandler handler;
+  void *user_context;
+  const void *buf;
+  size_t size;
+  std::atomic<int> remaining;
+  bool counted = false;   // each piece is an ordinary get in g_bulk.other (below)
+};
+static void pieceDone(pieceArgs *p) {
+  if (p->remaining.fetch_sub(1, std::memory_order_acq_rel) != 1) return;
+  auto handler = p->handler;
+  auto user_context = p->user_context;
+  auto buf = p->buf;
+  auto size = p->size;
+  delete p;
+  handler({buf, size, user_context});
+}
+// ---- Bulk gets -------------------------------------------------------------
+// A get of bulk state (CmiRdmaSetBulk: an object's payload the runtime moves)
+// is cut into pieces of `chunk` bytes and issued a few at a time: at most
+// `cap` bytes of this process's bulk gets are in flight, and at most
+// `busy_cap` while any of its other gets is. The fabric serves a get of up to
+// 2 GB as one operation, so a large payload posted whole stands in front of
+// every get posted after it until it has crossed the link; in pieces, the
+// other gets wait for at most what this process has in flight, and the
+// payload takes the link time they leave. CHARM_RDMA_BULK=0 posts bulk gets
+// whole, as any other (for comparison); CHARM_RDMA_BULK_{CHUNK,CAP,BUSY}_KB
+// set the three sizes.
+struct BulkPiece {
+  int rank;
+  void *buf;
+  size_t len;
+  lci::mr_t mr;
+  uintptr_t disp;
+  lci::rmr_t rmr;
+  lci::device_t dev;
+  pieceArgs *p;
+};
+struct BulkSched {
+  std::mutex mu;
+  std::deque<BulkPiece> q;
+  std::atomic<long> queued{0};       // pieces in q
+  std::atomic<size_t> inflight{0};   // bytes of bulk gets posted and not complete
+  std::atomic<int> other{0};         // other gets posted and not complete
+  std::atomic<bool> pumping{false};
+  size_t chunk = 2u << 20, cap = 8u << 20, busy_cap = 2u << 20;
+  bool on = true;
+  lci::comp_t comp;
+  std::atomic<long> n_pieces{0}, n_bytes{0}, n_payloads{0};
+};
+static BulkSched g_bulk;
+struct bulkCtx {
+  pieceArgs *p;
+  size_t len;
+};
+static void pumpBulk();
+static void bulkDone(bulkCtx *c) {
+  g_bulk.inflight.fetch_sub(c->len, std::memory_order_acq_rel);
+  pieceArgs *p = c->p;
+  delete c;
+  pieceDone(p);
+}
+void bulkCallback(lci::status_t status) {
+  bulkDone(reinterpret_cast<bulkCtx *>(status.get_user_context()));
+  pumpBulk();
+}
+// Another get completed: the bulk queue may take the full cap again.
+static void otherGetDone() {
+  if (g_bulk.other.fetch_sub(1, std::memory_order_acq_rel) == 1 &&
+      g_bulk.queued.load(std::memory_order_acquire) > 0)
+    pumpBulk();
+}
+// Posts queued pieces while the in-flight cap allows; one pump at a time (a
+// completion that finds one running returns, and progress() looks again).
+static void pumpBulk() {
+  BulkSched &b = g_bulk;
+  if (b.pumping.exchange(true, std::memory_order_acq_rel)) return;
+  for (;;) {
+    BulkPiece x;
+    {
+      std::lock_guard<std::mutex> g(b.mu);
+      if (b.q.empty()) break;
+      const size_t lim = b.other.load(std::memory_order_acquire) > 0 ? b.busy_cap : b.cap;
+      const size_t f = b.inflight.load(std::memory_order_acquire);
+      if (f != 0 && f + b.q.front().len > lim) break;
+      x = b.q.front();
+      b.q.pop_front();
+      b.queued.fetch_sub(1, std::memory_order_acq_rel);
+    }
+    b.inflight.fetch_add(x.len, std::memory_order_acq_rel);
+    auto c = new bulkCtx{x.p, x.len};
+    lci::status_t st = lci::post_get_x(x.rank, x.buf, x.len, b.comp, x.disp, x.rmr)
+                           .mr(x.mr)
+                           .device(x.dev)
+                           .user_context(c)
+                           .allow_retry(false)();
+    if (st.is_done()) bulkDone(c);
+  }
+  b.pumping.store(false, std::memory_order_release);
+}
+
+void pieceCallback(lci::status_t status) {
+  auto p = reinterpret_cast<pieceArgs *>(status.get_user_context());
+  const bool counted = p->counted;
+  pieceDone(p);
+  if (counted) otherGetDone();
+}
+// An ordinary get's completion (not in pieces): counted in g_bulk.other.
+void getCallback(lci::status_t status) {
+  auto args = reinterpret_cast<localCallbackArgs *>(status.get_user_context());
+  auto handler = args->handler;
+  auto user_context = args->user_context;
+  delete args;
+  handler({status.get_buffer(), status.get_size(), user_context});
+  otherGetDone();
+}
+
+// The pieces of a put with signal, posted one after another: the signal
+// rides on the last piece, and a piece is posted only once the previous one
+// has completed with FI_DELIVERY_COMPLETE (the data is in the target's
+// memory), since writes from one initiator are not ordered on this fabric.
+struct signalChain {
+  CommBackendLCI *self;
+  int rank;
+  const char *buf;
+  size_t size, off;
+  mr_t local_mr;
+  void *rmr;
+  uintptr_t remote_disp;
+  uint32_t tag;
+  CompHandler handler;
+  void *user_context;
+};
+void chainCallback(lci::status_t status) {
+  auto c = reinterpret_cast<signalChain *>(status.get_user_context());
+  c->self->chainAdvance(c, status.get_size());
 }
 
 // A put with signal landed here: rank, the 16-bit tag and the bytes written.
@@ -277,7 +430,26 @@ void CommBackendLCI::init(char **argv) {
   m_rcomp = lci::register_rcomp(m_remote_comp);
   m_signal_comp = lci::alloc_handler(signalCallback);
   m_signal_rcomp = lci::register_rcomp(m_signal_comp);
-  if (lci::get_rank_me() == 0) fprintf(stderr, "[lci] am rcomp=%u signal rcomp=%u max_imm_tag=%llu max_imm_rcomp=%llu\n", (unsigned)m_rcomp, (unsigned)m_signal_rcomp, (unsigned long long)lci::get_g_runtime().get_attr_max_imm_tag(), (unsigned long long)lci::get_g_runtime().get_attr_max_imm_rcomp());
+  m_piece_comp = lci::alloc_handler(pieceCallback);
+  m_get_comp = lci::alloc_handler(getCallback);
+  g_bulk.comp = lci::alloc_handler(bulkCallback);
+  {
+    auto kb = [](const char *v, size_t d) { const char *e = getenv(v); return e ? (size_t)atol(e) << 10 : d; };
+    const char *on = getenv("CHARM_RDMA_BULK");
+    g_bulk.on = !(on && atoi(on) == 0);
+    g_bulk.chunk = std::max<size_t>(kb("CHARM_RDMA_BULK_CHUNK_KB", g_bulk.chunk), 4096);
+    g_bulk.cap = std::max(kb("CHARM_RDMA_BULK_CAP_KB", g_bulk.cap), g_bulk.chunk);
+    g_bulk.busy_cap = std::max(kb("CHARM_RDMA_BULK_BUSY_KB", g_bulk.busy_cap), g_bulk.chunk);
+  }
+  m_chain_comp = lci::alloc_handler(chainCallback);
+  if (lci::get_rank_me() == 0) {
+    if (g_bulk.on)
+      fprintf(stderr, "[lci] bulk gets: pieces of %zu KB, at most %zu KB in flight per process (%zu KB while other gets are)\n",
+              g_bulk.chunk >> 10, g_bulk.cap >> 10, g_bulk.busy_cap >> 10);
+    else
+      fprintf(stderr, "[lci] bulk gets: off (CHARM_RDMA_BULK=0), posted whole\n");
+  }
+  if (lci::get_rank_me() == 0) fprintf(stderr, "[lci] am rcomp=%u signal rcomp=%u max_imm_tag=%llu max_imm_rcomp=%llu max_msg_size=%zu\n", (unsigned)m_rcomp, (unsigned)m_signal_rcomp, (unsigned long long)lci::get_g_runtime().get_attr_max_imm_tag(), (unsigned long long)lci::get_g_runtime().get_attr_max_imm_rcomp(), maxMsgSize());
   lci::set_allocator(&m_allocator);
   barrier();
 }
@@ -296,6 +468,9 @@ void CommBackendLCI::abortAll(int exit_code, const char *msg) {
 }
 
 void CommBackendLCI::exit() {
+  if (g_bulk.n_payloads.load() > 0)
+    fprintf(stderr, "[lci] rank %d: %ld bulk gets in %ld pieces, %.1f MB\n", lci::get_rank_me(),
+            g_bulk.n_payloads.load(), g_bulk.n_pieces.load(), g_bulk.n_bytes.load() / 1048576.0);
   // Drop any still-registered memory regions before tearing the devices down;
   // an open region makes fi_close(domain) fail with FI_EBUSY. This supersedes
   // the reconverse_lci_cache_amd workaround of skipping free_device entirely.
@@ -308,6 +483,8 @@ void CommBackendLCI::exit() {
   }
   m_devices.clear();
   lci::free_comp(&m_local_comp);
+  lci::free_comp(&m_piece_comp);
+  lci::free_comp(&m_chain_comp);
   lci::free_comp(&m_remote_comp);
   lci::free_comp(&m_signal_comp);
   lci::g_runtime_fina();
@@ -420,16 +597,40 @@ void CommBackendLCI::issueAm(int rank, const void *local_buf, size_t size, mr_t 
 void CommBackendLCI::issueRget(int rank, const void *local_buf, size_t size,
                                 mr_t local_mr, void* remote_buf, void *rmr,
                                 CompHandler localComp, void *user_context) {
-  auto args = new localCallbackArgs{localComp, user_context};
-  lci::status_t status;
   uintptr_t remote_disp = (uintptr_t)remote_buf - getThreadLocalRMR(rmr).base;
   // Same reentrancy guard as issueAm: don't spin when called from a completion
   // callback, push to backlog instead.
   bool allow_retry = !detail::g_in_progress_callback;
   const double tloop0 = amNow();
+  const size_t m = maxMsgSize();
+  if (size > m) {
+    // In pieces of the fabric's maximum, posted together (maxMsgSize).
+    auto p = new pieceArgs{localComp, user_context, local_buf, size, {(int)((size + m - 1) / m)}};
+    p->counted = true;
+    for (size_t off = 0; off < size; off += m) {
+      const size_t len = std::min(m, size - off);
+      lci::status_t st;
+      g_bulk.other.fetch_add(1, std::memory_order_acq_rel);
+      do {
+        st = lci::post_get_x(rank, (void *)((const char *)local_buf + off), len,
+                             m_piece_comp, remote_disp + off, getThreadLocalRMR(rmr))
+                 .mr(getThreadLocalMR(local_mr))
+                 .device(getThreadLocalDevice())
+                 .user_context(p)
+                 .allow_retry(allow_retry)();
+        if (allow_retry) progress();
+      } while (st.is_retry());
+      if (st.is_done()) { pieceDone(p); otherGetDone(); }
+    }
+    { const double dl = amNow() - tloop0; if (dl > g_am_send_stats.get_loop_max_s) g_am_send_stats.get_loop_max_s = dl; }
+    return;
+  }
+  auto args = new localCallbackArgs{localComp, user_context};
+  lci::status_t status;
+  g_bulk.other.fetch_add(1, std::memory_order_acq_rel);
   do {
     status = lci::post_get_x(rank, const_cast<void *>(local_buf), size,
-                             m_local_comp, remote_disp, getThreadLocalRMR(rmr))
+                             m_get_comp, remote_disp, getThreadLocalRMR(rmr))
                  .mr(getThreadLocalMR(local_mr))
                  .device(getThreadLocalDevice())
                  .user_context(args)
@@ -440,14 +641,38 @@ void CommBackendLCI::issueRget(int rank, const void *local_buf, size_t size,
   if (status.is_done()) {
     localComp({local_buf, size, user_context});
     delete args;
+    otherGetDone();
   }
+}
+
+void CommBackendLCI::issueRgetBulk(int rank, const void *local_buf, size_t size,
+                                   mr_t local_mr, void* remote_buf, void *rmr,
+                                   CompHandler localComp, void *user_context) {
+  const size_t c = std::min(g_bulk.chunk, maxMsgSize());
+  if (!g_bulk.on || size <= c) {
+    issueRget(rank, local_buf, size, local_mr, remote_buf, rmr, localComp, user_context);
+    return;
+  }
+  const uintptr_t disp = (uintptr_t)remote_buf - getThreadLocalRMR(rmr).base;
+  const int n = (int)((size + c - 1) / c);
+  auto p = new pieceArgs{localComp, user_context, local_buf, size, {n}};
+  {
+    std::lock_guard<std::mutex> g(g_bulk.mu);
+    for (size_t off = 0; off < size; off += c)
+      g_bulk.q.push_back(BulkPiece{rank, (char *)const_cast<void *>(local_buf) + off, std::min(c, size - off),
+                                   getThreadLocalMR(local_mr), disp + off, getThreadLocalRMR(rmr),
+                                   getThreadLocalDevice(), p});
+    g_bulk.queued.fetch_add(n, std::memory_order_acq_rel);
+  }
+  g_bulk.n_payloads.fetch_add(1, std::memory_order_relaxed);
+  g_bulk.n_pieces.fetch_add(n, std::memory_order_relaxed);
+  g_bulk.n_bytes.fetch_add((long)size, std::memory_order_relaxed);
+  pumpBulk();
 }
 
 void CommBackendLCI::issueRput(int rank, const void *local_buf, size_t size,
                                 mr_t local_mr, void *remote_buf, void *rmr,
                                 CompHandler localComp, void *user_context) {
-  auto args = new localCallbackArgs{localComp, user_context};
-  lci::status_t status;
   // The remote address has to be turned into a displacement from the region
   // base, exactly as issueRget does. The base is not the address the peer asked
   // to register: with the registration cache on, LCI records the enclosing
@@ -461,6 +686,29 @@ void CommBackendLCI::issueRput(int rank, const void *local_buf, size_t size,
   // lock forever and wedge the device CQ. Push to the LCI backlog instead.
   bool allow_retry = !detail::g_in_progress_callback;
   const double tloop0 = amNow();
+  const size_t m = maxMsgSize();
+  if (size > m) {
+    // In pieces of the fabric's maximum, posted together (maxMsgSize).
+    auto p = new pieceArgs{localComp, user_context, local_buf, size, {(int)((size + m - 1) / m)}};
+    for (size_t off = 0; off < size; off += m) {
+      const size_t len = std::min(m, size - off);
+      lci::status_t st;
+      do {
+        st = lci::post_put_x(rank, (void *)((const char *)local_buf + off), len,
+                             m_piece_comp, remote_disp + off, getThreadLocalRMR(rmr))
+                 .mr(getThreadLocalMR(local_mr))
+                 .device(getThreadLocalDevice())
+                 .user_context(p)
+                 .allow_retry(allow_retry)();
+        if (allow_retry) progress();
+      } while (st.is_retry());
+      if (st.is_done()) pieceDone(p);
+    }
+    { const double dl = amNow() - tloop0; if (dl > g_am_send_stats.put_loop_max_s) g_am_send_stats.put_loop_max_s = dl; }
+    return;
+  }
+  auto args = new localCallbackArgs{localComp, user_context};
+  lci::status_t status;
   do {
     status = lci::post_put_x(rank, const_cast<void *>(local_buf), size,
                              m_local_comp, remote_disp, getThreadLocalRMR(rmr))
@@ -484,9 +732,16 @@ bool CommBackendLCI::threadMustPoll() {
 void CommBackendLCI::issueRputSignal(int rank, const void *local_buf, size_t size,
                                      mr_t local_mr, void *remote_buf, void *rmr, uint32_t tag,
                                      CompHandler localComp, void *user_context) {
+  uintptr_t remote_disp = (uintptr_t)remote_buf - getThreadLocalRMR(rmr).base;
+  if (size > maxMsgSize()) {
+    // Pieces one after another, the signal on the last (signalChain).
+    auto c = new signalChain{this, rank, (const char *)local_buf, size, 0, local_mr, rmr,
+                             remote_disp, tag, localComp, user_context};
+    issueSignalPiece(c);
+    return;
+  }
   auto args = new localCallbackArgs{localComp, user_context};
   lci::status_t status;
-  uintptr_t remote_disp = (uintptr_t)remote_buf - getThreadLocalRMR(rmr).base;
   // Same reentrancy guard as issueAm/issueRget/issueRput: from inside a
   // completion callback this thread holds m_progress_locks[dev], so push to
   // the LCI backlog instead of spinning.
@@ -510,7 +765,49 @@ void CommBackendLCI::issueRputSignal(int rank, const void *local_buf, size_t siz
   }
 }
 
+// One piece of a put with signal: the fabric's maximum at most, the signal
+// (tag and remote completion) on the last one. Posted from the previous
+// piece's completion callback, where allow_retry is false and LCI queues the
+// post in its backlog instead of this thread spinning on a lock it holds.
+void CommBackendLCI::issueSignalPiece(signalChain *c) {
+  const size_t m = maxMsgSize();
+  const size_t len = std::min(m, c->size - c->off);
+  const bool last = c->off + len >= c->size;
+  bool allow_retry = !detail::g_in_progress_callback;
+  lci::status_t st;
+  do {
+    auto x = lci::post_put_x(c->rank, (void *)(c->buf + c->off), len, m_chain_comp,
+                             c->remote_disp + c->off, getThreadLocalRMR(c->rmr))
+                 .mr(getThreadLocalMR(c->local_mr))
+                 .device(getThreadLocalDevice())
+                 .user_context(c)
+                 .allow_retry(allow_retry);
+    if (last) {
+      x.tag(c->tag);
+      x.remote_comp(m_signal_rcomp);
+    }
+    st = x();
+    if (allow_retry) progress();
+  } while (st.is_retry());
+  if (st.is_done()) chainAdvance(c, len);
+}
+
+void CommBackendLCI::chainAdvance(signalChain *c, size_t len) {
+  c->off += len;
+  if (c->off < c->size) {
+    issueSignalPiece(c);
+    return;
+  }
+  auto handler = c->handler;
+  auto user_context = c->user_context;
+  auto buf = c->buf;
+  auto size = c->size;
+  delete c;
+  handler({buf, size, user_context});
+}
+
 bool CommBackendLCI::progress(void) {
+  if (g_bulk.queued.load(std::memory_order_acquire) > 0) pumpBulk();
   struct ProgTimer { double t0; ~ProgTimer() { const double d = amNow() - t0; AmSendStats& st = g_am_send_stats; st.prog_n++; st.prog_s += d; if (d > st.prog_max_s) st.prog_max_s = d; } } prog_timer{amNow()};
   // OFI fi_cq_read is not thread-safe. Use a per-device trylock so at most
   // one thread polls each device CQ at a time. Callers that lose the race

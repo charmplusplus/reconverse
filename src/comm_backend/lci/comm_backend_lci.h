@@ -3,6 +3,7 @@
 
 #include "lci.hpp"
 #include <atomic>
+#include <algorithm>
 #include "comm_backend_internal.h"
 
 #include <mutex>
@@ -51,9 +52,14 @@ public:
   void issueRget(int rank, const void *local_buf, size_t size, mr_t local_mr,
                  void* remote_buf, void *rmr,
                  CompHandler localComp, void *user_context) override;
+  void issueRgetBulk(int rank, const void *local_buf, size_t size, mr_t local_mr,
+                     void* remote_buf, void *rmr,
+                     CompHandler localComp, void *user_context) override;
   void issueRput(int rank, const void *local_buf, size_t size, mr_t local_mr,
                  void* remote_buf, void *rmr,
                  CompHandler localComp, void *user_context) override;
+  void issueSignalPiece(struct signalChain *c);
+  void chainAdvance(struct signalChain *c, size_t len);
   void issueRputSignal(int rank, const void *local_buf, size_t size, mr_t local_mr,
                        void *remote_buf, void *rmr, uint32_t tag, CompHandler localComp,
                        void *user_context) override;
@@ -82,6 +88,9 @@ private:
   };
   std::vector<PaddedLock> m_progress_locks;
   lci::comp_t m_local_comp;
+  lci::comp_t m_piece_comp;     // a piece of a get or put above the fabric's maximum
+  lci::comp_t m_get_comp;       // an ordinary get (counted against the bulk gets)
+  lci::comp_t m_chain_comp;     // a piece of a put with signal (one after another)
   lci::comp_t m_remote_comp;
   lci::rcomp_t m_rcomp;
   lci::comp_t m_signal_comp;    // put with signal: the target's completion

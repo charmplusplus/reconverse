@@ -70,6 +70,12 @@ void CmiSetDirectNcpyAckHandler(RdmaAckCallerFn fn);
  */
 void CmiIssueRget(NcpyOperationInfo *ncpyOpInfo);
 
+/* Marks the CmiIssueRget calls this thread makes until it is cleared as bulk:
+ * state the runtime moves (a migrating object's payload) rather than data a
+ * computation is waiting for. A backend that can schedule may issue bulk reads
+ * in bounded pieces behind the other traffic; one that cannot ignores it. */
+void CmiRdmaSetBulk(int bulk);
+
 /* CmiIssueRput initiates an RDMA write operation, transferring 'size' bytes of
  * data from the local address, 'srcAddr' to the address space of 'destPe'. When
  * the runtime invokes srcAck on the source (initiator), it indicates safety to

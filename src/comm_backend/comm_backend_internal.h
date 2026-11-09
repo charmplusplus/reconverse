@@ -31,6 +31,12 @@ public:
     // Default implementation: not supported
     CmiAbort("Rget not supported in this backend");
   }
+  // A get of bulk state: a backend with no scheduling issues it as any other.
+  virtual void issueRgetBulk(int rank, const void *local_buf, size_t size,
+                             mr_t local_mr, void *remote_buf, void *rmr,
+                             CompHandler localComp, void *user_context) {
+    issueRget(rank, local_buf, size, local_mr, remote_buf, rmr, localComp, user_context);
+  }
   virtual void issueRput(int rank, const void *local_buf, size_t size,
                          mr_t local_mr, void *remote_buf, void *rmr,
                          CompHandler localComp, void *user_context) {
