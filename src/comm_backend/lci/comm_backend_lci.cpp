@@ -138,6 +138,12 @@ struct BulkSched {
   std::atomic<long> n_pieces{0}, n_bytes{0}, n_payloads{0};
 };
 static BulkSched g_bulk;
+// Set as exit() begins. free_device drains what is still posted and runs its completions, and a completion's
+// handler may send (a device channel's pull completes and returns the credit, CkDeviceChannel::onPulled); posting
+// on the device being freed segfaulted in lci::set_protocol (2026-11-09, MoE training on 16 GCDs, rank 6 after
+// every step was done). Nothing is posted from then on: the job is over on every rank, and what a dropped message
+// would have freed goes with the process.
+static std::atomic<bool> g_exiting{false};
 struct bulkCtx {
   pieceArgs *p;
   size_t len;
@@ -468,6 +474,7 @@ void CommBackendLCI::abortAll(int exit_code, const char *msg) {
 }
 
 void CommBackendLCI::exit() {
+  g_exiting.store(true);
   if (g_bulk.n_payloads.load() > 0)
     fprintf(stderr, "[lci] rank %d: %ld bulk gets in %ld pieces, %.1f MB\n", lci::get_rank_me(),
             g_bulk.n_payloads.load(), g_bulk.n_pieces.load(), g_bulk.n_bytes.load() / 1048576.0);
@@ -550,6 +557,7 @@ AmHandler CommBackendLCI::registerAmHandler(CompHandler handler) {
 
 void CommBackendLCI::issueAm(int rank, const void *local_buf, size_t size, mr_t mr,
                               CompHandler localComp, AmHandler remoteComp, void *user_context) {
+  if (g_exiting.load(std::memory_order_relaxed)) return;
   auto args = new localCallbackArgs{localComp, user_context};
   lci::status_t status;
   // When called from inside a completion callback (g_in_progress_callback=true),
@@ -597,6 +605,7 @@ void CommBackendLCI::issueAm(int rank, const void *local_buf, size_t size, mr_t 
 void CommBackendLCI::issueRget(int rank, const void *local_buf, size_t size,
                                 mr_t local_mr, void* remote_buf, void *rmr,
                                 CompHandler localComp, void *user_context) {
+  if (g_exiting.load(std::memory_order_relaxed)) return;
   uintptr_t remote_disp = (uintptr_t)remote_buf - getThreadLocalRMR(rmr).base;
   // Same reentrancy guard as issueAm: don't spin when called from a completion
   // callback, push to backlog instead.
@@ -648,6 +657,7 @@ void CommBackendLCI::issueRget(int rank, const void *local_buf, size_t size,
 void CommBackendLCI::issueRgetBulk(int rank, const void *local_buf, size_t size,
                                    mr_t local_mr, void* remote_buf, void *rmr,
                                    CompHandler localComp, void *user_context) {
+  if (g_exiting.load(std::memory_order_relaxed)) return;
   const size_t c = std::min(g_bulk.chunk, maxMsgSize());
   if (!g_bulk.on || size <= c) {
     issueRget(rank, local_buf, size, local_mr, remote_buf, rmr, localComp, user_context);
@@ -673,6 +683,7 @@ void CommBackendLCI::issueRgetBulk(int rank, const void *local_buf, size_t size,
 void CommBackendLCI::issueRput(int rank, const void *local_buf, size_t size,
                                 mr_t local_mr, void *remote_buf, void *rmr,
                                 CompHandler localComp, void *user_context) {
+  if (g_exiting.load(std::memory_order_relaxed)) return;
   // The remote address has to be turned into a displacement from the region
   // base, exactly as issueRget does. The base is not the address the peer asked
   // to register: with the registration cache on, LCI records the enclosing
@@ -732,6 +743,7 @@ bool CommBackendLCI::threadMustPoll() {
 void CommBackendLCI::issueRputSignal(int rank, const void *local_buf, size_t size,
                                      mr_t local_mr, void *remote_buf, void *rmr, uint32_t tag,
                                      CompHandler localComp, void *user_context) {
+  if (g_exiting.load(std::memory_order_relaxed)) return;
   uintptr_t remote_disp = (uintptr_t)remote_buf - getThreadLocalRMR(rmr).base;
   if (size > maxMsgSize()) {
     // Pieces one after another, the signal on the last (signalChain).
@@ -770,6 +782,7 @@ void CommBackendLCI::issueRputSignal(int rank, const void *local_buf, size_t siz
 // piece's completion callback, where allow_retry is false and LCI queues the
 // post in its backlog instead of this thread spinning on a lock it holds.
 void CommBackendLCI::issueSignalPiece(signalChain *c) {
+  if (g_exiting.load(std::memory_order_relaxed)) return;
   const size_t m = maxMsgSize();
   const size_t len = std::min(m, c->size - c->off);
   const bool last = c->off + len >= c->size;
