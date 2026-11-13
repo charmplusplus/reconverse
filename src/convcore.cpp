@@ -1478,10 +1478,16 @@ static std::atomic<int> abortHookState{0};
 
 void CmiSetAbortHook(CmiAbortHookFn hook) { abortHook.store(hook); }
 
+/* How long a thread that aborts while another runs the hook waits for it
+   before going on to abort() regardless, so that a hook that blocks cannot
+   keep the process alive. */
+static const int abortHookWaitSeconds = 10;
+
 /* Runs the hook at most once per process. A thread that finds another one
-   inside it waits: the hook is there to end the job (MPI_Abort), and this
-   thread's abort() could kill the process before the hook has reached the
-   other processes. A CmiAbort the hook itself causes skips it. */
+   inside it waits, up to abortHookWaitSeconds: the hook is there to end the
+   job (MPI_Abort), and this thread's abort() could kill the process before
+   the hook has reached the other processes. A CmiAbort the hook itself
+   causes skips it. */
 static void runAbortHook(int code, const char *msg) {
   static thread_local bool inHook = false;
   CmiAbortHookFn hook = abortHook.load();
@@ -1495,7 +1501,10 @@ static void runAbortHook(int code, const char *msg) {
     abortHookState.store(2);
     return;
   }
-  while (abortHookState.load() == 1)
+  const auto deadline = std::chrono::steady_clock::now() +
+                        std::chrono::seconds(abortHookWaitSeconds);
+  while (abortHookState.load() == 1 &&
+         std::chrono::steady_clock::now() < deadline)
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
 }
 

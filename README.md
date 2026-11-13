@@ -335,12 +335,20 @@ stderr, asks the process manager to end the other ranks, and aborts. The
 process-manager step goes through LCI's `LCT_pmi_abort`: under `srun` with
 `--mpi=pmi2` or `--mpi=pmix`, and under `mpirun`, the whole job ends at once;
 `lcrun` ends the other processes itself when one exits with a failure; with
-the file PMI backend (no launcher) nothing else is needed. A program that
-owns the job can register a hook with `CmiSetAbortHook`; `CmiAbort` calls it
-once per process, after printing and before the process-manager step, and
-another PE that aborts meanwhile waits for it. MPI interop needs one: there
-LCI bootstraps over LCT's tcp backend, whose abort reaches no other process,
-so the hook calls `MPI_Abort` (#321). Fatal signals
+the file PMI backend (no launcher) nothing else is needed.
+
+A program that owns the job can end it its own way: `CmiSetAbortHook(fn)`
+registers a function that `CmiAbort` calls once per process, with code 1 and
+the formatted reason, after printing and before the process-manager step.
+If the hook returns, `CmiAbort` goes on as usual. Another PE that aborts
+meanwhile waits for the hook, so that its `abort()` does not end the process
+before the hook has ended the job, but for at most 10 s; the hook must not
+take Converse locks, which an aborting PE may hold. Reconverse registers no
+hook itself. MPI interop needs one, because there LCI bootstraps over LCT's
+tcp backend, whose abort reaches no other process: Charm++'s `CharmLibInit`
+registers a hook that calls `MPI_Abort` (charmplusplus/charm#4254).
+
+Fatal signals
 (SIGSEGV, SIGBUS, SIGILL, SIGFPE, SIGABRT) print the PE, the signal and a
 stack trace, then re-raise with the default disposition, so exit status and
 core dumps are unchanged. `+truecrash` leaves those handlers uninstalled for

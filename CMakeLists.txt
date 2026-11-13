@@ -41,7 +41,7 @@ option(RECONVERSE_AUTOFETCH_LCI2
         "whether to autofetch LCIv2 if LCI2 cannot be found" OFF)
 set(RECONVERSE_AUTOFETCH_LCI2_TAG
     "a8127fa225c2458db77dab9227700875b669c981"
-    CACHE STRING "The tag to fetch for LCIv2") # uiuc-hpc/lci master, 2026-11-06: RoCE ports without a valid GID unusable (#217), graph completion fix (#220), CI on OFI tcp (#221)
+    CACHE STRING "The tag to fetch for LCIv2") # uiuc-hpc/lci master, 2026-11-06: ibv treats RoCE ports without a valid GID as unusable (#217); #220 (graph API) and #221 (CI) do not touch what reconverse uses
 
 option(RECONVERSE_TRY_ENABLE_COMM_LCW "whether to enable the LCW backend" ON)
 option(RECONVERSE_AUTOFETCH_LCW
