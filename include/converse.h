@@ -923,6 +923,13 @@ void CmiExit(int status);
    this function) end non-void functions with it, which MSVC rejects unless it
    knows. */
 CMK_NORETURN void CmiAbort(const char *format, ...);
+/* A function CmiAbort calls once per process, after printing the reason and
+   the stack and before it asks the process manager to end the job and aborts,
+   so that the program that owns the job can end it its own way. code is 1,
+   msg the formatted reason; if the hook returns, CmiAbort goes on as usual.
+   It must not take Converse locks. NULL removes it. See README.md. */
+typedef void (*CmiAbortHookFn)(int code, const char *msg);
+void CmiSetAbortHook(CmiAbortHookFn hook);
 
 // Utility functions
 CLINKAGE int CmiPrintf(const char *format, ...);

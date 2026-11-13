@@ -40,8 +40,8 @@ option(RECONVERSE_TRY_ENABLE_COMM_LCI2 "whether to enable the LCIv2 backend" ON)
 option(RECONVERSE_AUTOFETCH_LCI2
         "whether to autofetch LCIv2 if LCI2 cannot be found" OFF)
 set(RECONVERSE_AUTOFETCH_LCI2_TAG
-    "1287c59c1c9dad78d6966b6af5eeeb3d7df5ec8c"
-    CACHE STRING "The tag to fetch for LCIv2") # uiuc-hpc/lci master, 2026-10-24: OFI providers that need FI_CONTEXT and have 4-byte CQ data, i.e. native psm2 (#214)
+    "a8127fa225c2458db77dab9227700875b669c981"
+    CACHE STRING "The tag to fetch for LCIv2") # uiuc-hpc/lci master, 2026-11-06: ibv treats RoCE ports without a valid GID as unusable (#217); #220 (graph API) and #221 (CI) do not touch what reconverse uses
 
 option(RECONVERSE_TRY_ENABLE_COMM_LCW "whether to enable the LCW backend" ON)
 option(RECONVERSE_AUTOFETCH_LCW

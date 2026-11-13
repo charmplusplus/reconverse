@@ -1470,6 +1470,44 @@ void CmiAbortHelper(const char *source, const char *message,
            CmiMyPe(), source, message);
 }
 
+/* CmiSetAbortHook (converse.h). Process-wide, so that it holds before
+   ConverseInit and on every PE thread. */
+static std::atomic<CmiAbortHookFn> abortHook{nullptr};
+/* 0: the hook has not run; 1: a thread is inside it; 2: it returned. */
+static std::atomic<int> abortHookState{0};
+
+void CmiSetAbortHook(CmiAbortHookFn hook) { abortHook.store(hook); }
+
+/* How long a thread that aborts while another runs the hook waits for it
+   before going on to abort() regardless, so that a hook that blocks cannot
+   keep the process alive. */
+static const int abortHookWaitSeconds = 10;
+
+/* Runs the hook at most once per process. A thread that finds another one
+   inside it waits, up to abortHookWaitSeconds: the hook is there to end the
+   job (MPI_Abort), and this thread's abort() could kill the process before
+   the hook has reached the other processes. A CmiAbort the hook itself
+   causes skips it. */
+static void runAbortHook(int code, const char *msg) {
+  static thread_local bool inHook = false;
+  CmiAbortHookFn hook = abortHook.load();
+  if (hook == nullptr || inHook)
+    return;
+  int notRun = 0;
+  if (abortHookState.compare_exchange_strong(notRun, 1)) {
+    inHook = true;
+    hook(code, msg);
+    inHook = false;
+    abortHookState.store(2);
+    return;
+  }
+  const auto deadline = std::chrono::steady_clock::now() +
+                        std::chrono::seconds(abortHookWaitSeconds);
+  while (abortHookState.load() == 1 &&
+         std::chrono::steady_clock::now() < deadline)
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+}
+
 void CmiAbort(const char *format, ...) {
   char stackmsg[1024];
   char *newmsg = stackmsg;
@@ -1490,9 +1528,11 @@ void CmiAbort(const char *format, ...) {
   CmiAbortHelper("Called CmiAbort", newmsg, NULL, 1, 0);
   CmiPrintStackTrace(1); // skip CmiAbort's own frame
 
-  /* No CmiExitHelper(): the process manager ends the other ranks (abortAll),
-     or the launcher does when this one dies. The trace is already printed, so
-     SIGABRT goes back to its default disposition before abort(). */
+  /* No CmiExitHelper(): the program's abort hook ends the other ranks (MPI
+     interop), or the process manager does (abortAll), or the launcher does
+     when this one dies. The trace is already printed, so SIGABRT goes back to
+     its default disposition before abort(). */
+  runAbortHook(1, newmsg);
   comm_backend::abortAll(1, newmsg);
   std::signal(SIGABRT, SIG_DFL);
   abort();
