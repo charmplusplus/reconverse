@@ -335,7 +335,12 @@ stderr, asks the process manager to end the other ranks, and aborts. The
 process-manager step goes through LCI's `LCT_pmi_abort`: under `srun` with
 `--mpi=pmi2` or `--mpi=pmix`, and under `mpirun`, the whole job ends at once;
 `lcrun` ends the other processes itself when one exits with a failure; with
-the file PMI backend (no launcher) nothing else is needed. Fatal signals
+the file PMI backend (no launcher) nothing else is needed. A program that
+owns the job can register a hook with `CmiSetAbortHook`; `CmiAbort` calls it
+once per process, after printing and before the process-manager step, and
+another PE that aborts meanwhile waits for it. MPI interop needs one: there
+LCI bootstraps over LCT's tcp backend, whose abort reaches no other process,
+so the hook calls `MPI_Abort` (#321). Fatal signals
 (SIGSEGV, SIGBUS, SIGILL, SIGFPE, SIGABRT) print the PE, the signal and a
 stack trace, then re-raise with the default disposition, so exit status and
 core dumps are unchanged. `+truecrash` leaves those handlers uninstalled for

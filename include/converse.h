@@ -923,6 +923,18 @@ void CmiExit(int status);
    this function) end non-void functions with it, which MSVC rejects unless it
    knows. */
 CMK_NORETURN void CmiAbort(const char *format, ...);
+/* A function CmiAbort calls, once per process, after printing the reason and
+   the stack and before it asks the process manager to end the job
+   (comm_backend::abortAll) and aborts. It is for the program that owns the
+   job: an MPI program that started Converse with CharmLibInit can end it with
+   MPI_Abort, where LCI's process-manager abort reaches no other process
+   (reconverse #321). code is CmiAbort's exit code (1), msg its formatted
+   reason. The hook normally does not return; if it does, CmiAbort goes on as
+   without one. Another thread calling CmiAbort meanwhile waits for the hook to
+   finish rather than abort the process under it. Set it before ConverseInit
+   or from any PE; NULL removes it. */
+typedef void (*CmiAbortHookFn)(int code, const char *msg);
+void CmiSetAbortHook(CmiAbortHookFn hook);
 
 // Utility functions
 CLINKAGE int CmiPrintf(const char *format, ...);
