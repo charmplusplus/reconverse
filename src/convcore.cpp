@@ -32,6 +32,9 @@
 #ifdef __APPLE__
 #include <sys/sysctl.h>
 #endif
+#ifdef __linux__
+#include <sched.h>
+#endif
 
 // GLOBALS
 static char **Cmi_argv;
@@ -92,6 +95,44 @@ static void CmiCheckCacheLineSize() {
            "shared lines. Rebuild with a larger CMI_CACHE_LINE_SIZE.\n",
            line, CMI_CACHE_LINE_SIZE);
 }
+
+// Opening the network can bind the thread that opens it to one CPU. psm2
+// (Omni-Path) does: unless HFI_NO_CPUAFFINITY is set, psm2_ep_open binds the
+// calling thread to the CPU the hfi1 driver picks for its receive context
+// (CPU 0 or 2 on Stampede3's SKX nodes, for a process whose mask is the whole
+// node), and closing the endpoint does not undo it. The PE threads are created
+// afterwards by this same thread, and a new thread starts with its creator's
+// mask, so every PE of the process ran on that one CPU (reconverse#320).
+// ConverseInit saves the main thread's mask before comm_backend::init and puts
+// it back afterwards. Binding by +pemap or +setcpuaffinity happens later, on
+// each PE, and is unaffected.
+#if defined(__linux__) && defined(CPU_SETSIZE)
+static cpu_set_t initThreadMask;
+static bool initThreadMaskSaved = false;
+
+static void CmiSaveInitThreadMask() {
+  initThreadMaskSaved =
+      sched_getaffinity(0, sizeof(initThreadMask), &initThreadMask) == 0;
+}
+
+static void CmiRestoreInitThreadMask() {
+  cpu_set_t now;
+  if (!initThreadMaskSaved ||
+      sched_getaffinity(0, sizeof(now), &now) != 0 ||
+      CPU_EQUAL(&now, &initThreadMask))
+    return;
+  if (sched_setaffinity(0, sizeof(initThreadMask), &initThreadMask) != 0)
+    fprintf(stderr,
+            "Reconverse> WARNING: the network layer changed the main "
+            "thread's CPU mask and restoring it failed (%s); PE threads "
+            "will start with the changed mask\n",
+            strerror(errno));
+}
+#else
+static void CmiSaveInitThreadMask() {}
+static void CmiRestoreInitThreadMask() {}
+#endif
+
 CsvDeclare(CmiNodeLock, CsdNodeQueueLock);
 double Cmi_startTime;
 CmiSpanningTreeInfo *_topoTree = NULL;
@@ -588,7 +629,9 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
   int plusPPNSet = CmiGetArgInt(argv, "+ppn", &pesPerProcess);
   Cmi_argvcopy = CmiCopyArgs(argv); // init for tracing
 
+  CmiSaveInitThreadMask();
   comm_backend::init(argv);
+  CmiRestoreInitThreadMask();
   Cmi_mynode = comm_backend::getMyNodeId();
   Cmi_numnodes = comm_backend::getNumNodes();
   comm_backend::barrier();
