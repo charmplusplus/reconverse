@@ -1,4 +1,4 @@
-// Regression test for reconverse#320. Without +pemap or +setcpuaffinity, every
+// Without +pemap or +setcpuaffinity, every
 // PE thread must start with the CPU mask the process had in main(). The
 // network layer may bind the thread that opens it: psm2 (Omni-Path) binds a
 // thread whose mask covers the whole node to a single CPU. PE threads are
