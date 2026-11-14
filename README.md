@@ -348,6 +348,16 @@ hook itself. MPI interop needs one, because there LCI bootstraps over LCT's
 tcp backend, whose abort reaches no other process: Charm++'s `CharmLibInit`
 registers a hook that calls `MPI_Abort` (charmplusplus/charm#4254).
 
+`abort()` skips the process's exit handlers, and with them the clang profile
+runtime's write of a coverage profile. `CmiRegisterAbortFlush(fn)` registers
+an `int fn(void)` that `CmiAbort` calls before the hook; up to 8, run once per
+process in the order registered, with other aborting PEs waiting for them as
+for the hook. With `-DRECONVERSE_COVERAGE=ON` (set by Charm++'s `--coverage`)
+`CmiAbort` first writes reconverse's own profile. Each image linked with the
+profile runtime (libreconverse, the executable) has its own copy of it, so an
+executable that is instrumented registers its own `__llvm_profile_write_file`;
+Charm++ does this in coverage builds.
+
 Fatal signals
 (SIGSEGV, SIGBUS, SIGILL, SIGFPE, SIGABRT) print the PE, the signal and a
 stack trace, then re-raise with the default disposition, so exit status and

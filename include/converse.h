@@ -930,6 +930,15 @@ CMK_NORETURN void CmiAbort(const char *format, ...);
    It must not take Converse locks. NULL removes it. See README.md. */
 typedef void (*CmiAbortHookFn)(int code, const char *msg);
 void CmiSetAbortHook(CmiAbortHookFn hook);
+/* Registers a function that CmiAbort calls once per process, after printing
+   the reason and the stack and before the abort hook, to write out state that
+   the process would otherwise lose at abort(), such as a coverage profile.
+   Process-wide; callable before ConverseInit and from any thread. Functions
+   run in the order registered, a function registered twice runs once, and
+   the return value is ignored. Up to 8 functions. Same constraints as the
+   abort hook. See README.md. */
+typedef int (*CmiAbortFlushFn)(void);
+void CmiRegisterAbortFlush(CmiAbortFlushFn fn);
 
 // Utility functions
 CLINKAGE int CmiPrintf(const char *format, ...);

@@ -72,6 +72,12 @@ if(CMK_HAS_XPMEM)
 endif()
 option(CMK_TASKQUEUE "use the task queue for work stealing" OFF)
 
+# Coverage builds (Charm++'s --coverage): CmiAbort writes reconverse's clang
+# profile before it aborts, which would otherwise skip the profile runtime's
+# write at exit. The compile flags (-fprofile-instr-generate) come from the
+# enclosing build; this option only enables the write.
+option(RECONVERSE_COVERAGE "write the coverage profile on CmiAbort" OFF)
+
 option(RECONVERSE_ATOMIC_QUEUE "whether to use atomic queue" ON)
 
 # Every message is allocated by the sending PE and freed by the receiving PE;
@@ -301,6 +307,10 @@ if(RECONVERSE_USE_JEMALLOC)
       ${CMAKE_DL_LIBS} m)
   endif()
   target_compile_definitions(reconverse PRIVATE RECONVERSE_USE_JEMALLOC)
+endif()
+
+if(RECONVERSE_COVERAGE)
+  target_compile_definitions(reconverse PRIVATE RECONVERSE_COVERAGE=1)
 endif()
 
 if(NOT RECONVERSE_ROOT_PROJECT)
