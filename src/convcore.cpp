@@ -6,11 +6,13 @@
 #include "taskqueue.h"
 #include "scheduler.h"
 
+#include <chrono>
 #include <cinttypes>
 #include <conv-rdma.h>
 #include <csignal>
 #include <cstdarg>
 #include <cstring>
+#include <mutex>
 #include <stdio.h>
 #include <sys/stat.h>
 #ifdef RECONVERSE_USE_JEMALLOC
@@ -1247,10 +1249,14 @@ void CmiAssignOnce(int *variable, int value) {
 // status default is 0
 void CsdExitScheduler() { CmiGetState()->stopFlag = 1; }
 
+static void runAbortFlush();
+
 void CmiExitHandler(void *msg) {
   int status = static_cast<CmiExitMsg *>(msg)->status;
 
+  // CmiExit(1): every PE aborts.
   if (status == 1) {
+    runAbortFlush();
     std::signal(SIGABRT, SIG_DFL);
     abort();
   }
@@ -1483,6 +1489,81 @@ void CmiSetAbortHook(CmiAbortHookFn hook) { abortHook.store(hook); }
    keep the process alive. */
 static const int abortHookWaitSeconds = 10;
 
+/* Waits while state is 1 (another thread is running a step that must finish
+   before this thread aborts), for at most abortHookWaitSeconds. */
+static void waitForAbortStep(const std::atomic<int> &state) {
+  const auto deadline = std::chrono::steady_clock::now() +
+                        std::chrono::seconds(abortHookWaitSeconds);
+  while (state.load() == 1 && std::chrono::steady_clock::now() < deadline)
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+}
+
+#if RECONVERSE_COVERAGE
+/* The clang profile runtime (-fprofile-instr-generate). Each image linked
+   with it has its own copy, so this writes reconverse's counters only. */
+extern "C" int __llvm_profile_write_file(void);
+#endif
+
+/* CmiRegisterAbortFlush (converse.h). Process-wide, like the abort hook. */
+static const int maxAbortFlushFns = 8;
+static std::atomic<CmiAbortFlushFn> abortFlushFns[maxAbortFlushFns];
+static std::atomic<int> abortFlushCount{0};
+static std::mutex abortFlushRegisterLock;
+/* 0: the flush step has not run; 1: a thread is inside it; 2: it is done. */
+static std::atomic<int> abortFlushState{0};
+
+void CmiRegisterAbortFlush(CmiAbortFlushFn fn) {
+  if (fn == nullptr)
+    return;
+  bool full = false;
+  {
+    std::lock_guard<std::mutex> guard(abortFlushRegisterLock);
+    int n = abortFlushCount.load();
+    for (int i = 0; i < n; i++)
+      if (abortFlushFns[i].load() == fn)
+        return;
+    if (n == maxAbortFlushFns) {
+      full = true;
+    } else {
+      abortFlushFns[n].store(fn);
+      abortFlushCount.store(n + 1);
+    }
+  }
+  // Not CmiAbort: this may run before ConverseInit, where CmiMyPe is unset.
+  if (full) {
+    fprintf(stderr, "CmiRegisterAbortFlush: more than %d functions\n",
+            maxAbortFlushFns);
+    fflush(stderr);
+    std::signal(SIGABRT, SIG_DFL);
+    abort();
+  }
+}
+
+/* Runs the flush step at most once per process: reconverse's own profile
+   write in coverage builds, then the registered functions in order. A thread
+   that finds another one inside it waits, up to abortHookWaitSeconds, so that
+   its abort() does not end the process during a write. A CmiAbort raised
+   inside the step skips it. */
+static void runAbortFlush() {
+  static thread_local bool inFlush = false;
+  if (inFlush)
+    return;
+  int notRun = 0;
+  if (abortFlushState.compare_exchange_strong(notRun, 1)) {
+    inFlush = true;
+#if RECONVERSE_COVERAGE
+    __llvm_profile_write_file();
+#endif
+    int n = abortFlushCount.load();
+    for (int i = 0; i < n; i++)
+      abortFlushFns[i].load()();
+    inFlush = false;
+    abortFlushState.store(2);
+    return;
+  }
+  waitForAbortStep(abortFlushState);
+}
+
 /* Runs the hook at most once per process. A thread that finds another one
    inside it waits, up to abortHookWaitSeconds: the hook is there to end the
    job (MPI_Abort), and this thread's abort() could kill the process before
@@ -1501,11 +1582,7 @@ static void runAbortHook(int code, const char *msg) {
     abortHookState.store(2);
     return;
   }
-  const auto deadline = std::chrono::steady_clock::now() +
-                        std::chrono::seconds(abortHookWaitSeconds);
-  while (abortHookState.load() == 1 &&
-         std::chrono::steady_clock::now() < deadline)
-    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  waitForAbortStep(abortHookState);
 }
 
 void CmiAbort(const char *format, ...) {
@@ -1527,6 +1604,9 @@ void CmiAbort(const char *format, ...) {
   va_end(args2);
   CmiAbortHelper("Called CmiAbort", newmsg, NULL, 1, 0);
   CmiPrintStackTrace(1); // skip CmiAbort's own frame
+
+  /* Before the hook, which may end the process (MPI_Abort). */
+  runAbortFlush();
 
   /* No CmiExitHelper(): the program's abort hook ends the other ranks (MPI
      interop), or the process manager does (abortAll), or the launcher does
