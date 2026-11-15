@@ -83,8 +83,10 @@ if(RECONVERSE_TRY_ENABLE_COMM_LCI2)
   if(RECONVERSE_ENABLE_COMM_LCI2)
     message(STATUS "LCIv2 found. Enabling LCIv2 backend.")
     # LCI is a private dependency of reconverse
-    # but we need to link it publicly in case reconverse is built as a static library
-    target_link_libraries(reconverse PUBLIC LCI::lci)
+    # but we need to link it publicly in case reconverse is built as a static library.
+    # LCI::lct too: comm_backend_lci.cpp calls LCT functions (LCT_pmi_abort), and an
+    # installed LCI's LCI::lci target does not link liblct.
+    target_link_libraries(reconverse PUBLIC LCI::lci LCI::lct)
     target_sources(reconverse PRIVATE comm_backend_lci.cpp)
     set(RECONVERSE_ENABLE_COMM_LCI2 ON PARENT_SCOPE)
   else()
