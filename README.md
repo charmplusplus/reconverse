@@ -102,12 +102,13 @@ If LCI is autofetched, you can further customize the LCI build by passing additi
 
 The example executables are located in the build/test/<program_name> folders. You can run them with `mpirun`, `srun`, or `lcrun` depending on your system configuration.
 
-A single process can also be started directly (`./program +pe 4`), except in a
+A single process can also be started directly (`./program +pe 4`), also in a
 shell inside a Slurm job, such as a batch script or an interactive session.
-There `SLURM_NTASKS` is set to the job's task count, and LCI's bootstrap (as of
-LCI a8127fa) takes a value above 1 to mean that many processes were launched
-without a PMI service, so the process waits at startup for the others, forever.
-Start it with `srun -n 1`, or set `LCT_PMI_BACKEND=local`.
+With an LCI older than 8d0be6b (uiuc-hpc/lci#223), such as a separately
+installed one, a process started that way waits at startup forever: LCI's
+bootstrap took the job's `SLURM_NTASKS` to mean that many processes had been
+launched without a PMI service. With such an LCI, start it with `srun -n 1`, or
+set `LCT_PMI_BACKEND=local`.
 
 ### Runtime Options
 - **`+pe <num>`**: specify the total number of PEs across all processes.

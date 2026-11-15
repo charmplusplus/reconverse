@@ -40,8 +40,8 @@ option(RECONVERSE_TRY_ENABLE_COMM_LCI2 "whether to enable the LCIv2 backend" ON)
 option(RECONVERSE_AUTOFETCH_LCI2
         "whether to autofetch LCIv2 if LCI2 cannot be found" OFF)
 set(RECONVERSE_AUTOFETCH_LCI2_TAG
-    "a8127fa225c2458db77dab9227700875b669c981"
-    CACHE STRING "The tag to fetch for LCIv2") # uiuc-hpc/lci master, 2026-11-06: ibv treats RoCE ports without a valid GID as unusable (#217); #220 (graph API) and #221 (CI) do not touch what reconverse uses
+    "9757d6abc8a29a00a57238f3ad38a3edcb25abc0"
+    CACHE STRING "The tag to fetch for LCIv2") # uiuc-hpc/lci master, 2026-11-14: file PMI counts ranks from SLURM_STEP_NUM_TASKS, so a process started directly in a Slurm job no longer waits forever (#223); bundled UCX async prototypes for GCC 15 (#224)
 
 option(RECONVERSE_TRY_ENABLE_COMM_LCW "whether to enable the LCW backend" ON)
 option(RECONVERSE_AUTOFETCH_LCW
