@@ -4,6 +4,7 @@
 #include "conv-rdma.h"
 #include "converse_internal.h"
 #include <algorithm>
+#include <atomic>
 #include <cstdlib>
 #include <cstring>
 #include <vector>
@@ -318,16 +319,28 @@ void CmiNcpyBuffer::cmaGet(CmiNcpyBuffer &source) {
 }
 #endif
 
+// Registers an unregistered buffer for a network transfer that this side
+// initiates. With CMK_BUFFER_NODEREG the registration stays with this handle
+// until the user calls deregisterMem(), which clears isRegistered, so a handle
+// that starts several transfers registers once. Registering again would
+// overwrite layerInfo and lose the earlier registration, which nothing could
+// then release (#331). With CMK_BUFFER_DEREG the layer above releases the
+// registration through the operation's copy of layerInfo when the transfer
+// completes, which leaves isRegistered here stale, so every transfer
+// registers.
+static void registerForTransfer(CmiNcpyBuffer &buf) {
+  if (buf.regMode != CMK_BUFFER_UNREG)
+    return;
+  if (buf.isRegistered && buf.deregMode == CMK_BUFFER_NODEREG)
+    return;
+  CmiSetRdmaBufferInfo(buf.layerInfo + CmiGetRdmaCommonInfoSize(), buf.ptr,
+                       buf.cnt, buf.regMode);
+  buf.isRegistered = true;
+}
+
 void CmiNcpyBuffer::rdmaGet(CmiNcpyBuffer &source, int ackSize, char *srcAck,
                             char *destAck) {
-  // int ackSize = sizeof(CmiCallback);
-  if (regMode == CMK_BUFFER_UNREG) {
-    // register it because it is required for RGET
-    CmiSetRdmaBufferInfo(layerInfo + CmiGetRdmaCommonInfoSize(), ptr, cnt,
-                         regMode);
-
-    isRegistered = true;
-  }
+  registerForTransfer(*this);
 
   int rootNode = -1; // -1 is the rootNode for p2p operations
 
@@ -380,13 +393,7 @@ void CmiNcpyBuffer::cmaPut(CmiNcpyBuffer &destination) {
 
 void CmiNcpyBuffer::rdmaPut(CmiNcpyBuffer &destination, int ackSize,
                             char *srcAck, char *destAck) {
-  if (regMode == CMK_BUFFER_UNREG) {
-    // register it because it is required for RPUT
-    CmiSetRdmaBufferInfo(layerInfo + CmiGetRdmaCommonInfoSize(), ptr, cnt,
-                         regMode);
-
-    isRegistered = true;
-  }
+  registerForTransfer(*this);
 
   int rootNode = -1; // -1 is the rootNode for p2p operations
 
@@ -541,23 +548,25 @@ void CommRgetLocalHandler(comm_backend::Status status) {
 }
 
 // RDMA get from a registered remote source into the local destination.
-static void rdmaIssueGet(NcpyOperationInfo *ncpyOpInfo, size_t len) {
+static void rdmaIssueGet(NcpyOperationInfo *ncpyOpInfo, size_t len,
+                         comm_backend::CompHandler done = CommRgetLocalHandler) {
   auto mr = *(comm_backend::mr_t *)ncpyOpInfo->destLayerInfo;
   void *rmr = ncpyOpInfo->srcLayerInfo + sizeof(comm_backend::mr_t);
   comm_backend::issueRget(CmiNodeToGlobal(CmiNodeOf(ncpyOpInfo->srcPe)),
                           ncpyOpInfo->destPtr,
                           len, mr, (void*)ncpyOpInfo->srcPtr, rmr,
-                          CommRgetLocalHandler, ncpyOpInfo);
+                          done, ncpyOpInfo);
 }
 
 // RDMA put from the local source into a registered remote destination.
-static void rdmaIssuePut(NcpyOperationInfo *ncpyOpInfo, size_t len) {
+static void rdmaIssuePut(NcpyOperationInfo *ncpyOpInfo, size_t len,
+                         comm_backend::CompHandler done = CommRputLocalHandler) {
   auto mr = *(comm_backend::mr_t *)ncpyOpInfo->srcLayerInfo;
   void *rmr = ncpyOpInfo->destLayerInfo + sizeof(comm_backend::mr_t);
   comm_backend::issueRput(CmiNodeToGlobal(CmiNodeOf(ncpyOpInfo->destPe)),
                           ncpyOpInfo->srcPtr,
                           len, mr, 0, rmr,
-                          CommRputLocalHandler, ncpyOpInfo);
+                          done, ncpyOpInfo);
 }
 
 // The remote buffer of an RDMA operation is not registered (CMK_BUFFER_UNREG
@@ -592,6 +601,45 @@ static NcpyOperationInfo *takeRegRequest(ConverseRdmaMsg *msg) {
   return ncpyOpInfo;
 }
 
+// The owner registers the buffer for this one transfer, in the operation's
+// copy of layerInfo; the user's handle on the owner stays unregistered, so
+// the next transfer from it registers again. With CMK_BUFFER_DEREG the layer
+// above releases the registration, as it does for any buffer in that mode.
+// CMK_BUFFER_NODEREG leaves a registration for the user to reuse and release,
+// but the user never held this one, so the owner releases it when the
+// transfer completes here (#331). Clearing isSrcRegistered/isDestRegistered
+// tells the acknowledgement, and the handle given to a Charm++ callback, that
+// the buffer is no longer registered.
+static void releaseOwnerRegistration(NcpyOperationInfo *info, bool source) {
+  if (source) {
+    if (info->srcDeregMode != CMK_BUFFER_NODEREG)
+      return;
+    CmiDeregisterMem(info->srcPtr,
+                     info->srcLayerInfo + CmiGetRdmaCommonInfoSize(),
+                     info->srcPe, info->srcRegMode);
+    info->isSrcRegistered = 0;
+  } else {
+    if (info->destDeregMode != CMK_BUFFER_NODEREG)
+      return;
+    CmiDeregisterMem(info->destPtr,
+                     info->destLayerInfo + CmiGetRdmaCommonInfoSize(),
+                     info->destPe, info->destRegMode);
+    info->isDestRegistered = 0;
+  }
+}
+
+// Local completion of the put in regAndPutHandler: the source has been read.
+static void regAndPutDone(comm_backend::Status status) {
+  releaseOwnerRegistration((NcpyOperationInfo *)status.user_context, true);
+  CommRputLocalHandler(status);
+}
+
+// Local completion of the get in regAndGetHandler: the data has landed.
+static void regAndGetDone(comm_backend::Status status) {
+  releaseOwnerRegistration((NcpyOperationInfo *)status.user_context, false);
+  CommRgetLocalHandler(status);
+}
+
 // On the source of a get whose source was unregistered: register the source
 // and put it to the destination. The single ack is raised here.
 static void regAndPutHandler(ConverseRdmaMsg *msg) {
@@ -601,7 +649,8 @@ static void regAndPutHandler(ConverseRdmaMsg *msg) {
                        ncpyOpInfo->srcRegMode);
   ncpyOpInfo->isSrcRegistered = 1;
   rdmaIssuePut(ncpyOpInfo,
-               std::min(ncpyOpInfo->srcSize, ncpyOpInfo->destSize));
+               std::min(ncpyOpInfo->srcSize, ncpyOpInfo->destSize),
+               regAndPutDone);
 }
 
 // On the destination of a put whose destination was unregistered: register
@@ -613,7 +662,8 @@ static void regAndGetHandler(ConverseRdmaMsg *msg) {
                        ncpyOpInfo->destRegMode);
   ncpyOpInfo->isDestRegistered = 1;
   rdmaIssueGet(ncpyOpInfo,
-               std::min(ncpyOpInfo->srcSize, ncpyOpInfo->destSize));
+               std::min(ncpyOpInfo->srcSize, ncpyOpInfo->destSize),
+               regAndGetDone);
 }
 
 /* Perform an RDMA Get operation into the local destination address from the
@@ -672,6 +722,15 @@ void CmiIssueRput(NcpyOperationInfo *ncpyOpInfo) {
   }
 }
 
+// Registrations made by CmiSetRdmaBufferInfo and not yet released by
+// CmiDeregisterMem, in this process: a buffer may be registered on one PE and
+// released on another.
+static std::atomic<long> registeredBuffers{0};
+
+long CmiRegisteredBuffers(void) {
+  return registeredBuffers.load(std::memory_order_relaxed);
+}
+
 /* De-register registered memory for pointer */
 void CmiDeregisterMem(const void *ptr, void *info, int pe,
                       unsigned short int mode) {
@@ -680,6 +739,7 @@ void CmiDeregisterMem(const void *ptr, void *info, int pe,
 // #endif
   if (!CmiUseCopyBasedRDMA) {
     comm_backend::deregisterMemory(*(comm_backend::mr_t *)info);
+    registeredBuffers.fetch_sub(1, std::memory_order_relaxed);
   }
 }
 
@@ -731,6 +791,7 @@ void CmiSetRdmaBufferInfo(void *info, const void *ptr, int size,
     // We need to write both the local memory region (mr_t) and the remote
     // memory region (rmr) into the info
     auto mr = comm_backend::registerMemory((void *)ptr, size);
+    registeredBuffers.fetch_add(1, std::memory_order_relaxed);
     static_assert(CMK_NOCOPY_DIRECT_BYTES >= sizeof(mr),
                   "CMK_NOCOPY_DIRECT_BYTES cannot hold an mr_t");
     memcpy(info, &mr, sizeof(mr));

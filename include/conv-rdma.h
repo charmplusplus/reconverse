@@ -85,6 +85,14 @@ void CmiIssueRput(NcpyOperationInfo *ncpyOpInfo);
 void CmiDeregisterMem(const void *ptr, void *info, int pe,
                       unsigned short int mode);
 
+// Zero-copy buffers this process has registered (CmiSetRdmaBufferInfo) and
+// not yet deregistered (CmiDeregisterMem): handles made with CMK_BUFFER_REG
+// or CMK_BUFFER_PREREG, unregistered buffers registered for a transfer, and
+// an owner's registration of its buffer for a peer's transfer. 0 when
+// transfers are copy-based. For tests and diagnostics, e.g. to find
+// registrations a program never releases.
+long CmiRegisteredBuffers(void);
+
 // Ask the PE that owns the other side's buffer to deregister it and invoke its
 // callback: Charm++ calls this from its Direct API acknowledgement handler for
 // the buffer whose deregMode is CMK_BUFFER_DEREG. If ncpyOpInfo->freeMe is
