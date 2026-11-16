@@ -75,17 +75,13 @@ void collectiveInit(void) {
  * second tree. Peers receive it with the user's handler already restored, so
  * they are leaves and do no forwarding.
  *
- * A child node's copy is a node-level message, and it is relayed as soon as it
- * arrives, by the thread that receives it (CmiBcastRelayOnArrival, from
- * CommRemoteHandler for the network and CmiDeliverIpcBlockMsg for the
- * shared-memory pool), the way classic Converse's communication thread
- * delivered a broadcast to every PE of its node. The relay used to be a
- * handler on the child node's rank 0, so a node's PEs got their copies, and
- * its child nodes theirs, only once rank 0 ran its scheduler; a rank 0 that
- * entered CmiNodeBarrier first, while its peers waited for the broadcast,
- * deadlocked them (#261; Charm++'s restart in charm#4018). A node-level copy
- * can also be taken from the shared-memory pool by any PE of the node, where a
- * copy addressed to rank 0 waits for rank 0 to poll.
+ * A child node's copy is a node-level message, so whichever PE of the child
+ * takes it from the node queue (or from the shared-memory pool) relays it, in
+ * CmiBcastHandler, from its scheduler. Any PE may relay: a relay tied to rank 0
+ * deadlocks peers that wait for the broadcast while rank 0 sits in
+ * CmiNodeBarrier (#261). The relay copies the message and sends, so it stays
+ * out of the network's completion callbacks, which run while the polling PE
+ * holds the device.
  */
 
 // Send to the child nodes of my node in the tree rooted at rootNode. sendFn
@@ -143,32 +139,6 @@ static void CmiBcastForwardToNodes(void *msg, int size) {
 static void CmiBcastForward(void *msg, int size) {
   CmiBcastForwardToNodes(msg, size);
   CmiBcastSendToPeers(msg, size);
-}
-
-extern thread_local int Cmi_myrank;
-
-bool CmiBcastRelayOnArrival(void *msg) {
-  CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);
-  // Only a PE has a message pool to copy from and a rank to send as; another
-  // thread leaves the copy in the node queue, where CmiBcastHandler relays it.
-  if (header->handlerId != Cmi_bcastHandler || Cmi_myrank < 0)
-    return false;
-  const int size = header->messageSize;
-  CmiBcastForwardToNodes(msg, size);
-
-  // Every PE of this node gets the message with the user's handler, and with
-  // its own PE number as the destination, as a PE-level message would carry.
-  header->handlerId = header->bcastSwapHandlerId;
-  const int first = CmiNodeFirst(CmiMyNode());
-  for (int r = 1; r < CmiMyNodeSize(); r++) {
-    void *copy = CmiAlloc(size);
-    std::memcpy(copy, msg, size);
-    static_cast<CmiMessageHeader *>(copy)->destPE = first + r;
-    CmiPushPE(r, size, copy);
-  }
-  header->destPE = first;
-  CmiPushPE(0, size, msg);
-  return true;
 }
 
 // One relay step of a node-level broadcast.
@@ -305,9 +275,8 @@ void CmiSyncNodeBroadcastAllAndFree(unsigned int size, void *msg) {
   CmiFree(msg);
 }
 
-/* Handler for broadcast via the spanning tree. A child node's copy is relayed
- * when it arrives (CmiBcastRelayOnArrival); this runs only if the copy was put
- * in the node queue instead, on whichever PE takes it from there. */
+/* Handler for broadcast via the spanning tree: a child node's copy, run by
+ * whichever PE of that node takes it from the node queue. */
 void CmiBcastHandler(void *msg) {
 #if SPANTREE
   CmiMessageHeader *header = static_cast<CmiMessageHeader *>(msg);

@@ -214,8 +214,7 @@ void CmiDeliverIpcBlockMsg(CmiIpcBlock* block) {
   // Charm++ both read this field as a global PE number.
   if (dest == cmi::ipc::nodeDatagram) {
     dest = CmiMessageDestPENode;
-    if (!CmiBcastRelayOnArrival(msg))
-      CmiPushNode(msg);
+    CmiPushNode(msg);
   } else {
     const int rank = (int)dest;
     dest = (CmiUInt4)(CmiNodeFirst(CmiMyNode()) + rank);
