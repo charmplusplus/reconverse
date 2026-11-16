@@ -36,6 +36,11 @@ void collectiveInit(void);
 
 void CmiCallHandler(int handlerId, void *msg);
 void CmiBcastHandler(void *msg);
+// A spanning-tree broadcast's copy for this process, as it arrives from the
+// network or the shared-memory pool: relays it to this process's PEs and to
+// its child processes at once, on the receiving thread. False if msg is not
+// such a copy, or the calling thread is not a PE (collectives.cpp).
+bool CmiBcastRelayOnArrival(void *msg);
 void CmiFanoutHandler(void *msg);
 void CmiNodeBcastHandler(void *msg);
 void CmiExitHandler(void *msg);
