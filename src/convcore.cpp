@@ -225,8 +225,7 @@ void CommRemoteHandler(comm_backend::Status status) {
   CmiMessageHeader *header = (CmiMessageHeader *)status.local_buf;
   int destPE = header->destPE;
   if (destPE == CmiMessageDestPENode) {
-    if (!CmiBcastRelayOnArrival(const_cast<void *>(status.local_buf)))
-      CmiNodeQueue->push(const_cast<void *>(status.local_buf));
+    CmiNodeQueue->push(const_cast<void *>(status.local_buf));
   } else {
     CmiPushPE(CmiRankOf(destPE), status.size, const_cast<void *>(status.local_buf));
   }
