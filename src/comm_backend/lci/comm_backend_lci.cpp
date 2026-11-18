@@ -385,7 +385,7 @@ void CommBackendLCI::issueAm(int rank, const void *local_buf, size_t size, mr_t 
   if (size > m_maxEager) {
     // Rendezvous. Posted now if there is room and no older one is waiting;
     // otherwise it waits in m_pending and the PE goes on, rather than spin
-    // here for a packet only a completed send or a receive can give back.
+    // here for a slot only completed sends can give back.
     PendingAm am{rank, local_buf, size, mr, localComp, remoteComp, user_context};
     if (m_nPending.load(std::memory_order_relaxed) == 0 &&
         postRendezvous(am, !detail::g_in_progress_callback))
@@ -420,11 +420,13 @@ void CommBackendLCI::issueAm(int rank, const void *local_buf, size_t size, mr_t 
   }
 }
 
-// False if the send was not posted (no room under m_rdvMax, no packet, or,
-// without `spin`, any retry), and the caller keeps it. With `spin` a retry
-// that clears by itself (a busy lock, a full send queue) is retried with
-// progress, as issueAm does for other sends; without it this never spins, so
-// it is safe inside a completion callback.
+// False if the send was not posted (no room under m_rdvMax, or, without
+// `spin`, any retry), and the caller keeps it. With `spin` a retry is retried
+// with progress, as issueAm does for other sends: under m_rdvMax the packets
+// the rendezvous sends hold leave enough for the receives, so a missing
+// packet is one held by another thread's share of the pool, and a later
+// attempt finds it. Without `spin` this never spins, so it is safe inside a
+// completion callback.
 bool CommBackendLCI::postRendezvous(const PendingAm &am, bool spin) {
   if (detail::g_rdv_inflight.fetch_add(1, std::memory_order_relaxed) >=
       m_rdvMax) {
@@ -440,9 +442,7 @@ bool CommBackendLCI::postRendezvous(const PendingAm &am, bool spin) {
                  .device(getThreadLocalDevice())
                  .tag(am.remoteComp)
                  .user_context(args)();
-    if (!spin || !status.is_retry() ||
-        status.error.errorcode == lci::errorcode_t::retry_nopacket)
-      break;
+    if (!spin || !status.is_retry()) break;
     progress();
   }
   if (status.is_posted()) return true;
