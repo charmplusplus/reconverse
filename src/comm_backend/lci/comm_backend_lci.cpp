@@ -27,8 +27,12 @@ thread_local ThreadContext g_thread_context;
 // callback fired by progress). Used to break the reentrancy deadlock: if issueAm
 // or issueRget are called from within a callback, they must not spin-retry (which
 // would hold m_progress_locks indefinitely and prevent CQ polling). Instead they
-// push to the LCI backlog queue with allow_retry=false and return immediately.
+// push to the LCI backlog queue with allow_retry=false and return immediately
+// (a rendezvous AM waits in CommBackendLCI::m_pending instead).
 thread_local bool g_in_progress_callback = false;
+
+// Rendezvous AMs posted and not yet completed (CommBackendLCI::m_rdvMax).
+alignas(CMI_CACHE_LINE_SIZE) std::atomic<long> g_rdv_inflight{0};
 } // namespace detail
 
 std::vector<CompHandler> g_handlers;
@@ -36,12 +40,15 @@ std::vector<CompHandler> g_handlers;
 struct localCallbackArgs {
   CompHandler handler;
   void *user_context;
+  bool rdv = false;  // a rendezvous AM, counted in g_rdv_inflight
 };
 
 void localCallback(lci::status_t status) {
   auto args = reinterpret_cast<localCallbackArgs *>(status.get_user_context());
   auto handler = args->handler;
   auto user_context = args->user_context;
+  if (args->rdv)
+    detail::g_rdv_inflight.fetch_sub(1, std::memory_order_relaxed);
   delete args;
   handler({status.get_buffer(), status.get_size(), user_context});
 }
@@ -273,6 +280,19 @@ void CommBackendLCI::init(char **argv) {
   m_remote_comp = lci::alloc_handler(remoteCallback);
   m_rcomp = lci::register_rcomp(m_remote_comp);
   lci::set_allocator(&m_allocator);
+
+  // Rendezvous sends in flight may hold half of the packets the posted
+  // receives do not, so the receives can always be reposted (see issueAm).
+  m_maxEager = lci::get_max_bcopy_size();
+  m_rdvMax = ((long)g_attr.npackets -
+              (long)g_attr.net_max_recvs * num_devices) / 2;
+  int rdvMax = 0;
+  if (CmiGetArgIntDesc(argv, "+lci_max_rdv_sends", &rdvMax,
+                       "rendezvous-size sends a process keeps in flight; the "
+                       "rest wait their turn (default: half the LCI packets "
+                       "that are not preposted receives)"))
+    m_rdvMax = rdvMax;
+  if (m_rdvMax < 1) m_rdvMax = 1;
   g_lci_backend = this;
   barrier();
 }
@@ -291,6 +311,12 @@ void CommBackendLCI::abortAll(int exit_code, const char *msg) {
 }
 
 void CommBackendLCI::exit() {
+  // Sends still waiting for a rendezvous slot after the final barrier are not
+  // delivered; give their buffers back.
+  for (const PendingAm &am : m_pending)
+    am.localComp({am.local_buf, am.size, am.user_context});
+  m_pending.clear();
+  m_nPending.store(0, std::memory_order_relaxed);
   // Drop any still-registered memory regions before tearing the devices down;
   // an open region makes fi_close(domain) fail with FI_EBUSY. This supersedes
   // the reconverse_lci_cache_amd workaround of skipping free_device entirely.
@@ -356,6 +382,19 @@ AmHandler CommBackendLCI::registerAmHandler(CompHandler handler) {
 
 void CommBackendLCI::issueAm(int rank, const void *local_buf, size_t size, mr_t mr,
                               CompHandler localComp, AmHandler remoteComp, void *user_context) {
+  if (size > m_maxEager) {
+    // Rendezvous. Posted now if there is room and no older one is waiting;
+    // otherwise it waits in m_pending and the PE goes on, rather than spin
+    // here for a packet only a completed send or a receive can give back.
+    PendingAm am{rank, local_buf, size, mr, localComp, remoteComp, user_context};
+    if (m_nPending.load(std::memory_order_relaxed) == 0 &&
+        postRendezvous(am, !detail::g_in_progress_callback))
+      return;
+    std::lock_guard<std::mutex> lock(m_pendingMutex);
+    m_pending.push_back(am);
+    m_nPending.fetch_add(1, std::memory_order_relaxed);
+    return;
+  }
   auto args = new localCallbackArgs{localComp, user_context};
   lci::status_t status;
   // When called from inside a completion callback (g_in_progress_callback=true),
@@ -378,6 +417,50 @@ void CommBackendLCI::issueAm(int rank, const void *local_buf, size_t size, mr_t 
   if (status.is_done()) {
     localComp({local_buf, size, user_context});
     delete args;
+  }
+}
+
+// False if the send was not posted (no room under m_rdvMax, no packet, or,
+// without `spin`, any retry), and the caller keeps it. With `spin` a retry
+// that clears by itself (a busy lock, a full send queue) is retried with
+// progress, as issueAm does for other sends; without it this never spins, so
+// it is safe inside a completion callback.
+bool CommBackendLCI::postRendezvous(const PendingAm &am, bool spin) {
+  if (detail::g_rdv_inflight.fetch_add(1, std::memory_order_relaxed) >=
+      m_rdvMax) {
+    detail::g_rdv_inflight.fetch_sub(1, std::memory_order_relaxed);
+    return false;
+  }
+  auto args = new localCallbackArgs{am.localComp, am.user_context, true};
+  lci::status_t status;
+  while (true) {
+    status = lci::post_am_x(am.rank, const_cast<void *>(am.local_buf), am.size,
+                            m_local_comp, m_rcomp)
+                 .mr(getThreadLocalMR(am.mr))
+                 .device(getThreadLocalDevice())
+                 .tag(am.remoteComp)
+                 .user_context(args)();
+    if (!spin || !status.is_retry() ||
+        status.error.errorcode == lci::errorcode_t::retry_nopacket)
+      break;
+    progress();
+  }
+  if (status.is_posted()) return true;
+  delete args;
+  detail::g_rdv_inflight.fetch_sub(1, std::memory_order_relaxed);
+  if (status.is_retry()) return false;
+  am.localComp({am.local_buf, am.size, am.user_context});
+  return true;
+}
+
+// Posts waiting rendezvous sends, oldest first, while there is room. A send
+// leaves m_pending only once posted, so a new one cannot overtake it.
+void CommBackendLCI::postPending() {
+  std::unique_lock<std::mutex> lock(m_pendingMutex, std::try_to_lock);
+  if (!lock.owns_lock()) return;  // being posted, or appended to
+  while (!m_pending.empty() && postRendezvous(m_pending.front(), false)) {
+    m_pending.pop_front();
+    m_nPending.fetch_sub(1, std::memory_order_relaxed);
   }
 }
 
@@ -481,12 +564,17 @@ bool CommBackendLCI::progressDevice(int dev_idx) {
 }
 
 bool CommBackendLCI::progress(void) {
-  if (!detail::g_thread_context.tls_device.is_empty())
-    return progressDevice(detail::g_thread_context.device_idx);
   bool did_progress = false;
-  for (int i = 0; i < (int)m_devices.size(); i++)
-    if (progressDevice(i))
-      did_progress = true;
+  if (!detail::g_thread_context.tls_device.is_empty()) {
+    did_progress = progressDevice(detail::g_thread_context.device_idx);
+  } else {
+    for (int i = 0; i < (int)m_devices.size(); i++)
+      if (progressDevice(i))
+        did_progress = true;
+  }
+  if (m_nPending.load(std::memory_order_relaxed) != 0 &&
+      !detail::g_in_progress_callback)
+    postPending();
   return did_progress;
 }
 

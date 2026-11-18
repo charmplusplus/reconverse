@@ -5,6 +5,7 @@
 #include <atomic>
 #include "comm_backend_internal.h"
 
+#include <deque>
 #include <mutex>
 #include <unordered_set>
 
@@ -95,6 +96,30 @@ private:
   void releaseRegion(mr_t mr);
 
   bool m_remote_free = true;  // off with +nomempool_remote_free
+
+  // An AM larger than m_maxEager goes by LCI's rendezvous protocol, and holds
+  // a packet of the pool receives are posted from until the destination's
+  // ready-to-receive arrives and the data is written. So that such sends can
+  // never take the packets the receives need (issue #257), at most m_rdvMax
+  // are in flight (detail::g_rdv_inflight); the rest wait in m_pending, oldest
+  // first, and progress() posts them as earlier ones complete.
+  struct PendingAm {
+    int rank;
+    const void *local_buf;
+    size_t size;
+    mr_t mr;
+    CompHandler localComp;
+    AmHandler remoteComp;
+    void *user_context;
+  };
+  size_t m_maxEager = 0;
+  long m_rdvMax = 0;
+  std::mutex m_pendingMutex;
+  std::deque<PendingAm> m_pending;
+  // m_pending.size(), read without the lock; drops only once a send is posted
+  alignas(CMI_CACHE_LINE_SIZE) std::atomic<size_t> m_nPending{0};
+  bool postRendezvous(const PendingAm &am, bool spin);
+  void postPending();
 
   lci::device_t getThreadLocalDevice();
   lci::mr_t getThreadLocalMR(mr_t mr);
