@@ -4,6 +4,7 @@
 #include "comm_backend/lci/comm_backend_lci.h"
 #include <cstdlib>
 #include <memory>
+#include <string>
 #include <vector>
 
 CpvDeclare(mempool_type*, mempool);
@@ -241,6 +242,17 @@ void CommBackendLCI::init(char **argv) {
   // Slingshot (cxi): hardware RX matching aborts once NIC list entries run out
   // ("LE resources not recovered"); hybrid falls back to software matching.
   setenv("FI_CXI_RX_MATCH_MODE", "hybrid", 0);
+  // cxi sends a message larger than FI_CXI_RDZV_THRESHOLD (16384 by default)
+  // with a rendezvous of its own, which made an eager LCI message above 16 KiB
+  // 2-3 us slower on Delta (issue #334). An eager LCI message fits in a
+  // packet, so with packets larger than 16 KiB the threshold is raised to the
+  // packet size, unless the environment already sets it. cxi reads it during
+  // lci::global_initialize() (LCI's OFI probe), before LCI's attributes can be
+  // asked for, so the packet size is read here the way LCI reads it.
+  const char *packetSizeEnv = getenv("LCI_ATTR_PACKET_SIZE");
+  int packetSize = packetSizeEnv ? atoi(packetSizeEnv) : LCI_PACKET_SIZE_DEFAULT;
+  if (packetSize > 16384)
+    setenv("FI_CXI_RDZV_THRESHOLD", std::to_string(packetSize).c_str(), 0);
 
   lci::global_initialize();
   auto g_attr = lci::get_g_default_attr();
