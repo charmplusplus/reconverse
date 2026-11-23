@@ -72,6 +72,7 @@ typedef struct State {
 #define BACKEND_POLL_FREQ_DEFAULT 64
 extern int backend_poll_freq;
 extern int thread_queue_max;
+extern bool thread_queue_per_producer;
 extern int node_queue_max; // node messages in a row before local work gets a turn (both schedulers)
 extern int backend_poll_thread; // every backend_poll_thread threads will call progress
 
