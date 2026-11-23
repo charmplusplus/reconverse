@@ -242,19 +242,35 @@ void CommBackendLCI::init(char **argv) {
   // Slingshot (cxi): hardware RX matching aborts once NIC list entries run out
   // ("LE resources not recovered"); hybrid falls back to software matching.
   setenv("FI_CXI_RX_MATCH_MODE", "hybrid", 0);
-  // cxi sends a message larger than FI_CXI_RDZV_THRESHOLD (16384 by default)
-  // with a rendezvous of its own, which made an eager LCI message above 16 KiB
-  // 2-3 us slower on Delta (issue #334). An eager LCI message fits in a
-  // packet, so with packets larger than 16 KiB the threshold is raised to the
-  // packet size, unless the environment already sets it. cxi reads it during
-  // lci::global_initialize() (LCI's OFI probe), before LCI's attributes can be
-  // asked for, so the packet size is read here the way LCI reads it.
+  // cxi sends a message larger than FI_CXI_RDZV_THRESHOLD plus
+  // FI_CXI_RDZV_GET_MIN (18433 bytes by default) with a rendezvous of its own,
+  // which made an eager LCI message above that 2-3 us slower on Delta (issue
+  // #334). An eager LCI message fits in a packet, so with packets larger than
+  // 16 KiB the threshold is raised to the packet size, unless the environment
+  // already sets it. cxi reads it during lci::global_initialize() (LCI's OFI
+  // probe), before LCI's attributes can be asked for, so the packet size is
+  // read here the way LCI reads it.
+  // cxi reads its variables once per process, so neither setting here has an
+  // effect if another library (Cray MPICH's MPI_Init, say) started libfabric
+  // first.
   const char *packetSizeEnv = getenv("LCI_ATTR_PACKET_SIZE");
   int packetSize = packetSizeEnv ? atoi(packetSizeEnv) : LCI_PACKET_SIZE_DEFAULT;
-  if (packetSize > 16384)
-    setenv("FI_CXI_RDZV_THRESHOLD", std::to_string(packetSize).c_str(), 0);
+  const char *rdzvThresholdEnv = getenv("FI_CXI_RDZV_THRESHOLD");
+  std::string lowRdzvThreshold;  // set when the environment's value is below the packet size
+  if (packetSize > 16384) {
+    if (rdzvThresholdEnv == nullptr)
+      setenv("FI_CXI_RDZV_THRESHOLD", std::to_string(packetSize).c_str(), 0);
+    else if (atol(rdzvThresholdEnv) < packetSize)
+      lowRdzvThreshold = rdzvThresholdEnv;
+  }
 
   lci::global_initialize();
+  if (!lowRdzvThreshold.empty() && lci::get_rank_me() == 0)
+    CmiPrintf("Reconverse> Warning: FI_CXI_RDZV_THRESHOLD=%s is below the LCI "
+              "packet size (%d), so eager LCI messages larger than it plus "
+              "FI_CXI_RDZV_GET_MIN use cxi's slower rendezvous (issue #334). "
+              "Unset it to let reconverse raise it to the packet size.\n",
+              lowRdzvThreshold.c_str(), packetSize);
   auto g_attr = lci::get_g_default_attr();
   // On OFI, libfabric caches registrations itself, and its memhooks monitor
   // replaces the munmap/madvise hooks LCI's cache relies on, so that cache
