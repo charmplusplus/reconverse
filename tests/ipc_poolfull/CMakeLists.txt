@@ -6,3 +6,8 @@ add_test(NAME ipc_poolfull COMMAND ${RECONVERSE_TEST_LAUNCHER} -n 2
          $<TARGET_FILE:ipc_poolfull> +pe 2 +ipc ++ipcpoolsize 65536)
 add_test(NAME ipc_poolfull-multi COMMAND ${RECONVERSE_TEST_LAUNCHER} -n 2
          $<TARGET_FILE:ipc_poolfull> +pe 4 +ipc ++ipcpoolsize 65536)
+# The same fill-and-recycle with an xpmem segment.
+if(RECONVERSE_ENABLE_XPMEM)
+  add_test(NAME ipc_poolfull-xpmem COMMAND ${RECONVERSE_TEST_LAUNCHER} -n 2
+           $<TARGET_FILE:ipc_poolfull> +pe 4 +ipcmode xpmem ++ipcpoolsize 65536)
+endif()

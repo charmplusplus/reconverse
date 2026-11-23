@@ -14,3 +14,8 @@ add_test(NAME persistent_single_node COMMAND ${RECONVERSE_TEST_LAUNCHER} -n 1 $<
 # the two processes, which is a different delivery path for every send
 # above: a pool block rather than an active message.
 add_test(NAME persistent-ipc COMMAND ${RECONVERSE_TEST_LAUNCHER} -n 2 $<TARGET_FILE:persistent> +pe 4 +ipc)
+# And over an xpmem pool.
+if(RECONVERSE_ENABLE_XPMEM)
+  add_test(NAME persistent-xpmem COMMAND ${RECONVERSE_TEST_LAUNCHER} -n 2
+           $<TARGET_FILE:persistent> +pe 4 +ipcmode xpmem)
+endif()

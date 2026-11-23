@@ -14,3 +14,8 @@ add_test(NAME ipc_order-noipc COMMAND ${RECONVERSE_TEST_LAUNCHER} -n 2
 # The original scheduler loop drains the pool through a different path.
 add_test(NAME ipc_order-old-scheduler COMMAND ${RECONVERSE_TEST_LAUNCHER} -n 2
          $<TARGET_FILE:ipc_order> +pe 2 +ipc +expect-ipc +old-scheduler)
+# The multi-PE burst over the xpmem pool (never chosen by +ipc alone).
+if(RECONVERSE_ENABLE_XPMEM)
+  add_test(NAME ipc_order-xpmem COMMAND ${RECONVERSE_TEST_LAUNCHER} -n 2
+           $<TARGET_FILE:ipc_order> +pe 8 +ipcmode xpmem +expect-ipc)
+endif()
