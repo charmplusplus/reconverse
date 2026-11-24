@@ -1011,17 +1011,16 @@ void *CmiAlloc(int size) {
     // Set zcMsgType in the converse message header to CMK_REG_NO_ZC_MSG
     CMI_ZC_MSGTYPE((void *)ptr) = CMK_REG_NO_ZC_MSG;
     CmiSetMsgNokeep((void *)ptr, 0);
+    // CmiPushPE reads the mark on every message it routes, including ones
+    // pushed without a send call: a new message starts unmarked.
+    ((CmiMessageHeader *)ptr)->urgent = 0;
   }
 
   REFFIELDSET(ptr, 1);
   SIZEFIELD(ptr) = size;
   //CmiPrintf("Allocated CmiChunkHeader at %p, user ptr = %p\n", res, res + sizeof(CmiChunkHeader));
   // Return pointer to user data (after CmiChunkHeader)
-  {
-    void *cmi_alloc_ret = ptr;
-    if (cmi_alloc_ret) ((CmiMessageHeader *)cmi_alloc_ret)->urgent = 0;
-    return cmi_alloc_ret;
-  }
+  return ptr;
 }
 
 // header ref count methods

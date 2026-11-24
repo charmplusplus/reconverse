@@ -306,7 +306,8 @@ typedef struct Header {
   // Set by CmiSyncSendAndFreeUrgent: the destination PE serves this message
   // from its urgent queue, polled before every other queue. For a protocol's
   // control messages, which otherwise wait behind everything ahead of them in
-  // the PE's FIFO: a scheduler queue N ms deep delays each hop by N ms.
+  // the PE's FIFO: a scheduler queue N ms deep delays each hop by N ms. The
+  // scheduler clears it as it takes the message, so it applies to one send.
   CmiUInt1 urgent;
 } CmiMessageHeader;
 

@@ -55,6 +55,7 @@ void CsdSchedulerOld() {
         tq_streak = 0;
         nq_streak = 0;
         CmiSchedulerReleaseIdle();
+        ((CmiMessageHeader *)*r)->urgent = 0;   // the mark applies to one send
         CmiHandleMessage(*r);
       }
     }
@@ -296,6 +297,7 @@ void CsdSchedulePollOld() {
         tq_streak = 0;
         nq_streak = 0;
         CmiSchedulerReleaseIdle();
+        ((CmiMessageHeader *)*r)->urgent = 0;   // the mark applies to one send
         CmiHandleMessage(*r);
       }
     }
