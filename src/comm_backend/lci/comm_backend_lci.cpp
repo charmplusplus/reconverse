@@ -317,6 +317,19 @@ void CommBackendLCI::exit() {
     am.localComp({am.local_buf, am.size, am.user_context});
   m_pending.clear();
   m_nPending.store(0, std::memory_order_relaxed);
+  // A rendezvous AM's data is written using the registrations of pool blocks
+  // on both ends (the send buffer's, and the receive buffer's through
+  // AllocatorLCI::allocate_with_mr), which deregisterAllMemory releases. So
+  // finish this process's rendezvous sends first, then wait until every
+  // process has: a write completes only once its target has taken it, so
+  // past the barrier none is outstanding anywhere. Without this, a process
+  // that got here first released the pool while a slower one still wrote
+  // into it, and the writer failed ("Network completion failed",
+  // tests/exit_inflight on the OFI tcp provider). This thread has run
+  // exitThread, so progress() and barrier() poll every device.
+  while (detail::g_rdv_inflight.load(std::memory_order_acquire) > 0)
+    progress();
+  barrier();
   // Drop any still-registered memory regions before tearing the devices down;
   // an open region makes fi_close(domain) fail with FI_EBUSY. This supersedes
   // the reconverse_lci_cache_amd workaround of skipping free_device entirely.
