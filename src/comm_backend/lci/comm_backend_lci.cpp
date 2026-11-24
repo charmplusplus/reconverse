@@ -710,6 +710,34 @@ lci::mr_t CommBackendLCI::getDeviceMR(mr_t mr, int device_idx) {
   return lci::mr_t(impl);
 }
 
+// LCI registers on the fly, and deregisters after delivery, every rendezvous
+// AM receive buffer it gets without a registration. With many large AMs in
+// flight those registrations ran the NIC out of them: cxi fi_mr_regattr "No
+// space left on device" at 2 processes x 64 PEs (uiuc-hpc/lci#225). CmiAlloc
+// takes the buffer from the polling thread's message pool, whose blocks
+// alloc_mempool_block registered on every device, so LCI gets that instead.
+void *AllocatorLCI::allocate_with_mr(size_t size, lci::device_t device,
+                                     lci::mr_t *mr) {
+  void *msg = CmiAlloc(size);
+  *mr = g_lci_backend ? g_lci_backend->getMRForDevice(MRFIELD(msg), device)
+                      : lci::mr_t();
+  return msg;
+}
+
+// A buffer from outside the pool (BIG_MSG and up) is registered here on that
+// one device, and deregistered when it is freed. Empty, so LCI registers the
+// buffer itself, for a buffer with no region, a device that is not ours, or
+// once exit() has released the regions: free_device still drains completions,
+// and the pool blocks' handles are stale by then.
+lci::mr_t CommBackendLCI::getMRForDevice(mr_t mr, lci::device_t device) {
+  if (mr == MR_NULL || g_pool_mrs_released)
+    return lci::mr_t();
+  for (int i = 0; i < (int)m_devices.size(); i++)
+    if (m_devices[i] == device)
+      return getDeviceMR(mr, i);
+  return lci::mr_t();
+}
+
 // The device a remote buffer's owner named. Every process must run with the
 // same +lci_ndevices; checked in every build, since an index past the end
 // would post on a device that does not exist.
