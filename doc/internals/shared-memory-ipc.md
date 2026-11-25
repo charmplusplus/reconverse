@@ -180,7 +180,14 @@ processes, and at least 8 MiB.
 | 8 × 16 | 112 | 56 MiB |
 
 Both mechanisms back a segment with pages that are allocated when first
-written, so space no sender reaches costs address space, not memory. Every
+written, so space no sender reaches costs address space, not memory. They
+differ in where those pages go. A POSIX shm page goes to the NUMA domain of
+the process that first writes it, which for a block is its sender. An xpmem
+segment is its owner's private memory, and every page of it lands on the
+owner's domain, even one a peer touches first through its attachment
+(`/proc/<pid>/numa_maps` on Frontier shows both). So with xpmem every send to a
+process on another domain writes remote memory, which is why `auto` picks
+POSIX shm (README, "Mechanisms"). Every
 process on a host computes the same size, which matters because any of them
 may create and size a peer's segment (`sizeSegmentForHost_`, called from
 `CmiMakeIpcManager` once the topology is known).

@@ -10,10 +10,12 @@
 //
 // Whether that works at run time depends on the xpmem kernel module being
 // loaded, which the library cannot tell us before /dev/xpmem is opened. See
-// ipcXpmemUsable_() -- cmishmem.cpp falls back to POSIX shm when it says no.
+// ipcXpmemUsable_() -- +ipcmode xpmem stops the run when it says no. auto
+// never picks this backend (see chooseIpcMode_ in cmishmem.cpp).
 #include <cerrno>
 #include <cstring>
 #include <fcntl.h>
+#include <sys/mman.h>
 #include <unistd.h>
 
 #include <map>
@@ -60,6 +62,29 @@ static bool ipcXpmemUsable_(void) {
   return true;
 }
 
+// This process's segment: private memory of its own, which peers reach
+// through xpmem. It comes from mmap rather than operator new for two reasons.
+// ipc_shared_ keeps each list head on its own cache line (alignas(64)), and
+// operator new promises only 16-byte alignment -- glibc hands back a block
+// this large 16 bytes past a page boundary, or, under +glibc_tuned_malloc,
+// from the heap at any multiple of 16. And a fresh anonymous mapping is
+// zero-filled, as a POSIX shm segment is, so no field the pool forgets to
+// initialize can differ between the two backends.
+//
+// Every page is the owner's memory, so it lands on the owner's NUMA domain
+// whichever peer writes it first (see chooseIpcMode_ for what that costs).
+static ipc_shared_* makeXpmemSegment_(void) {
+  const auto size = sizeof(ipc_shared_) + CpvAccess(kSegmentSize);
+  void* mem = mmap(nullptr, size, PROT_READ | PROT_WRITE,
+                   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  CmiEnforceMsg(mem != MAP_FAILED,
+                "could not map a %zu-byte xpmem pool segment: %s", size,
+                strerror(errno));
+  auto* shared = (ipc_shared_*)mem;
+  initIpcShared_(shared);
+  return shared;
+}
+
 // NOTE ( we should eventually detach xpmem segments at close )
 //      ( it's not urgently needed since xpmem does it for us )
 struct ipcManagerXpmem_ : public CmiIpcManager {
@@ -72,7 +97,8 @@ struct ipcManagerXpmem_ : public CmiIpcManager {
   // create our local shared data
   ipcManagerXpmem_(std::size_t key) : CmiIpcManager(key) {
     this->span = sizeof(ipc_shared_) + CpvAccess(kSegmentSize);
-    this->shared[this->mine].store(makeIpcShared_(), std::memory_order_release);
+    this->shared[this->mine].store(makeXpmemSegment_(),
+                                   std::memory_order_release);
   }
 
   void put_segment(int proc, const xpmem_segid_t& segid) {

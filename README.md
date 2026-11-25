@@ -37,9 +37,10 @@ Some general options include:
 
 * **`RECONVERSE_ENABLE_XPMEM`** (`OFF` by default)
   Builds the XPMEM backend for shared-memory IPC in addition to the POSIX
-  shared memory one, so that `+ipcmode xpmem` (and `+ipcmode auto` on a host
-  with the kernel module loaded) can use it. Requires an XPMEM installation;
+  shared memory one, so that `+ipcmode xpmem` can use it (`auto` never picks
+  it; see [Mechanisms](#mechanisms)). Requires an XPMEM installation;
   point CMake at it with `-DXPMEM_ROOT=<prefix>` if it is not in `/opt/xpmem`.
+  The `-xpmem` ctest entries it adds need `/dev/xpmem` where the tests run.
 
 * **`RECONVERSE_USE_JEMALLOC`** (`OFF` by default)
   Links jemalloc's `libjemalloc_pic.a` into libreconverse (whole-archive), so
@@ -116,7 +117,7 @@ set `LCT_PMI_BACKEND=local`.
 - **`+node_queue_max <num>`**: the default scheduler runs node-level messages (the node queue, and node priority queue messages whose priority is at least as high as the PE's own next message) ahead of the PE's own queued work, and `+old-scheduler` runs the node queue ahead of it and takes the node priority queue whenever its lock is free; after this many node-level messages in a row, one of the PE's own messages runs if there is one, so a stream of node messages cannot starve it (default 16).
 - **`+backend <lci|lcw>`**: select the communication backend at runtime. If not specified, Reconverse will use the first available backend in the order of LCI, LCW.
 - **`+ipc`** / **`+noipc`**: send messages between processes that share a host through shared memory instead of the communication backend. Off by default; see [Shared-memory IPC](#shared-memory-ipc-ipc).
-- **`+ipcmode <auto|shm|xpmem>`**: pick the mechanism backing the shared-memory pool. Implies `+ipc`.
+- **`+ipcmode <auto|shm|xpmem>`**: pick the mechanism backing the shared-memory pool. Implies `+ipc`. `auto`, the default, is `shm`.
 - **`++ipcpoolsize <bytes>`**: size of each process's shared-memory pool. By default, 512 KiB for each PE of the host's other processes, and at least 8 MiB (see [Memory use](doc/internals/shared-memory-ipc.md#memory-use)).
 - **`++ipccutoff <bytes>`**: largest message the pool will carry. Messages above it go over the communication backend. Defaults to 32 KiB, or to a bin below `poolsize / 25` when that is smaller. At most 1 MiB; a larger value is capped there, with a notice.
 - **`+randomized_msgq`**: run messages in a uniformly random order, for shaking out message-order races. See [Randomized message order](#randomized-message-order-randomized_msgq). Cannot be combined with `+old-scheduler`.
@@ -180,13 +181,19 @@ and `CmiIpcPoolFullSends` counts them; `++ipcpoolsize` raises the size. See
 * **`shm`** — POSIX shared memory (`shm_open`/`mmap`). Needs nothing beyond a
   working `/dev/shm`, so it is the fallback everywhere.
 * **`xpmem`** — [XPMEM](https://github.com/hpc/xpmem), which maps one process's
-  ordinary heap into another's, avoiding the shm file entirely. Must be built
+  private memory into another's, avoiding the shm file entirely. Must be built
   in with `-DRECONVERSE_ENABLE_XPMEM=ON` (point CMake at a non-standard
   install with `-DXPMEM_ROOT=<prefix>`), and needs the `xpmem` kernel module
-  loaded at run time.
-* **`auto`** (the default) — xpmem if it was built in *and* `/dev/xpmem` is
-  present, otherwise POSIX shared memory. Asking for `+ipcmode xpmem`
-  explicitly on a host without it is an error rather than a silent fallback.
+  loaded at run time. Asking for it on a host without `/dev/xpmem` is an
+  error rather than a silent fallback.
+* **`auto`** (the default) — `shm`, even where xpmem is built in and
+  available. On Frontier xpmem was never faster than `shm`, and with the two
+  processes on different NUMA domains it was 1.3x slower at 2 KiB and
+  1.5-1.7x slower from 8 KiB up (see the Frontier table below). Both copy a message once, but they put the pages
+  in different places. A POSIX shm page goes to the NUMA domain of the process
+  that first writes it, and for a block that is the sender, so the sender's
+  copy stays local. Every page of an xpmem segment goes to its owner's domain,
+  the receiver, so every send writes to memory on another domain.
 
 ### What it buys
 
@@ -225,6 +232,37 @@ crossover is somewhere between 32 and 128 KiB here, and elsewhere on another
 machine or backend, so a program that moves a lot of 64-128 KiB messages
 between processes on a host may do better with `++ipccutoff 131072`. Measure
 before raising it.
+
+The same pingpong on one OLCF Frontier node (AMD EPYC 7A53, four NUMA
+domains of 16 cores, eight cores to an L3), LCI over Slingshot-11
+(CXI) as the backend, `++ipccutoff 1048576` so that the pool carries every
+size, one-way microseconds, median of three runs of 10,000 round trips. The
+backend's time does not depend on where the two processes sit.
+
+| message | backend | `shm`, same L3 | `shm`, same NUMA domain | `shm`, other NUMA domain | `xpmem`, other NUMA domain |
+| ------: | ------: | -----: | -----: | -----: | -----: |
+|     8 B |    2.63 |   0.39 |   0.72 |   0.78 |   0.77 |
+|   512 B |    3.34 |   0.42 |   0.74 |   0.86 |   0.86 |
+|   2 KiB |    3.71 |   0.46 |   1.02 |   1.11 |   1.42 |
+|   8 KiB |   14.41 |   0.83 |   2.02 |   2.22 |   3.29 |
+|  32 KiB |   16.40 |   2.07 |   5.11 |   6.02 |   9.34 |
+| 128 KiB |   27.67 |   6.61 |  17.81 |  21.26 |  31.29 |
+| 256 KiB |   43.36 |  12.57 |  35.23 |  39.94 |  66.23 |
+| 512 KiB |   75.15 |  18.17 |  68.89 |  82.35 | 132.20 |
+
+(Cores 1 and 2, 1 and 9, and 1 and 57.) `xpmem` was within 5% of `shm` at
+every size in the first two placements, so only its NUMA-crossing column is
+shown. The same-L3 column is a best case: the pingpong reuses one block per
+size, which stays in the shared cache.
+
+With `shm` the pool beats the backend at every size up to 256 KiB wherever
+the two processes sit. Across NUMA domains the crossover lies between 256 and
+512 KiB, and within one domain it lies above 512 KiB. That is well past
+Delta's, so on Frontier the 32 KiB default sends messages above 32 KiB and up
+to 256 KiB over the backend although the pool would be 1.1x (256 KiB, other
+NUMA domain) to 6x (64 KiB, same L3) faster, and `++ipccutoff 262144` is
+worth measuring for a program that sends many of them. The default stays at 32 KiB because it
+has to be safe on Delta, where the pool already loses at 128 KiB.
 
 ### Querying it from a program
 

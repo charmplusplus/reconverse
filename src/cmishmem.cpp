@@ -407,11 +407,20 @@ static bool ipcXpmemAvailable_(void) {
 }
 
 // Picks the backend for this run. Every process on a host sees the same
-// answer, because the only run-time input is whether that host's kernel
-// exposes xpmem.
+// answer: auto has no run-time input, and an explicit xpmem stops the run on
+// any host whose kernel does not expose it.
+//
+// auto is POSIX shared memory even where xpmem is available. Both carry a
+// message with the same single memcpy, but they put the segment's pages on
+// different NUMA domains: a POSIX shm page belongs to whichever process
+// writes it first, which for a block is its sender, while an xpmem segment
+// is its owner's private memory and every page lands on the owner's domain.
+// With the two processes on different NUMA domains of a Frontier node, xpmem
+// was 1.3x slower than POSIX shm at 2 KiB and 1.5-1.7x from 8 KiB up, and no
+// faster anywhere else (README, "What it buys"; issue #263).
 static int chooseIpcMode_(const char* requested) {
   if (requested == nullptr || strcmp(requested, "auto") == 0) {
-    return ipcXpmemAvailable_() ? CMI_IPC_MODE_XPMEM : CMI_IPC_MODE_POSIX_SHM;
+    return CMI_IPC_MODE_POSIX_SHM;
   }
   if (strcmp(requested, "off") == 0 || strcmp(requested, "none") == 0) {
     return CMI_IPC_MODE_OFF;
