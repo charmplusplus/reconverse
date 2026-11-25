@@ -99,6 +99,15 @@ void issueRput(int rank, const void *local_buf, size_t size, mr_t local_mr,
  */
 bool isPutSignalCapable();
 /**
+ * @brief Whether a put with signal is one network operation (a write with
+ * immediate data), rather than the write followed, once it has completed,
+ * by a message carrying the signal (LCI's emulation where the provider has
+ * no write with immediate data, or +lci_put_signal_emulate). An emulated
+ * one costs about a round trip more, so a small put may be cheaper as one
+ * message with the data and the signal. False when !isPutSignalCapable().
+ */
+bool isPutSignalNative();
+/**
  * @brief Add a kind of put signal, raising handler(ctx, ...) for puts of this
  * kind to any of the nranks local ranks of this process; returns the kind's
  * number, 0 for the first. Collective: every process adds the same kinds in

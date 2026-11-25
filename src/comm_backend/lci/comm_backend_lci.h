@@ -79,6 +79,9 @@ public:
                  uintptr_t remote_disp, void *rmr,
                  CompHandler localComp, void *user_context) override;
   bool isPutSignalCapable() override { return m_put_signal_capable; }
+  bool isPutSignalNative() override {
+    return m_put_signal_capable && m_put_signal_native && !m_put_signal_emulate;
+  }
   int registerPutSignalKind(PutSignalHandler handler, void *ctx,
                             int nranks) override;
   void issueRputSignal(int rank, const void *local_buf, size_t size,

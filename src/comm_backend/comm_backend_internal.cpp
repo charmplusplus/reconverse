@@ -132,6 +132,10 @@ bool isPutSignalCapable() {
   return gCommBackend != nullptr && gCommBackend->isPutSignalCapable();
 }
 
+bool isPutSignalNative() {
+  return isPutSignalCapable() && gCommBackend->isPutSignalNative();
+}
+
 int registerPutSignalKind(PutSignalHandler handler, void *ctx, int nranks) {
   if (!isPutSignalCapable()) {
     return -1;
