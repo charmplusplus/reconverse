@@ -345,6 +345,25 @@ void CommBackendLCI::exit() {
     am.localComp({am.local_buf, am.size, am.user_context});
   m_pending.clear();
   m_nPending.store(0, std::memory_order_relaxed);
+  // A rendezvous AM's data is written using the registrations of pool blocks
+  // on both ends (the send buffer's, and the receive buffer's through
+  // AllocatorLCI::allocate_with_mr), which deregisterAllMemory releases. So
+  // finish this process's rendezvous sends first, then wait until every
+  // process has: a write completes only once its target has taken it, so
+  // past the barrier none is outstanding anywhere. Without this, a process
+  // that got here first released the pool while a slower one still wrote
+  // into it, and the writer failed ("Network completion failed",
+  // tests/exit_inflight on the OFI tcp provider). This thread has run
+  // exitThread, so progress() and barrier() poll every device.
+  // The barrier makes exit() collective, but adds no new condition: its only
+  // caller is CmiNodeTeardown on rank 0, reached from ConverseExit or
+  // ConverseInteropFinalize, and both come after ConverseExit's barrier,
+  // which every process must already reach. A process that dies between
+  // that barrier and this one leaves the others waiting here, unless the
+  // launcher ends them when one process dies.
+  while (detail::g_rdv_inflight.load(std::memory_order_acquire) > 0)
+    progress();
+  barrier();
   // Drop any still-registered memory regions before tearing the devices down;
   // an open region makes fi_close(domain) fail with FI_EBUSY. This supersedes
   // the reconverse_lci_cache_amd workaround of skipping free_device entirely.
@@ -736,6 +755,36 @@ lci::mr_t CommBackendLCI::getDeviceMR(mr_t mr, int device_idx) {
     }
   }
   return lci::mr_t(impl);
+}
+
+// LCI registers on the fly, and deregisters after delivery, every rendezvous
+// AM receive buffer it gets without a registration. With many large AMs in
+// flight those registrations ran the NIC out of them: cxi fi_mr_regattr "No
+// space left on device" at 2 processes x 64 PEs (uiuc-hpc/lci#225). CmiAlloc
+// takes the buffer from the polling thread's message pool, whose blocks
+// alloc_mempool_block registered on every device, so LCI gets that instead.
+#if RECONVERSE_LCI_ALLOCATE_WITH_MR
+void *AllocatorLCI::allocate_with_mr(size_t size, lci::device_t device,
+                                     lci::mr_t *mr) {
+  void *msg = CmiAlloc(size);
+  *mr = g_lci_backend ? g_lci_backend->getMRForDevice(MRFIELD(msg), device)
+                      : lci::mr_t();
+  return msg;
+}
+#endif
+
+// A buffer from outside the pool (BIG_MSG and up) is registered here on that
+// one device, and deregistered when it is freed. Empty, so LCI registers the
+// buffer itself, for a buffer with no region, a device that is not ours, or
+// once exit() has released the regions: free_device still drains completions,
+// and the pool blocks' handles are stale by then.
+lci::mr_t CommBackendLCI::getMRForDevice(mr_t mr, lci::device_t device) {
+  if (mr == MR_NULL || g_pool_mrs_released)
+    return lci::mr_t();
+  for (int i = 0; i < (int)m_devices.size(); i++)
+    if (m_devices[i] == device)
+      return getDeviceMR(mr, i);
+  return lci::mr_t();
 }
 
 // The device a remote buffer's owner named. Every process must run with the
