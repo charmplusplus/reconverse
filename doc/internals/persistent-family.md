@@ -248,11 +248,30 @@ completes once
 
 Contributions land at poll time, on threads that know nothing of the
 destroy, so a destroy that waits only for them looks again on a timer
-(`CcdCallFnAfter`, 50 us). The landed counts are exact for a counter paired
-with the one region being destroyed. A counter shared with another region in
-use, or with a counter-only target, also counts their contributions, which
-can make up for a put of this region still in flight; that case is open (a
-TODO in `tryCompleteRegion`).
+(`CcdCallFnAfter`, 50 us).
+
+The landed counts are exact for a counter paired with the one region being
+destroyed: every contribution to it came through that region, and its destroy
+may be called at any time after the application stops putting. A counter
+that also serves another region still in use, or a target with no region,
+counts their contributions too, which can make up for a put of this region
+still in flight. For that case the rule is the application's (design 10.2):
+destroy the region only after the counter has fired the last round that a
+put into the region counted toward. That firing means every contribution of
+the round, this region's among them, has landed.
+
+For example, a stencil block receiving 6 ghost faces from 6 neighbors, with
+one counter of N = 6:
+
+- if the faces are pieces of one allocation, that is one region, which the
+  rule does not concern;
+- if they are 6 separately allocated buffers, that is 6 regions sharing the
+  counter. When one neighbor changes, the owner destroys that face's region
+  in the code that runs after the step's 6 faces have arrived (the counter's
+  action, or later), not right after sending its own faces: until the
+  counter fires, the other 5 faces' contributions can carry the landed count
+  past what the old neighbor reported, the destroy completes, and the old
+  neighbor's last face can land in memory the application has freed.
 
 Completion frees the slot or index (with a new generation), deregisters the
 region, frees runtime-allocated memory, and queues a message that runs

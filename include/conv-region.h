@@ -146,7 +146,10 @@ int CmiRegionAddPiece(CmiRegion r, size_t offset, size_t bytes,
 size_t CmiRegionPieceLength(CmiRegion r, int piece);
 /* Completes once every attached process has detached; then done(arg) runs on
    this PE, and memory from CmiRegionAlloc is freed. Memory given to
-   CmiRegionCreate may be freed once done has run. done may be NULL. */
+   CmiRegionCreate may be freed once done has run. done may be NULL.
+   If the region's counter also serves another region still in use, or a
+   target with no region, call this only after the counter has fired the last
+   round that a put into this region counted toward (design 10.2). */
 void CmiRegionDestroy(CmiRegion r, int flags, CmiDoneFn done, void *arg);
 
 /* Counters (owner PE) */

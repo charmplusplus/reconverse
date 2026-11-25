@@ -330,19 +330,16 @@ void completeRegion(CmiRegionRec *r) {
 }
 
 // The region's puts have landed (design 10.2): those without a counter by
-// the region's own count, those with one by their counters'. This is exact
-// for a counter paired with this region alone: every contribution to it then
-// came through this region's registrations, whose notices are all in.
+// the region's own count, those with one by their counters'.
 void tryCompleteRegion(CmiRegionRec *r) {
   if (r->state != ObjState::Destroying || !r->balance.empty()) return;
   std::atomic<uint64_t> *landed = regionLandedOf(peState()->rank, r->slot);
   bool waiting = landed->load(std::memory_order_acquire) < r->expectedUncounted;
   for (CmiCounterRec *c : r->pairedCounters) {
-    // TODO(shared counter, an open design point): when the counter is also
-    // paired with another region still in use, or used by a counter-only
-    // target, their landed contributions can make up for a put of this
-    // region still in flight, and the region can complete while that put
-    // lands. The wait below is then a lower bound, not the accounting.
+    // Exact for a counter paired with this region alone. For a counter
+    // shared with another region in use or a target with no region, others'
+    // contributions can make up for a put of this region still in flight;
+    // correctness rests on the rule in CmiRegionDestroy's documentation.
     if (landedOf(c) < (int64_t)c->expected) waiting = true;
   }
   if (waiting) {
