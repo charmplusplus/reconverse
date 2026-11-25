@@ -327,6 +327,12 @@ void CommBackendLCI::exit() {
   // into it, and the writer failed ("Network completion failed",
   // tests/exit_inflight on the OFI tcp provider). This thread has run
   // exitThread, so progress() and barrier() poll every device.
+  // The barrier makes exit() collective, but adds no new condition: its only
+  // caller is CmiNodeTeardown on rank 0, reached from ConverseExit or
+  // ConverseInteropFinalize, and both come after ConverseExit's barrier,
+  // which every process must already reach. A process that dies between
+  // that barrier and this one leaves the others waiting here, unless the
+  // launcher ends them when one process dies.
   while (detail::g_rdv_inflight.load(std::memory_order_acquire) > 0)
     progress();
   barrier();
@@ -729,6 +735,7 @@ lci::mr_t CommBackendLCI::getDeviceMR(mr_t mr, int device_idx) {
 // space left on device" at 2 processes x 64 PEs (uiuc-hpc/lci#225). CmiAlloc
 // takes the buffer from the polling thread's message pool, whose blocks
 // alloc_mempool_block registered on every device, so LCI gets that instead.
+#if RECONVERSE_LCI_ALLOCATE_WITH_MR
 void *AllocatorLCI::allocate_with_mr(size_t size, lci::device_t device,
                                      lci::mr_t *mr) {
   void *msg = CmiAlloc(size);
@@ -736,6 +743,7 @@ void *AllocatorLCI::allocate_with_mr(size_t size, lci::device_t device,
                       : lci::mr_t();
   return msg;
 }
+#endif
 
 // A buffer from outside the pool (BIG_MSG and up) is registered here on that
 // one device, and deregistered when it is freed. Empty, so LCI registers the

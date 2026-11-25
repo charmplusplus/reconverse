@@ -41,7 +41,7 @@ option(RECONVERSE_AUTOFETCH_LCI2
         "whether to autofetch LCIv2 if LCI2 cannot be found" OFF)
 set(RECONVERSE_AUTOFETCH_LCI2_TAG
     "6f0cda1283f46df52262dc1fbf1cf7878c676d39"
-    CACHE STRING "The tag to fetch for LCIv2") # uiuc-hpc/lci master, 2026-11-24: a rendezvous transfer holds no packet while in flight (#227); the allocator can supply the mr for a rendezvous AM's receive buffer (#226), which CommBackendLCI's allocator does, so this is the oldest LCI it builds with
+    CACHE STRING "The tag to fetch for LCIv2") # uiuc-hpc/lci master, 2026-11-24: a rendezvous transfer holds no packet while in flight (#227); the allocator can supply the mr for a rendezvous AM's receive buffer (#226), which CommBackendLCI's allocator uses (an older installed LCI builds without it; see src/comm_backend/lci/CMakeLists.txt)
 
 option(RECONVERSE_TRY_ENABLE_COMM_LCW "whether to enable the LCW backend" ON)
 option(RECONVERSE_AUTOFETCH_LCW

@@ -16,10 +16,13 @@ namespace lci_impl {
 struct AllocatorLCI : lci::allocator_base_t {
   void *allocate(size_t size) override { return CmiAlloc(size); }
 
+#if RECONVERSE_LCI_ALLOCATE_WITH_MR
   // A rendezvous AM's receive buffer, with the registration its pool block
-  // already has on `device`
+  // already has on `device`. Left out for an LCI without the hook (see
+  // CMakeLists.txt in this directory); LCI then registers each buffer itself.
   void *allocate_with_mr(size_t size, lci::device_t device,
                          lci::mr_t *mr) override;
+#endif
 
   void deallocate(void *ptr) override { CmiFree(ptr); }
 };
