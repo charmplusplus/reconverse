@@ -121,6 +121,8 @@ set `LCT_PMI_BACKEND=local`.
 - **`++ipcpoolsize <bytes>`**: size of each process's shared-memory pool. By default, 512 KiB for each PE of the host's other processes, and at least 8 MiB (see [Memory use](doc/internals/shared-memory-ipc.md#memory-use)).
 - **`++ipccutoff <bytes>`**: largest message the pool will carry. Messages above it go over the communication backend. Defaults to 32 KiB, or to a bin below `poolsize / 25` when that is smaller. At most 1 MiB; a larger value is capped there, with a notice.
 - **`+counter_table <num>`**: the most counters (`CmiCounterCreate`) a PE may have at once; at most and by default 65536. See [Regions and counters](#regions-and-counters-conv-regionh).
+- **`+put_message_max_bytes <num>`**: a `CmiPut` to another process of at most this many bytes travels as one message carrying the data and the signal, a larger one as a put with signal. Default 0 where the put with signal is one network operation (InfiniBand, cxi with native `fi_writedata`), 64 where LCI emulates it with a write and a message (cxi otherwise), where a small put is quicker as one message.
+- **`+region_verbose`**: say how a `CmiPut` to another process travels, the first time each way is used.
 - **`+randomized_msgq`**: run messages in a uniformly random order, for shaking out message-order races. See [Randomized message order](#randomized-message-order-randomized_msgq). Cannot be combined with `+old-scheduler`.
 - **`+randomized_seed <N>`**: base seed for `+randomized_msgq`. Defaults to a value taken from the wall clock; the startup banner prints the seed in use.
 - **`+glibc_tuned_malloc`**: on glibc systems, raise glibc's malloc thresholds at startup (`mallopt`: mmap threshold 32 MB, trim threshold 1 GB, top pad 256 MB) and print `Reconverse> glibc malloc (+glibc_tuned_malloc): ...`. Off by default; accepted and ignored on other C libraries. See [glibc malloc tuning](#glibc-malloc-tuning-glibc_tuned_malloc).
@@ -347,9 +349,11 @@ reused. The owner must be ready for each round's data: an origin puts only
 when the program's logic says the owner no longer needs the piece's previous
 contents.
 
-Implemented so far: contiguous host memory, with origins on the owner's PE or
-on other PEs of its process. The header documents each call; the design is
-in [doc/internals/persistent-family.md](doc/internals/persistent-family.md).
+Implemented so far: contiguous host memory, with origins on the owner's PE, on
+other PEs of its process, and in other processes, which are reached through
+the network (a put with signal, or a message where the network has none) even
+on the same host. The header documents each call; the design is in
+[doc/internals/persistent-family.md](doc/internals/persistent-family.md).
 
 The CMake option **`RECONVERSE_ERROR_CHECKING`** (`AUTO`, the default, is on
 in builds where `CMK_OPTIMIZE` is 0, decided again at every configure; `ON` or

@@ -11,8 +11,8 @@
 
   * Contiguous host memory only: layouts (strided pieces), device memory,
     streams and variable-size pieces are refused.
-  * Same PE and other PEs of the same process. Targets of another process are
-    refused at attach.
+  * Origins on the owner's PE, on other PEs of its process, and in other
+    processes (through the network, also on the same host).
 
   The owner's calls (create, add a piece, make a target, re-arm, destroy) run
   on the owner PE; an origin's calls run on any PE. Readiness is the
@@ -125,7 +125,7 @@ typedef struct CmiTarget {
   uint64_t pieceAddr;  /* the owner's address of the piece's first byte */
   uint64_t pieceDisp;  /* the same, as an offset from the region's base */
   uint64_t pieceBytes; /* the piece's capacity */
-  uint8_t rkey[CMI_TARGET_RKEY_BYTES];       /* remote key; zero for now */
+  uint8_t rkey[CMI_TARGET_RKEY_BYTES];       /* the region's remote key */
   uint8_t layout[CMI_TARGET_LAYOUT_BYTES];   /* reserved for strided pieces */
 } CmiTarget;
 /* The size is part of the interface: targets travel between processes. */
