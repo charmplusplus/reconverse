@@ -276,6 +276,23 @@ if(RECONVERSE_ROOT_PROJECT)
   target_compile_definitions(reconverse PUBLIC CMK_OPTIMIZE=${CMK_OPTIMIZE})
 endif()
 
+# The checks of regions and counters that cost something on every
+# contribution (include/conv-region.h). On by default where CMK_OPTIMIZE is 0:
+# a standalone Debug build, or a Charm++ build without --with-production.
+if(CMK_OPTIMIZE)
+  set(_reconverse_error_checking_default OFF)
+else()
+  set(_reconverse_error_checking_default ON)
+endif()
+option(RECONVERSE_ERROR_CHECKING
+       "check the use of regions and counters (readiness, rounds)"
+       ${_reconverse_error_checking_default})
+if(RECONVERSE_ERROR_CHECKING)
+  target_compile_definitions(reconverse PRIVATE CMI_REGION_CHECKS=1)
+else()
+  target_compile_definitions(reconverse PRIVATE CMI_REGION_CHECKS=0)
+endif()
+
 if(RECONVERSE_ENABLE_CPU_AFFINITY)
   target_link_libraries(reconverse PUBLIC HWLOC::HWLOC)
 endif()

@@ -220,4 +220,9 @@ CmiBroadcastRoot CmiGetBcastRoot(void *msg);
 // helpers for RDMA
 void RDMAInit(char **argv);
 
+// Regions and counters (conv-region.cpp): the node part in ConverseInit
+// before the PE threads start, the PE part on each PE before the user's code.
+void CmiRegionNodeInit(char **argv);
+void CmiRegionPeInit(void);
+
 #endif

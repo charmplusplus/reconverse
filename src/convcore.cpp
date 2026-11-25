@@ -263,6 +263,8 @@ void converseRunPe(int rank, int everReturn) {
 
   CldModuleInit(CmiMyArgv);
   CfutureModuleInit();
+  // registers handlers, so at the same place on every PE of every process
+  CmiRegionPeInit();
 
   Cmi_exitHandler = CmiRegisterHandler(CmiExitHandler);
   collectiveInit();
@@ -752,6 +754,8 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
   Cmi_nodestart = Cmi_mynode * Cmi_mynodesize;
   // register am handlers
   g_amHandler = comm_backend::registerAmHandler(CommRemoteHandler);
+  // regions and counters: the counter table and the attachment table
+  CmiRegionNodeInit(argv);
 
 #ifdef RECONVERSE_ENABLE_CPU_AFFINITY
   CmiInitHwlocTopology();
