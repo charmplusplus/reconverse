@@ -29,7 +29,7 @@ endfunction()
 
 region_counter_abort_test(rearm_early "re-armed before the round's action started")
 region_counter_abort_test(stale "destroyed")
-if(RECONVERSE_ERROR_CHECKING)
+if(RECONVERSE_REGION_CHECKS)
   # an early contribution is an error where the checks are on (design 4.2)
   region_counter_abort_test(early
     "a contribution arrived after the round fired and before the owner re-armed it")

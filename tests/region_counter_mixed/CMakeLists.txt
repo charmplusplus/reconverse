@@ -82,7 +82,7 @@ if(NOT WIN32)
   # the origin's process sees it in an error-checking build, the owner's in
   # any
   region_counter_early_test(stale_remote "destroyed")
-  if(RECONVERSE_ERROR_CHECKING)
+  if(RECONVERSE_REGION_CHECKS)
     # a remote origin's second put before the owner re-armed
     region_counter_early_test(count_remote
       "a contribution arrived after the round fired and before the owner re-armed it")

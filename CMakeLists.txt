@@ -277,17 +277,25 @@ if(RECONVERSE_ROOT_PROJECT)
 endif()
 
 # The checks of regions and counters that cost something on every
-# contribution (include/conv-region.h). On by default where CMK_OPTIMIZE is 0:
-# a standalone Debug build, or a Charm++ build without --with-production.
-if(CMK_OPTIMIZE)
-  set(_reconverse_error_checking_default OFF)
+# contribution (include/conv-region.h). AUTO, the default, decides at every
+# configure: on where CMK_OPTIMIZE is 0 (a standalone Debug build, a Charm++
+# build without --with-production), so reconfiguring a directory from Debug
+# to Release turns them off. ON or OFF overrides it.
+set(RECONVERSE_ERROR_CHECKING AUTO CACHE STRING
+    "check the use of regions and counters (readiness, rounds): AUTO (where CMK_OPTIMIZE is 0), ON or OFF")
+set_property(CACHE RECONVERSE_ERROR_CHECKING PROPERTY STRINGS AUTO ON OFF)
+if(RECONVERSE_ERROR_CHECKING STREQUAL "AUTO")
+  if(CMK_OPTIMIZE)
+    set(RECONVERSE_REGION_CHECKS OFF)
+  else()
+    set(RECONVERSE_REGION_CHECKS ON)
+  endif()
+elseif(RECONVERSE_ERROR_CHECKING)
+  set(RECONVERSE_REGION_CHECKS ON)
 else()
-  set(_reconverse_error_checking_default ON)
+  set(RECONVERSE_REGION_CHECKS OFF)
 endif()
-option(RECONVERSE_ERROR_CHECKING
-       "check the use of regions and counters (readiness, rounds)"
-       ${_reconverse_error_checking_default})
-if(RECONVERSE_ERROR_CHECKING)
+if(RECONVERSE_REGION_CHECKS)
   target_compile_definitions(reconverse PRIVATE CMI_REGION_CHECKS=1)
 else()
   target_compile_definitions(reconverse PRIVATE CMI_REGION_CHECKS=0)

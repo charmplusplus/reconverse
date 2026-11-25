@@ -351,8 +351,9 @@ Implemented so far: contiguous host memory, with origins on the owner's PE or
 on other PEs of its process. The header documents each call; the design is
 in [doc/internals/persistent-family.md](doc/internals/persistent-family.md).
 
-The CMake option **`RECONVERSE_ERROR_CHECKING`** (on by default in builds
-where `CMK_OPTIMIZE` is 0) adds the checks that cost something on every
+The CMake option **`RECONVERSE_ERROR_CHECKING`** (`AUTO`, the default, is on
+in builds where `CMK_OPTIMIZE` is 0, decided again at every configure; `ON` or
+`OFF` overrides it) adds the checks that cost something on every
 contribution: a contribution that arrives after its round fired and before
 the re-arm, and, for counters created with `CMI_COUNTER_CHECK_ROUNDS`, one
 that would count in place of another round's.
