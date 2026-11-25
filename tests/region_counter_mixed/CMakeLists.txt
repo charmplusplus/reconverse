@@ -75,13 +75,15 @@ function(region_counter_early_test name pattern)
   add_test(NAME region_counter_early_${name}
     COMMAND sh -c "${RECONVERSE_TEST_LAUNCHER} -n 2 $<TARGET_FILE:region_counter_mixed> ${name} +pe 2 2>&1; true")
   set_tests_properties(region_counter_early_${name} PROPERTIES
-    PASS_REGULAR_EXPRESSION "${pattern}" TIMEOUT 60)
+    PASS_REGULAR_EXPRESSION "${pattern}"
+    FAIL_REGULAR_EXPRESSION "region_counter_mixed [a-z_]+ FAIL" TIMEOUT 60)
 endfunction()
 if(NOT WIN32)
   # a signal through a target of a destroyed counter, from another process;
   # the origin's process sees it in an error-checking build, the owner's in
   # any
-  region_counter_early_test(stale_remote "destroyed")
+  region_counter_early_test(stale_remote
+    "the target is stale|destroyed this target's counter and detached this process")
   if(RECONVERSE_REGION_CHECKS)
     # a remote origin's second put before the owner re-armed
     region_counter_early_test(count_remote

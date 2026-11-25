@@ -33,11 +33,34 @@
     qd         the QD hook's created and processed counts
     early      a whole round arrives before the re-arm, which fires at once;
                an error-checking build aborts on the early contribution
-  These must abort (the CTest entry matches the message):
+    early_local  the same in every build, on a local counter, whose early
+               completions are no error: two and three rounds before a
+               re-arm fire once each
+    queued     a counter destroyed while its message is queued, its index
+               reused at once (queued_early: re-queued by an automatic
+               re-arm, production builds)
+    race       early contributions from the other PEs racing the owner's
+               re-arm: race (automatic), race_explicit, race_handler;
+               production builds
+    attach     the other PEs attach and detach the same targets in a loop
+               while the owner destroys them (attach_all: with
+               CMI_DESTROY_DETACH_ALL halfway)
+    auto_handler  a handler action with CMI_COUNTER_AUTO_REARM
+  These must abort (the CTest entry matches the library's message):
     rearm_early  a re-arm before the round's action started (every build)
+    stale        a signal through a target whose counter was destroyed: the
+                 generation check of every build
+    wrong_pe     a re-arm on a PE that does not own the counter
+    table_limit  more counters than +counter_table allows
     round_skip   a second contribution through one attachment in one round
                  (error-checking builds, CMI_COUNTER_CHECK_ROUNDS)
-    stale        a signal through a target whose counter was destroyed
+    detached     a signal through an attachment whose owner destroyed the
+                 counter with CMI_DESTROY_DETACH_ALL (error-checking builds)
+    late_attach  an attach to a destroyed region is told to detach
+                 (error-checking builds)
+  With +randomized_msgq, teardown does not check that a destroy waits for
+  origins it may not have heard of yet: that relies on the default
+  scheduler serving the urgent queue first.
  ****************************************************************/
 
 #include <atomic>
@@ -45,12 +68,14 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <thread>
 #include <vector>
 
 #include "converse.h"
 #include "conv-region.h"
 
 static const char *g_mode = "";
+static bool g_randomized = false; // +randomized_msgq
 static const int kRounds = 300;
 static const int kPiece = 256;
 
@@ -69,11 +94,12 @@ struct Ctl {
   int ack;    // nonzero: answer PE 0 with OP_ACK
   int from;
   int tag;    // OP_ACK: what is acknowledged
-  CmiTarget t;
+  CmiTarget t, t2;
 };
 
 CpvDeclare(int, ctlIdx);
 CpvDeclare(int, firedIdx);
+CpvDeclare(int, autoFiredIdx);
 
 // Each PE's origin state.
 struct PeData {
@@ -233,6 +259,9 @@ void sendRound(int r) {
 }
 void done(void *) {
   if (actions != kRounds) fail("%d actions for %d rounds", actions, kRounds);
+  if (g_detached.load() != npes())
+    fail("the destroy completed after %d of %d detaches", g_detached.load(),
+         npes());
   pass("each round fired once; the destroy completed after every detach");
 }
 void onRound(void *, CmiCounter cc) {
@@ -241,16 +270,16 @@ void onRound(void *, CmiCounter cc) {
     fail("action %d in round %d, value %d", actions, round,
          CmiCounterValue(c));
   if (round == kRounds) {
-    for (int pe = 0; pe < npes(); pe++) sendOp(pe, OP_DETACH, 0, nullptr, 1);
+    // destroy first: it completes only once every PE has detached
+    CmiCounterDestroy(c, 0, done, nullptr);
+    for (int pe = 0; pe < npes(); pe++) sendOp(pe, OP_DETACH, 0, nullptr, 0);
     return;
   }
   round++;
   CmiCounterRearm(c, N(round));
   sendRound(round);
 }
-void onAck(Ctl *) {
-  if (++acks == npes()) CmiCounterDestroy(c, 0, done, nullptr);
-}
+void onAck(Ctl *) {}
 void start() {
   g_onAck = onAck;
   c = CmiCounterCreate(N(1), CmiCounterActionFn(onRound, nullptr), 0);
@@ -759,10 +788,10 @@ void start() {
 // ------------------------------------------------------------- teardown
 namespace tdown {
 int step, acks, last;
-bool r1Done, k1Done, r2Done, k2Done, r4Called;
+bool r1Done, k1Done, r2Done, k2Done, k2cDone, r4Called;
 CmiRegion R1, R2, R3, R4;
-CmiCounter K1, K2, K4;
-CmiTarget T1, T2, T3;
+CmiCounter K1, K2, K2c, K4;
+CmiTarget T1, T2, T2c, T3;
 std::vector<unsigned char> mem1(64), mem2(64);
 void never(void *, CmiCounter) { fail("a counter with no contributions fired"); }
 void next();
@@ -777,9 +806,9 @@ void k1(void *) {
   k1Done = true;
   next();
 }
+// Step 2's destroys complete although no origin calls CmiDetachTarget
+// before step 3 (the detached case checks the origins' handles).
 void r2(void *) {
-  if (g_detached.load() != npes())
-    fail("CMI_DESTROY_DETACH_ALL: an origin detached by itself");
   r2Done = true;
   next();
 }
@@ -787,9 +816,13 @@ void k2(void *) {
   k2Done = true;
   next();
 }
+void k2c(void *) {
+  k2cDone = true;
+  next();
+}
 void r3(void *) {
   // a registration for a destroyed generation is answered with a detach
-  // request; the origin then detaches its own handle
+  // request (late_attach checks that); the origin then detaches its handle
   sendOp(last, OP_ATTACH, 2, &T3, 1);
 }
 void k4(void *) {
@@ -832,17 +865,26 @@ void fifo() {
 }
 void next() {
   if (step == 1 && r1Done && k1Done && acks == npes()) {
-    // CMI_DESTROY_DETACH_ALL: the owner ends every registration itself
+    // CMI_DESTROY_DETACH_ALL: the owner ends every registration itself, of
+    // a region and of a counter-only target
     step = 2;
     acks = 0;
     CmiRegionAlloc(64, CMI_MEM_HOST, 0, 0, &R2);
     K2 = CmiCounterCreate(1, CmiCounterActionFn(never, nullptr), 0);
     T2 = CmiTargetMake(R2, CMI_PIECE_ALL, K2);
-    for (int pe = 0; pe < npes(); pe++) sendOp(pe, OP_ATTACH, 1, &T2, 1);
-  } else if (step == 2 && r2Done && k2Done) {
+    K2c = CmiCounterCreate(1, CmiCounterActionFn(never, nullptr), 0);
+    T2c = CmiTargetMake(nullptr, CMI_PIECE_ALL, K2c);
+    for (int pe = 0; pe < npes(); pe++) {
+      sendOp(pe, OP_ATTACH, 1, &T2, 1);
+      sendOp(pe, OP_ATTACH, 3, &T2c, 1);
+    }
+  } else if (step == 2 && r2Done && k2Done && k2cDone) {
     step = 3;
     acks = 0;
-    for (int pe = 0; pe < npes(); pe++) sendOp(pe, OP_DETACH, 1, nullptr, 1);
+    for (int pe = 0; pe < npes(); pe++) {
+      sendOp(pe, OP_DETACH, 1, nullptr, 1);
+      sendOp(pe, OP_DETACH, 3, nullptr, 1);
+    }
   }
 }
 // The last attach ack has arrived, and the registration was queued before
@@ -855,11 +897,13 @@ void onCtl(Ctl *m) {
   if (step == 1) {
     CmiRegionDestroy(R1, 0, r1, nullptr);
     CmiCounterDestroy(K1, 0, k1, nullptr);
-    if (r1Done || k1Done) fail("a destroy completed while origins were attached");
+    if (!g_randomized && (r1Done || k1Done))
+      fail("a destroy completed while origins were attached");
     for (int pe = 0; pe < npes(); pe++) sendOp(pe, OP_DETACH, 0, nullptr, 1);
   } else if (step == 2) {
     CmiRegionDestroy(R2, CMI_DESTROY_DETACH_ALL, r2, nullptr);
     CmiCounterDestroy(K2, 0, k2, nullptr);
+    CmiCounterDestroy(K2c, CMI_DESTROY_DETACH_ALL, k2c, nullptr);
   } else if (step == 5) {
     r4Called = true;
     CmiRegionDestroy(R4, 0, nullptr, nullptr);
@@ -874,9 +918,9 @@ void onAck(Ctl *m) {
       acks++;
       next();
     }
-  } else if (step == 2 && m->tag == OP_ATTACH && ++acks == npes()) {
+  } else if (step == 2 && m->tag == OP_ATTACH && ++acks == 2 * npes()) {
     sendOp(0, OP_STEP, 0, nullptr, 0);
-  } else if (step == 3 && m->tag == OP_DETACH && ++acks == npes()) {
+  } else if (step == 3 && m->tag == OP_DETACH && ++acks == 2 * npes()) {
     step = 4;
     CmiRegionAlloc(64, CMI_MEM_HOST, 0, 0, &R3);
     T3 = CmiTargetMake(R3, CMI_PIECE_ALL, nullptr);
@@ -1130,6 +1174,271 @@ void start() {
 }
 } // namespace early
 
+
+// ---------------------------------------------------------- early_local
+// A local counter's early completions are no error, so its re-arm fires at
+// once in every build: two puts before the re-arm, then three.
+namespace earlyLocal {
+unsigned char mem[64];
+CmiRegion reg;
+CmiAttachment a;
+CmiCounter L;
+int actions, expectActions;
+void puts(int n) {
+  unsigned char b[64] = {0};
+  for (int i = 0; i < n; i++)
+    if (CmiPut(a, 0, b, sizeof(b), nullptr, L, nullptr) != CMI_REGION_OK)
+      fail("CmiPut");
+}
+void onLocal(void *, CmiCounter) {
+  actions++;
+  if (actions == 2) {
+    // a re-arm below zero: two more rounds are complete already
+    puts(3);
+    if (CmiCounterValue(L) != -3) fail("value %d, not -3", CmiCounterValue(L));
+  }
+  if (actions == 5) {
+    if (CmiCounterValue(L) != 0) fail("value %d after five rounds", CmiCounterValue(L));
+    CmiDetachTarget(a);
+    CmiCounterDestroy(L, 0, nullptr, nullptr);
+    CmiRegionDestroy(reg, 0, nullptr, nullptr);
+    pass("early local completions: each round fired once, at its re-arm");
+    return;
+  }
+  CmiCounterRearm(L, 1);
+}
+void start() {
+  reg = CmiRegionCreate(mem, sizeof(mem), CMI_MEM_HOST, 0, 0);
+  CmiTarget t = CmiTargetMake(reg, CMI_PIECE_ALL, nullptr);
+  a = CmiAttachTarget(&t);
+  L = CmiCounterCreate(1, CmiCounterActionFn(onLocal, nullptr), 0);
+  puts(2); // the second completes the next round before the re-arm
+  if (CmiCounterValue(L) != -1) fail("value %d, not -1", CmiCounterValue(L));
+}
+} // namespace earlyLocal
+
+// --------------------------------------------------------------- queued
+// A counter destroyed while its message is queued, and its index reused at
+// once: the message runs neither the old action nor the new one. With
+// queued_early (production builds), an automatic counter whose next round
+// arrives before its handler is destroyed in its action, with its message
+// queued again.
+namespace queued {
+bool earlyRound;
+int oldRuns, newRuns, autoRuns;
+CmiCounter c2, ca;
+CmiAttachment aa;
+void oldAction(void *, CmiCounter) { oldRuns++; }
+void finish(void *) {
+  if (oldRuns != 0 || newRuns != 1 || autoRuns != 1)
+    fail("old action %d times, new %d, automatic %d", oldRuns, newRuns, autoRuns);
+  pass("a queued message of a destroyed counter runs no action");
+}
+void autoAction(void *, CmiCounter c) {
+  autoRuns++;
+  CmiDetachTarget(aa);
+  CmiCounterDestroy(c, 0, finish, nullptr);
+}
+void newAction(void *, CmiCounter c) {
+  newRuns++;
+  ca = CmiCounterCreate(1, CmiCounterActionFn(autoAction, nullptr),
+                        CMI_COUNTER_AUTO_REARM);
+  CmiTarget t = CmiTargetMake(nullptr, 0, ca);
+  aa = CmiAttachTarget(&t);
+  CmiSignal(aa);                // round 1 fires
+  if (earlyRound) CmiSignal(aa); // round 2, before the handler
+  CmiCounterDestroy(c, 0, nullptr, nullptr);
+}
+void start() {
+  CmiCounter c = CmiCounterCreate(1, CmiCounterActionFn(oldAction, nullptr), 0);
+  CmiTarget t = CmiTargetMake(nullptr, 0, c);
+  CmiAttachment a = CmiAttachTarget(&t);
+  CmiSignal(a); // fires: the message is queued
+  CmiDetachTarget(a);
+  CmiCounterDestroy(c, 0, nullptr, nullptr);
+  c2 = CmiCounterCreate(1, CmiCounterActionFn(newAction, nullptr), 0);
+  CmiTarget t2 = CmiTargetMake(nullptr, 0, c2);
+  CmiAttachment a2 = CmiAttachTarget(&t2);
+  CmiSignal(a2);
+  CmiDetachTarget(a2);
+}
+void startEarly() {
+  earlyRound = true;
+  start();
+}
+} // namespace queued
+
+// ----------------------------------------------------------------- race
+// Early contributions from PEs 1..P-1 racing the owner's re-arm (automatic
+// or explicit) on PE 0; production builds. Each round fires exactly once;
+// origins run at most one round ahead of the action.
+namespace race {
+const int kR = 20000;
+bool autoMode = true, handlerMode = false;
+std::atomic<long> total{0}, handled{0};
+CmiCounter c;
+int N;
+void onRound(void *, CmiCounter cc) {
+  long h = handled.load() + 1;
+  int v = CmiCounterValue(cc);
+  if (autoMode && v > N) fail("value %d above N after the automatic re-arm", v);
+  if (v < -N) fail("round %ld: value %d below -N", h, v);
+  if (!autoMode && h < kR) CmiCounterRearm(cc, N);
+  handled.store(h, std::memory_order_release); // after the re-arm
+  if (h == kR) pass("every round fired once");
+  if (h > kR) fail("an extra round %ld", h);
+}
+void firedHandler(void *vm) {
+  CmiCounterFiredMsg *m = (CmiCounterFiredMsg *)vm;
+  long expect = handled.load() + 1;
+  if ((long)m->round != expect) fail("round %u, expected %ld", m->round, expect);
+  CmiCounter cc = m->counter;
+  CmiFree(m);
+  onRound(nullptr, cc);
+}
+void onCtl(Ctl *m) {
+  if (m->op != OP_GO) return;
+  CmiAttachment a = CmiAttachTarget(&m->t);
+  for (long r = 1; r <= kR; r++) {
+    while (total.load(std::memory_order_acquire) < (r - 1) * N ||
+           handled.load(std::memory_order_acquire) < r - 2)
+      std::this_thread::yield();
+    if (CmiSignal(a) != CMI_REGION_OK) fail("CmiSignal");
+    total.fetch_add(1, std::memory_order_acq_rel);
+  }
+  // the attachment stays: the program exits from PE 0
+}
+void start() {
+  g_onCtl = onCtl;
+  N = npes() - 1;
+  if (N < 1) fail("needs two PEs or more");
+  CmiCounterAction act = handlerMode ? CmiCounterActionHandler(CpvAccess(autoFiredIdx))
+                                     : CmiCounterActionFn(onRound, nullptr);
+  c = CmiCounterCreate(N, act, autoMode ? CMI_COUNTER_AUTO_REARM : 0);
+  CmiTarget t = CmiTargetMake(nullptr, CMI_PIECE_ALL, c);
+  for (int pe = 1; pe < npes(); pe++) sendOp(pe, OP_GO, 0, &t, 0);
+}
+void startExplicit() {
+  autoMode = false;
+  start();
+}
+void startHandler() {
+  handlerMode = true;
+  start();
+}
+} // namespace race
+
+// --------------------------------------------------------------- attach
+// PEs 1..P-1 attach and detach the same targets, one by one and in
+// batches, while the owner destroys them: once they finish (attach), or
+// halfway with CMI_DESTROY_DETACH_ALL (attach_all). Each destroy's done
+// runs once.
+namespace attachm {
+const int kK = 3000;
+bool detachAll = false;
+std::atomic<long> iters{0};
+std::atomic<int> finished{0};
+int dones, polls;
+bool destroyed;
+CmiRegion R;
+CmiCounter C;
+void done(void *) { dones++; }
+void poll() { sendOp(0, OP_STEP, 0, nullptr, 0); }
+void onCtl(Ctl *m) {
+  if (m->op == OP_STEP) {
+    int origins = npes() - 1;
+    long total = (long)kK * origins;
+    if (!destroyed && ((detachAll && iters.load() >= total / 2) ||
+                       finished.load() == origins)) {
+      destroyed = true;
+      int f = detachAll ? CMI_DESTROY_DETACH_ALL : 0;
+      CmiRegionDestroy(R, f, done, nullptr);
+      CmiCounterDestroy(C, f, done, nullptr);
+    }
+    if (finished.load() == origins && dones == 2 && ++polls > 1000)
+      pass("concurrent attaches and detaches; each destroy completed once");
+    else if (dones > 2)
+      fail("%d destroy callbacks for two destroys", dones);
+    else
+      poll();
+  } else if (m->op == OP_GO) {
+    CmiTarget ts[3] = {m->t, m->t2, m->t};
+    for (int i = 0; i < kK; i++) {
+      CmiAttachment a = CmiAttachTarget(&m->t);
+      CmiAttachment b = CmiAttachTarget(&m->t2);
+      CmiAttachment v[3];
+      CmiAttachTargets(ts, 3, v);
+      if (i & 1) {
+        CmiDetachTarget(a);
+        CmiDetachTargets(v, 3);
+      } else {
+        CmiDetachTargets(v, 3);
+        CmiDetachTarget(a);
+      }
+      CmiDetachTarget(b);
+      iters.fetch_add(1);
+      if ((i & 63) == 0) std::this_thread::yield();
+    }
+    finished.fetch_add(1);
+  }
+}
+void start() {
+  g_onCtl = onCtl;
+  CmiRegionAlloc(64, CMI_MEM_HOST, 0, 0, &R);
+  C = CmiCounterCreate(1, CmiCounterActionNone(), 0);
+  CmiTarget t = CmiTargetMake(R, CMI_PIECE_ALL, nullptr);
+  CmiTarget tc = CmiTargetMake(nullptr, CMI_PIECE_ALL, C);
+  for (int pe = 1; pe < npes(); pe++) {
+    Ctl *m = newCtl(OP_GO);
+    m->t = t;
+    m->t2 = tc;
+    send(pe, m);
+  }
+  poll();
+}
+void startAll() {
+  detachAll = true;
+  start();
+}
+} // namespace attachm
+
+// --------------------------------------------------------- auto_handler
+// A handler action with CMI_COUNTER_AUTO_REARM: the counter is re-armed
+// before the handler gets its message.
+namespace autoHandler {
+const int kR = 200;
+CmiCounter c;
+CmiTarget t;
+int round = 1;
+void fired(void *vm) {
+  CmiCounterFiredMsg *m = (CmiCounterFiredMsg *)vm;
+  if (m->counter != c || (int)m->round != round)
+    fail("round %u, expected %d", m->round, round);
+  if (CmiCounterValue(c) != 1)
+    fail("value %d: not re-armed before the handler", CmiCounterValue(c));
+  CmiFree(m);
+  if (round == kR) {
+    CmiCounterDestroy(c, 0, nullptr, nullptr);
+    for (int pe = 0; pe < npes(); pe++) sendOp(pe, OP_DETACH, 0, nullptr, 0);
+    pass("a handler action re-armed automatically");
+    return;
+  }
+  round++;
+  sendOp(round % npes(), OP_SIGNAL, 0, &t, 0);
+}
+void start() {
+  c = CmiCounterCreate(1, CmiCounterActionHandler(CpvAccess(autoFiredIdx)),
+                       CMI_COUNTER_AUTO_REARM);
+  t = CmiTargetMake(nullptr, CMI_PIECE_ALL, c);
+  sendOp(round % npes(), OP_SIGNAL, 0, &t, 0);
+}
+} // namespace autoHandler
+
+static void autoFiredHandler(void *vm) {
+  if (strncmp(g_mode, "race", 4) == 0) race::firedHandler(vm);
+  else autoHandler::fired(vm);
+}
+
 // --------------------------------------------------------------- aborts
 namespace aborts {
 CmiCounter c;
@@ -1152,15 +1461,64 @@ void roundSkip() {
   CmiSignal(a); // this attachment's second contribution in round 1
   fail("the second contribution in one round was not refused");
 }
-void staleDone(void *) {
-  CmiSignal(a);
-  fail("a signal through a destroyed counter's target was not refused");
-}
+// The owner has not yet handled the registration, so the destroy completes
+// at once and the attachment is not yet detached: the generation check that
+// every build has refuses the signal.
 void stale() {
   c = CmiCounterCreate(5, CmiCounterActionFn(never, nullptr), 0);
   CmiTarget t = CmiTargetMake(nullptr, 0, c);
   a = CmiAttachTarget(&t);
-  CmiCounterDestroy(c, CMI_DESTROY_DETACH_ALL, staleDone, nullptr);
+  CmiCounterDestroy(c, 0, nullptr, nullptr);
+  CmiSignal(a);
+  fail("a signal through a destroyed counter's target was not refused");
+}
+// With CMI_DESTROY_DETACH_ALL the owner's detach request reaches this
+// process before the done callback (the urgent queue first), and an
+// error-checking build refuses the attachment itself.
+void detachedDone(void *) {
+  CmiSignal(a);
+  fail("a signal through an attachment its owner ended was not refused");
+}
+void detached() {
+  c = CmiCounterCreate(5, CmiCounterActionFn(never, nullptr), 0);
+  CmiTarget t = CmiTargetMake(nullptr, 0, c);
+  a = CmiAttachTarget(&t);
+  CmiCounterDestroy(c, CMI_DESTROY_DETACH_ALL, detachedDone, nullptr);
+}
+// An attach to a destroyed region: the owner answers the registration with
+// a detach request, after which an error-checking build refuses the put.
+CmiTarget lateTarget;
+void lateOnCtl(Ctl *m) {
+  if (m->op != OP_STEP) return;
+  unsigned char b[8] = {0};
+  CmiPut(a, 0, b, sizeof(b), nullptr, nullptr, nullptr);
+  fail("a put through an attachment to a destroyed region was not refused");
+}
+void lateAttach() {
+  g_onCtl = lateOnCtl;
+  CmiRegion r;
+  CmiRegionAlloc(64, CMI_MEM_HOST, 0, 0, &r);
+  lateTarget = CmiTargetMake(r, CMI_PIECE_ALL, nullptr);
+  CmiRegionDestroy(r, 0, nullptr, nullptr);
+  a = CmiAttachTarget(&lateTarget);
+  // the registration and the detach request are urgent: served first
+  sendOp(0, OP_STEP, 0, nullptr, 0);
+}
+void wrongOnCtl(Ctl *m) {
+  if (m->op != OP_GO) return;
+  CmiCounterRearm(c, 1);
+  fail("a re-arm on PE %d was not refused", CmiMyPe());
+}
+void wrongPe() {
+  g_onCtl = wrongOnCtl;
+  if (npes() < 2) fail("needs two PEs or more");
+  c = CmiCounterCreate(1, CmiCounterActionFn(never, nullptr), 0);
+  sendOp(1, OP_GO, 0, nullptr, 0);
+}
+void tableLimit() {
+  for (int i = 0; i < 4; i++)
+    CmiCounterCreate(1, CmiCounterActionNone(), 0);
+  fail("a fourth counter under +counter_table 3 was not refused");
 }
 } // namespace aborts
 
@@ -1174,6 +1532,8 @@ CmiStartFn mymain(int argc, char **argv) {
   CpvAccess(ctlIdx) = CmiRegisterHandler(ctlHandler);
   CpvInitialize(int, firedIdx);
   CpvAccess(firedIdx) = CmiRegisterHandler(actions::firedHandler);
+  CpvInitialize(int, autoFiredIdx);
+  CpvAccess(autoFiredIdx) = CmiRegisterHandler(autoFiredHandler);
   CpvInitialize(PeData *, pd);
   CpvAccess(pd) = new PeData();
   CmiNodeBarrier();
@@ -1197,12 +1557,22 @@ static const Case kCases[] = {
     {"actions", actions::start},    {"teardown", tdown::start},
     {"batch", batch::start},        {"errors", errors::start},
     {"qd", qd::start},              {"early", early::start},
+    {"early_local", earlyLocal::start},
+    {"queued", queued::start},      {"queued_early", queued::startEarly},
+    {"race", race::start},          {"race_explicit", race::startExplicit},
+    {"race_handler", race::startHandler},
+    {"attach", attachm::start},     {"attach_all", attachm::startAll},
+    {"auto_handler", autoHandler::start},
     {"rearm_early", aborts::rearmEarly},
     {"round_skip", aborts::roundSkip},
-    {"stale", aborts::stale},
+    {"stale", aborts::stale},       {"detached", aborts::detached},
+    {"late_attach", aborts::lateAttach},
+    {"wrong_pe", aborts::wrongPe},  {"table_limit", aborts::tableLimit},
 };
 
 int main(int argc, char **argv) {
+  for (int i = 1; i < argc; i++)
+    if (strcmp(argv[i], "+randomized_msgq") == 0) g_randomized = true;
   for (int i = 1; i < argc && g_start == nullptr; i++)
     for (const Case &c : kCases)
       if (strcmp(argv[i], c.name) == 0) {
