@@ -128,6 +128,12 @@ typedef struct CmiTarget {
   uint8_t rkey[CMI_TARGET_RKEY_BYTES];       /* remote key; zero for now */
   uint8_t layout[CMI_TARGET_LAYOUT_BYTES];   /* reserved for strided pieces */
 } CmiTarget;
+/* The size is part of the interface: targets travel between processes. */
+#ifdef __cplusplus
+static_assert(sizeof(CmiTarget) == 160, "CmiTarget is 160 bytes");
+#elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+_Static_assert(sizeof(CmiTarget) == 160, "CmiTarget is 160 bytes");
+#endif
 
 /* Regions (owner PE) */
 CmiRegion CmiRegionCreate(void *base, size_t bytes, CmiMemKind kind, int devId,
