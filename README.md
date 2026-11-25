@@ -120,6 +120,7 @@ set `LCT_PMI_BACKEND=local`.
 - **`+ipcmode <auto|shm|xpmem>`**: pick the mechanism backing the shared-memory pool. Implies `+ipc`. `auto`, the default, is `shm`.
 - **`++ipcpoolsize <bytes>`**: size of each process's shared-memory pool. By default, 512 KiB for each PE of the host's other processes, and at least 8 MiB (see [Memory use](doc/internals/shared-memory-ipc.md#memory-use)).
 - **`++ipccutoff <bytes>`**: largest message the pool will carry. Messages above it go over the communication backend. Defaults to 32 KiB, or to a bin below `poolsize / 25` when that is smaller. At most 1 MiB; a larger value is capped there, with a notice.
+- **`+counter_table <num>`**: the most counters (`CmiCounterCreate`) a PE may have at once; at most and by default 65536. See [Regions and counters](#regions-and-counters-conv-regionh).
 - **`+randomized_msgq`**: run messages in a uniformly random order, for shaking out message-order races. See [Randomized message order](#randomized-message-order-randomized_msgq). Cannot be combined with `+old-scheduler`.
 - **`+randomized_seed <N>`**: base seed for `+randomized_msgq`. Defaults to a value taken from the wall clock; the startup banner prints the seed in use.
 - **`+glibc_tuned_malloc`**: on glibc systems, raise glibc's malloc thresholds at startup (`mallopt`: mmap threshold 32 MB, trim threshold 1 GB, top pad 256 MB) and print `Reconverse> glibc malloc (+glibc_tuned_malloc): ...`. Off by default; accepted and ignored on other C libraries. See [glibc malloc tuning](#glibc-malloc-tuning-glibc_tuned_malloc).
@@ -329,6 +330,32 @@ holds the data by the time the acknowledgement is delivered.
 * A process killed outright (not `CmiExit`) leaves its POSIX shared memory
   segment behind in `/dev/shm`; a clean exit unlinks it. `xpmem` has nothing
   to leave behind.
+
+## Regions and counters (`conv-region.h`)
+
+An owner PE registers a buffer once as a region, divided into pieces if it
+likes, and creates a counter: a count of the contributions it expects in a
+round and an action to run when they have all arrived. It sends each origin a
+target, a plain 160-byte value naming one piece and one counter. The origin
+attaches to the target once (`CmiAttachTarget`) and then, every round,
+`CmiPut` copies its data into the piece and decrements the counter; the
+contribution that completes the round queues the action on the owner PE,
+which re-arms the counter (`CmiCounterRearm`) once it has finished with the
+data. `CmiSignal` is a contribution with no data, `CmiGet` reads a piece, and
+`CmiPut` can decrement a counter of the origin's own when its source may be
+reused. The owner must be ready for each round's data: an origin puts only
+when the program's logic says the owner no longer needs the piece's previous
+contents.
+
+Implemented so far: contiguous host memory, with origins on the owner's PE or
+on other PEs of its process. The header documents each call; the design is
+in [doc/internals/persistent-family.md](doc/internals/persistent-family.md).
+
+The CMake option **`RECONVERSE_ERROR_CHECKING`** (on by default in builds
+where `CMK_OPTIMIZE` is 0) adds the checks that cost something on every
+contribution: a contribution that arrives after its round fired and before
+the re-arm, and, for counters created with `CMI_COUNTER_CHECK_ROUNDS`, one
+that would count in place of another round's.
 
 ## Randomized message order (`+randomized_msgq`)
 
