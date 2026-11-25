@@ -9,6 +9,9 @@
               every round, at sizes from 1 byte to 64 KiB; every byte is
               checked and every round fires exactly once. Each origin's
               local counter must see every put complete
+    threshold the same with puts of CmiRegionPutMessageMaxBytes() bytes and
+              of one byte more, in turn: the first go in a message, the
+              others as puts with signal
     signal    counter-only targets, CmiSignal from every PE, N varying per
               round (1 to 7)
     get       each PE reads, at four sizes and offsets, the regions of the
@@ -188,12 +191,24 @@ CmiRegion r;
 CmiCounter c;
 std::vector<CmiTarget> t;
 int round, acks, dones;
-int size(int rr) { return kSizes[rr % kNumSizes]; }
+// threshold: puts of exactly CmiRegionPutMessageMaxBytes() bytes and of one
+// byte more, in turn; each process computes the same sizes
+bool thresholdMode = false;
+int size(int rr) {
+  if (!thresholdMode) return kSizes[rr % kNumSizes];
+  size_t limit = CmiRegionPutMessageMaxBytes();
+  if (limit + 1 > (size_t)kPiece) fail("the limit %zu is past a piece", limit);
+  return (int)limit + (rr % 2 == 0 ? 1 : 0);
+}
 void sendRound(int rr) {
   for (int o = 0; o < npes(); o++) sendOp(o, OP_GO, o, &t[o], 0, rr);
 }
 void allDone(void *) {
-  if (++dones == 2) pass("same PE, same process and other processes in every round");
+  if (++dones < 2) return;
+  if (thresholdMode)
+    pass("puts of the message limit and one byte more, in every locality");
+  else
+    pass("same PE, same process and other processes in every round");
 }
 void onRound(void *, CmiCounter) {
   for (int o = 0; o < npes(); o++)
@@ -244,7 +259,14 @@ void hooks() {
   g_onAck = onAck;
   g_onCtl = onCtl;
 }
+void thresholdHooks() {
+  thresholdMode = true;
+  hooks();
+}
 void start() {
+  if (thresholdMode)
+    CmiPrintf("region_counter_mixed threshold: puts of %zu and %zu bytes\n",
+              CmiRegionPutMessageMaxBytes(), CmiRegionPutMessageMaxBytes() + 1);
   mem.assign((size_t)npes() * kPiece, 0);
   r = CmiRegionCreate(mem.data(), mem.size(), CMI_MEM_HOST, 0, 0);
   for (int o = 0; o < npes(); o++)
@@ -559,6 +581,7 @@ struct Case {
 
 static const Case kCases[] = {
     {"mixed", mixed::hooks, mixed::start},
+    {"threshold", mixed::thresholdHooks, mixed::start},
     {"signal", sig::hooks, sig::start},
     {"get", getm::hooks, getm::start},
     {"nocounter", nocount::hooks, nocount::start},

@@ -193,6 +193,13 @@ int CmiGet(void *dst, size_t bytes, const CmiLayout *dstLayout,
 /* A contribution with no data: decrements the target's counter. */
 int CmiSignal(CmiAttachment t);
 
+/* Between processes, a CmiPut of at most this many bytes travels as one
+   message carrying the data and the signal, a larger one as a put with
+   signal (where the network has one): +put_message_max_bytes, by default 0
+   where the put with signal is one network operation, and the backend's
+   eager limit where it is emulated (a write, then a message). */
+size_t CmiRegionPutMessageMaxBytes(void);
+
 /* Quiescence detection: fn(created, processed) is called on the PE thread
    where contributions are issued (created) and where rounds are consumed
    (processed); created and processed balance once every round has run.

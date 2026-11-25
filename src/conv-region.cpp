@@ -675,12 +675,16 @@ void CmiRegionNodeInit(char **argv) {
              comm_backend::getRMR(comm_backend::MR_NULL, nullptr, 0),
              CMI_TARGET_RKEY_BYTES);
   // Where the backend emulates the put with signal (the write, its delivery
-  // completion, then a message), a small put is quicker as one message.
-  int messageMax = comm_backend::isPutSignalNative() ? 0 : 64;
+  // completion, then a message), a put that fits one eager message is
+  // quicker as that message.
+  int messageMax = comm_backend::isPutSignalNative()
+                       ? 0
+                       : (int)comm_backend::getMaxEagerBytes();
   CmiGetArgIntDesc(argv, "+put_message_max_bytes", &messageMax,
                    "between processes, a CmiPut of at most this many bytes "
                    "travels as one message with its signal (default 0 where "
-                   "the put with signal is one network operation, else 64)");
+                   "the put with signal is one network operation, else the "
+                   "backend's eager limit)");
   if (messageMax < 0) messageMax = 0;
   g_putMessageMax = (size_t)messageMax;
   g_verbose = CmiGetArgFlagDesc(argv, "+region_verbose",
@@ -705,6 +709,8 @@ void CmiRegionPeInit(void) {
   CpvAccess(regionGetReplyHandlerIdx) = CmiRegisterHandler(getReplyHandler);
   attachPeInit();
 }
+
+size_t CmiRegionPutMessageMaxBytes(void) { return g_putMessageMax; }
 
 void CmiRegionSetQdHook(CmiRegionQdFn fn) {
   g_qdHook.store(fn, std::memory_order_release);

@@ -180,11 +180,14 @@ zero bytes, and for any put of at most `+put_message_max_bytes`. That
 threshold exists for networks where LCI emulates the put with signal (cxi
 without native `fi_writedata`): there each signalled write waits for its
 delivery completion before LCI sends the signal in a message, about one round
-trip more, so a small put is quicker as one message that carries both. Its
-default is 0 where the put with signal is one network operation
-(`comm_backend::isPutSignalNative()`), and 64 bytes, LCI's inject limit,
-where it is emulated, until measurements on such a network replace it.
-`+region_verbose` prints, once per process and way, how a put went.
+trip more, so a put that fits one eager message is quicker as that message.
+Its default is 0 where the put with signal is one network operation
+(`comm_backend::isPutSignalNative()`), and the backend's eager limit
+(`comm_backend::getMaxEagerBytes()`, LCI's buffer-copy size) where it is
+emulated: on Delta (cxi, emulated) a put with signal took 8.8-9.1 us one way
+from 8 B to 1 KiB against 3.5-3.9 us for a message, and the two met at 8 KiB
+(9.6 and 9.7 us). `CmiRegionPutMessageMaxBytes()` returns the value in use,
+and `+region_verbose` prints, once per process and way, how a put went.
 
 **Source completion.** Within a process, and for a put in a message, the
 source may be reused when `CmiPut` returns, and `local` is decremented then.
