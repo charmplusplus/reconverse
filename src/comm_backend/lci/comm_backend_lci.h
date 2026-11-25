@@ -136,6 +136,9 @@ private:
   std::atomic<PutSignalKind *> m_put_signal_kinds[kMaxPutSignalKinds] = {};
   std::atomic<int> m_num_put_signal_kinds{0};
   bool m_put_signal_capable = false;
+  // The provider has write with immediate data (LCI's support_putimm);
+  // otherwise LCI emulates it
+  bool m_put_signal_native = false;
   // +lci_put_signal_emulate: reconverse posts the write, and after its
   // completion the zero-length message, as LCI does without support_putimm,
   // so that path can be tested where the provider has write with immediate

@@ -377,6 +377,7 @@ void CommBackendLCI::init(char **argv) {
     bool verbose = CmiGetArgFlagDesc(argv, "+lci_put_signal_verbose",
                                      "report how a put's signal travels");
     bool native = lci::get_default_net_context().get_attr_support_putimm();
+    m_put_signal_native = native;
     m_put_signal_capable =
         !off && lci::get_g_runtime().get_attr_max_imm_tag() >= UINT16_MAX;
     m_emulated_signal_comp = lci::alloc_handler(emulatedSignalPutDone);
@@ -712,8 +713,14 @@ int CommBackendLCI::registerPutSignalKind(PutSignalHandler handler, void *ctx,
 // fi_writedata), whose target completion is raised after the data is placed.
 // Where the provider has none (cxi without FI_CXI_ENABLE_WRITEDATA), LCI
 // posts the write and, once it completes, a zero-length message with the
-// same immediate data; for a write small enough to inject, LCI posts the
-// message right after the write without waiting.
+// same immediate data. The write asks for FI_DELIVERY_COMPLETE, which cxi
+// honours (its completion follows a flushing read at the target, so the data
+// is visible), and that is what orders the message behind the data. But a
+// write small enough to inject (64 bytes, LCI's default inject limit) has no
+// completion to wait for, and LCI sends its message right away
+// (post_putImms_fallback); cxi does not order a send after a write
+// (FI_ORDER_SAW is not among its orderings), so the signal could arrive
+// first. Asking for network completion keeps LCI from injecting there.
 void CommBackendLCI::issueRputSignal(int rank, const void *local_buf,
                                      size_t size, mr_t local_mr,
                                      uintptr_t remote_disp, void *rmr,
@@ -765,6 +772,9 @@ void CommBackendLCI::issueRputSignal(int rank, const void *local_buf,
                  .device(m_devices[dev])
                  .remote_comp(rcomp)
                  .tag(signal)
+                 .comp_semantic(m_put_signal_native
+                                    ? lci::comp_semantic_t::memory
+                                    : lci::comp_semantic_t::network)
                  .user_context(args)
                  .allow_retry(allow_retry)();
     if (allow_retry) progressForPost(dev);

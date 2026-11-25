@@ -134,7 +134,8 @@ void CmiIssueRputSignal(NcpyOperationInfo *ncpyOpInfo, int destPe, int kind,
  * where dest is a registered buffer as its owner described it and src a
  * registered one of this process. Nothing reports completion, so the source
  * must stay unchanged until something the caller arranged shows the data
- * has landed. Within a process it is a memcpy. Needs RMA (not +nordma). */
+ * has landed. Within a process it is a memcpy; with copy-based RDMA (+nordma,
+ * a backend without RMA), a message whose handler copies the bytes. */
 void CmiRdmaPutRaw(const CmiNcpyBuffer &src, const CmiNcpyBuffer &dest,
                    size_t destOffset);
 
