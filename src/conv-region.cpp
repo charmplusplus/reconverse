@@ -12,7 +12,11 @@
 #include <malloc.h>
 #endif
 
+#include "conv-rdma.h"
 #include "conv-region-internal.h"
+
+// convcore.cpp: frees a message once the backend has sent it
+void CommLocalHandler(comm_backend::Status status);
 
 using namespace cmi_region;
 
@@ -25,8 +29,19 @@ const char kReadinessAdvice[] =
 
 CounterSlice *g_slices = nullptr;
 uint32_t g_linesPerChunk = 0;
+uint32_t g_landedPerChunk = 0;
 uint32_t g_counterLimit = kMaxCountersPerPe;
 std::atomic<CmiRegionQdFn> g_qdHook{nullptr};
+
+// How data and signals reach another process; set at start-up, the same in
+// every process.
+bool g_useRma = false;       // one-sided gets, and regions registered
+bool g_usePutSignal = false; // puts with signal
+int g_putKinds[2] = {-1, -1}; // the backend's kinds, by SignalKind
+size_t g_putMessageMax = 0;   // a put of at most this many bytes is a message
+int g_signalAm = -1;          // the active message of CmiSignal
+bool g_verbose = false;       // +region_verbose
+std::atomic<bool> g_pathShown[2] = {{false}, {false}};
 
 void *alignedAlloc(size_t align, size_t bytes, const char *what) {
   void *p = nullptr;
@@ -59,6 +74,9 @@ void checkOwner(int ownerPe, const char *call, const char *what) {
 CpvStaticDeclare(PeState *, regionPeState);
 CpvStaticDeclare(int, regionFireHandlerIdx);
 CpvStaticDeclare(int, regionDoneHandlerIdx);
+CpvStaticDeclare(int, regionPutDataHandlerIdx);
+CpvStaticDeclare(int, regionGetRequestHandlerIdx);
+CpvStaticDeclare(int, regionGetReplyHandlerIdx);
 
 namespace cmi_region {
 
@@ -71,6 +89,15 @@ CounterLine *lineOf(int rank, uint32_t index) {
                            .chunks[index / g_linesPerChunk]
                            .load(std::memory_order_acquire);
   return chunk ? chunk + index % g_linesPerChunk : nullptr;
+}
+
+std::atomic<uint64_t> *regionLandedOf(int rank, uint32_t slot) {
+  if (rank < 0 || rank >= CmiMyNodeSize() || slot >= kMaxRegionsPerPe)
+    return nullptr;
+  std::atomic<uint64_t> *chunk = g_slices[rank]
+                                     .landedChunks[slot / g_landedPerChunk]
+                                     .load(std::memory_order_acquire);
+  return chunk ? chunk + slot % g_landedPerChunk : nullptr;
 }
 
 void qdCount(int created, int processed) {
@@ -107,6 +134,20 @@ CounterLine *allocLine(PeState *ps, uint32_t index) {
     slot.store(chunk, std::memory_order_release);
   }
   return chunk + index % g_linesPerChunk;
+}
+
+// A region slot's landed count, allocated as allocLine allocates lines.
+std::atomic<uint64_t> *allocLanded(PeState *ps, uint32_t slot) {
+  std::atomic<std::atomic<uint64_t> *> &entry =
+      g_slices[ps->rank].landedChunks[slot / g_landedPerChunk];
+  std::atomic<uint64_t> *chunk = entry.load(std::memory_order_relaxed);
+  if (chunk == nullptr) {
+    chunk = new std::atomic<uint64_t>[g_landedPerChunk];
+    for (uint32_t i = 0; i < g_landedPerChunk; i++)
+      chunk[i].store(0, std::memory_order_relaxed);
+    entry.store(chunk, std::memory_order_release);
+  }
+  return chunk + slot % g_landedPerChunk;
 }
 
 #if CMI_REGION_CHECKS
@@ -231,10 +272,25 @@ void completeCounter(CmiCounterRec *c) {
   delete c;
 }
 
+// The contributions that have reached the counter's word (design 10.2).
+int64_t landedOf(const CmiCounterRec *c) {
+  return (int64_t)c->sumArmed -
+         c->line->word.load(std::memory_order_acquire);
+}
+
+void scheduleRecheck(ObjKind kind, uint32_t slot, uint32_t gen, bool &flag);
+
+// A destroy completes once every attached process has sent its notice and
+// every contribution the notices report has landed; a counter's also waits
+// for the regions it was paired with.
 void tryCompleteCounter(CmiCounterRec *c) {
   if (c->state != ObjState::Destroying || !c->balance.empty() ||
       !c->pairedRegions.empty())
     return;
+  if (landedOf(c) < (int64_t)c->expected) {
+    scheduleRecheck(ObjKind::Counter, c->index, c->generation, c->recheck);
+    return;
+  }
   completeCounter(c);
 }
 
@@ -243,6 +299,7 @@ void completeRegion(CmiRegionRec *r) {
   ps->regionGen[r->slot]++;
   ps->regions[r->slot] = nullptr;
   ps->freeRegions.push_back(r->slot);
+  if (r->mr != comm_backend::MR_NULL) comm_backend::deregisterMemory(r->mr);
   if (r->runtimeAllocated) alignedFree(r->base);
   postDone(r->done, r->doneArg);
   // a counter's destroy waits for the regions it was paired with
@@ -256,9 +313,51 @@ void completeRegion(CmiRegionRec *r) {
   for (CmiCounterRec *c : paired) tryCompleteCounter(c);
 }
 
+// The region's puts have landed: those without a counter by the region's
+// own count, those with one by their counters'. A counter that also serves
+// regions still attached counts their contributions too, which can hide a
+// put of this region still in flight; see doc/internals/persistent-family.md.
 void tryCompleteRegion(CmiRegionRec *r) {
   if (r->state != ObjState::Destroying || !r->balance.empty()) return;
+  std::atomic<uint64_t> *landed = regionLandedOf(peState()->rank, r->slot);
+  bool waiting = landed->load(std::memory_order_acquire) < r->expectedUncounted;
+  for (CmiCounterRec *c : r->pairedCounters)
+    if (landedOf(c) < (int64_t)c->expected) waiting = true;
+  if (waiting) {
+    scheduleRecheck(ObjKind::Region, r->slot, r->generation, r->recheck);
+    return;
+  }
   completeRegion(r);
+}
+
+// A destroy waiting for contributions in flight looks again shortly; they
+// land at poll time, on threads that do not know about the destroy.
+struct Recheck {
+  ObjKind kind;
+  uint32_t slot, gen;
+};
+
+void recheckFn(void *arg, double) {
+  Recheck *rc = static_cast<Recheck *>(arg);
+  PeState *ps = peState();
+  if (rc->kind == ObjKind::Region) {
+    if (rc->slot < ps->regions.size() && ps->regions[rc->slot] != nullptr &&
+        ps->regions[rc->slot]->generation == rc->gen) {
+      ps->regions[rc->slot]->recheck = false;
+      tryCompleteRegion(ps->regions[rc->slot]);
+    }
+  } else if (rc->slot < ps->counters.size() && ps->counters[rc->slot] &&
+             ps->counters[rc->slot]->generation == rc->gen) {
+    ps->counters[rc->slot]->recheck = false;
+    tryCompleteCounter(ps->counters[rc->slot]);
+  }
+  delete rc;
+}
+
+void scheduleRecheck(ObjKind kind, uint32_t slot, uint32_t gen, bool &flag) {
+  if (flag) return;
+  flag = true;
+  CcdCallFnAfter(recheckFn, new Recheck{kind, slot, gen}, 0.05);
 }
 
 AttachEntry entryOf(const CmiRegionRec *r) {
@@ -292,7 +391,8 @@ void requestDetachAll(const std::unordered_map<int, int> &balance,
 
 namespace cmi_region {
 
-bool applyAttach(AttachOp op, const AttachEntry &e, int fromNode) {
+bool applyAttach(AttachOp op, const AttachEntry &e, const CountEntry *counts,
+                 int fromNode) {
   PeState *ps = peState();
   CmiRegionRec *r = nullptr;
   CmiCounterRec *c = nullptr;
@@ -309,6 +409,21 @@ bool applyAttach(AttachOp op, const AttachEntry &e, int fromNode) {
     if (op == AttachOp::Register) sendDetachRequest(fromNode, e);
     return false;
   }
+  // what the process contributed through this registration (10.2)
+  std::vector<std::pair<uint32_t, uint32_t>> counted;
+  if (op == AttachOp::Notice) {
+    for (uint32_t i = 0; i < e.nCounts; i++) {
+      const CountEntry &ce = counts[i];
+      if (ce.counterIndex == kUncounted) {
+        if (r) r->expectedUncounted += ce.count;
+      } else if (ce.counterIndex < ps->counters.size() &&
+                 ps->counters[ce.counterIndex] != nullptr &&
+                 ps->counters[ce.counterIndex]->generation == ce.counterGen) {
+        ps->counters[ce.counterIndex]->expected += ce.count;
+        counted.push_back({ce.counterIndex, ce.counterGen});
+      }
+    }
+  }
   std::unordered_map<int, int> &balance = r ? r->balance : c->balance;
   int b = balance[fromNode] += (op == AttachOp::Register ? 1 : -1);
   if (b == 0) balance.erase(fromNode);
@@ -319,10 +434,177 @@ bool applyAttach(AttachOp op, const AttachEntry &e, int fromNode) {
     sendDetachRequest(fromNode, e);
   if (r) tryCompleteRegion(r);
   else tryCompleteCounter(c);
+  // a counter whose expected count rose may complete now; looked up again,
+  // since the completions above can have freed it
+  for (const auto &ig : counted)
+    if (ig.first < ps->counters.size() && ps->counters[ig.first] != nullptr &&
+        ps->counters[ig.first]->generation == ig.second)
+      tryCompleteCounter(ps->counters[ig.first]);
   return true;
 }
 
 } // namespace cmi_region
+
+// ---------------------------------------------------------------------------
+// Arrivals from another process (design 5.2 (c), 5.3): only the decrement,
+// and the push of the counter's message, run where the network is polled.
+
+namespace {
+
+// The counter of a contribution that arrived from another process, which the
+// network or a message names by index; generation is checked when known.
+CounterLine *arrivedLine(int rank, uint32_t index, const uint32_t *gen,
+                         const char *call) {
+  CounterLine *L = lineOf(rank, index);
+  if (L == nullptr ||
+      !(L->flags.load(std::memory_order_acquire) & kLineLive) ||
+      (gen != nullptr && L->generation.load(std::memory_order_relaxed) != *gen))
+    CmiAbort("%s: a contribution from another process reached counter %u "
+             "(generation %u) of PE %d, which was destroyed; the target is "
+             "stale. %s\n", call, index, gen ? *gen : 0u,
+             CmiNodeFirst(CmiMyNode()) + rank, kReadinessAdvice);
+  return L;
+}
+
+// Put with signal, kind kSignalCounter: the data is in place.
+void counterSignalHandler(void *, int destPe, uint16_t signal, int, size_t) {
+  contribute(arrivedLine(CmiRankOf(destPe), signal, nullptr, "CmiPut"), 1,
+             "CmiPut");
+}
+
+// Put with signal, kind kSignalRegion: a put without a counter landed.
+void regionSignalHandler(void *, int destPe, uint16_t signal, int, size_t) {
+  int destRank = CmiRankOf(destPe);
+  std::atomic<uint64_t> *landed = regionLandedOf(destRank, signal);
+  if (landed == nullptr)
+    CmiAbort("CmiPut: a put from another process reached region slot %u of "
+             "PE %d, which never existed\n", signal,
+             CmiNodeFirst(CmiMyNode()) + destRank);
+  landed->fetch_add(1, std::memory_order_release);
+  qdCount(0, 1);
+}
+
+// CmiSignal from another process: an active message, handled at poll time.
+struct SignalMsg {
+  char core[CmiMsgHeaderSizeBytes];
+  int32_t rank;
+  uint32_t index, gen;
+};
+
+void signalAmHandler(comm_backend::Status status) {
+  auto *m = static_cast<SignalMsg *>(const_cast<void *>(status.local_buf));
+  contribute(arrivedLine(m->rank, m->index, &m->gen, "CmiSignal"), 1,
+             "CmiSignal");
+  CmiFree(m);
+}
+
+// A put carried in a message, where the network has no put with signal, or
+// for a small put where it is emulated. Handled on the owner PE: the copy
+// runs there, not where the network is polled (W7).
+struct PutDataMsg {
+  char core[CmiMsgHeaderSizeBytes];
+  uint64_t pieceAddr, offset, bytes;
+  uint32_t regionSlot, regionGen, counterIndex, counterGen;
+  uint16_t flags;
+  uint16_t pad;
+  int32_t fromPe;
+  // the data follows
+};
+
+CmiRegionRec *liveRegion(uint32_t slot, uint32_t gen, int fromPe,
+                         const char *call) {
+  PeState *ps = peState();
+  if (slot >= ps->regions.size() || ps->regions[slot] == nullptr ||
+      ps->regions[slot]->generation != gen)
+    CmiAbort("%s: a transfer from PE %d reached region slot %u (generation "
+             "%u) of PE %d, which was destroyed. %s\n", call, fromPe, slot,
+             gen, CmiMyPe(), kReadinessAdvice);
+  return ps->regions[slot];
+}
+
+void putDataHandler(void *vmsg) {
+  auto *m = static_cast<PutDataMsg *>(vmsg);
+  liveRegion(m->regionSlot, m->regionGen, m->fromPe, "CmiPut");
+  memcpy((char *)(uintptr_t)m->pieceAddr + m->offset, m + 1, m->bytes);
+  if (m->flags & kTargetHasCounter) {
+    contribute(arrivedLine(peState()->rank, m->counterIndex, &m->counterGen,
+                           "CmiPut"),
+               1, "CmiPut");
+  } else {
+    regionLandedOf(peState()->rank, m->regionSlot)
+        ->fetch_add(1, std::memory_order_release);
+    qdCount(0, 1);
+  }
+  CmiFree(m);
+}
+
+// A get without one-sided support: a request to the owner PE, which answers
+// with the bytes.
+struct GetCtx {
+  CmiAttachRec *rec;
+  CmiCounter local;
+  void *dst;
+};
+struct GetRequestMsg {
+  char core[CmiMsgHeaderSizeBytes];
+  uint64_t src, bytes;
+  uint32_t regionSlot, regionGen;
+  int32_t replyPe;
+  GetCtx *ctx;
+};
+struct GetReplyMsg {
+  char core[CmiMsgHeaderSizeBytes];
+  uint64_t bytes;
+  GetCtx *ctx;
+  // the data follows
+};
+
+void getRequestHandler(void *vmsg) {
+  auto *m = static_cast<GetRequestMsg *>(vmsg);
+  liveRegion(m->regionSlot, m->regionGen, m->replyPe, "CmiGet");
+  int size = (int)(sizeof(GetReplyMsg) + m->bytes);
+  auto *r = static_cast<GetReplyMsg *>(CmiAlloc(size));
+  r->bytes = m->bytes;
+  r->ctx = m->ctx;
+  memcpy(r + 1, (const void *)(uintptr_t)m->src, m->bytes);
+  CmiSetHandler(r, CpvAccess(regionGetReplyHandlerIdx));
+  CmiSyncSendAndFree(m->replyPe, size, r);
+  CmiFree(m);
+}
+
+// A get has completed at the reader: by the network, or by the reply.
+void getDone(GetCtx *ctx) {
+  if (ctx->local != nullptr) contribute(ctx->local->line, 1, "CmiGet");
+  qdCount(0, 1);
+  operationDone(ctx->rec);
+  delete ctx;
+}
+
+void getReplyHandler(void *vmsg) {
+  auto *m = static_cast<GetReplyMsg *>(vmsg);
+  memcpy(m->ctx->dst, m + 1, m->bytes);
+  getDone(m->ctx);
+  CmiFree(m);
+}
+
+void getLocalDone(comm_backend::Status status) {
+  getDone(static_cast<GetCtx *>(status.user_context));
+}
+
+// A put with signal's source may be reused (design 4.5).
+struct PutCtx {
+  CmiAttachRec *rec;
+  CmiCounter local;
+};
+
+void putLocalDone(comm_backend::Status status) {
+  auto *ctx = static_cast<PutCtx *>(status.user_context);
+  if (ctx->local != nullptr) contribute(ctx->local->line, 1, "CmiPut");
+  operationDone(ctx->rec);
+  delete ctx;
+}
+
+} // namespace
 
 // ---------------------------------------------------------------------------
 // Initialisation
@@ -340,14 +622,46 @@ void CmiRegionNodeInit(char **argv) {
   g_linesPerChunk = (uint32_t)(page / sizeof(CounterLine));
   uint32_t nchunks =
       (kMaxCountersPerPe + g_linesPerChunk - 1) / g_linesPerChunk;
+  g_landedPerChunk = (uint32_t)(page / sizeof(std::atomic<uint64_t>));
+  uint32_t nlanded =
+      (kMaxRegionsPerPe + g_landedPerChunk - 1) / g_landedPerChunk;
   int nranks = CmiMyNodeSize();
   g_slices = new CounterSlice[nranks];
   for (int r = 0; r < nranks; r++) {
     g_slices[r].chunks = new std::atomic<CounterLine *>[nchunks];
     for (uint32_t i = 0; i < nchunks; i++)
       g_slices[r].chunks[i].store(nullptr, std::memory_order_relaxed);
+    g_slices[r].landedChunks = new std::atomic<std::atomic<uint64_t> *>[nlanded];
+    for (uint32_t i = 0; i < nlanded; i++)
+      g_slices[r].landedChunks[i].store(nullptr, std::memory_order_relaxed);
   }
   attachNodeInit();
+
+  // Between processes: regions are registered for one-sided transfers when
+  // the backend has them (RDMAInit has read +nordma), and a put carries its
+  // signal in the network operation where the backend can.
+  g_useRma = comm_backend::isRMACapable() && !CmiUseCopyBasedRDMA;
+  g_usePutSignal = g_useRma && comm_backend::isPutSignalCapable();
+  if (g_useRma &&
+      comm_backend::getRMR(comm_backend::MR_NULL, nullptr, 0) >
+          CMI_TARGET_RKEY_BYTES)
+    CmiAbort("regions: the backend's remote key takes %zu bytes, more than a "
+             "target's %d\n",
+             comm_backend::getRMR(comm_backend::MR_NULL, nullptr, 0),
+             CMI_TARGET_RKEY_BYTES);
+  // Where the backend emulates the put with signal (the write, its delivery
+  // completion, then a message), a small put is quicker as one message.
+  int messageMax = comm_backend::isPutSignalNative() ? 0 : 64;
+  CmiGetArgIntDesc(argv, "+put_message_max_bytes", &messageMax,
+                   "between processes, a CmiPut of at most this many bytes "
+                   "travels as one message with its signal (default 0 where "
+                   "the put with signal is one network operation, else 64)");
+  if (messageMax < 0) messageMax = 0;
+  g_putMessageMax = (size_t)messageMax;
+  g_verbose = CmiGetArgFlagDesc(argv, "+region_verbose",
+                                "say how a CmiPut to another process travels, "
+                                "the first time each way is used");
+  g_signalAm = comm_backend::registerAmHandler(signalAmHandler);
 }
 
 void CmiRegionPeInit(void) {
@@ -358,7 +672,23 @@ void CmiRegionPeInit(void) {
   CpvAccess(regionFireHandlerIdx) = CmiRegisterHandler(fireHandler);
   CpvInitialize(int, regionDoneHandlerIdx);
   CpvAccess(regionDoneHandlerIdx) = CmiRegisterHandler(doneHandler);
+  CpvInitialize(int, regionPutDataHandlerIdx);
+  CpvAccess(regionPutDataHandlerIdx) = CmiRegisterHandler(putDataHandler);
+  CpvInitialize(int, regionGetRequestHandlerIdx);
+  CpvAccess(regionGetRequestHandlerIdx) = CmiRegisterHandler(getRequestHandler);
+  CpvInitialize(int, regionGetReplyHandlerIdx);
+  CpvAccess(regionGetReplyHandlerIdx) = CmiRegisterHandler(getReplyHandler);
   attachPeInit();
+  // The signal kinds, registered through Converse's table so that kinds
+  // other code adds keep its numbering; the same kinds in the same order in
+  // every process, before the start-up barrier that precedes any put. The
+  // other PEs read them after the node barrier that follows.
+  if (CmiMyRank() == 0 && g_usePutSignal) {
+    g_putKinds[kSignalCounter] =
+        CmiRegisterRputSignalKind(counterSignalHandler, nullptr);
+    g_putKinds[kSignalRegion] =
+        CmiRegisterRputSignalKind(regionSignalHandler, nullptr);
+  }
 }
 
 void CmiRegionSetQdHook(CmiRegionQdFn fn) {
@@ -415,8 +745,10 @@ CmiCounter CmiCounterCreate(int32_t n, CmiCounterAction action, int flags) {
   c->roundsArmed = 1;
   c->sumArmed = (uint64_t)n;
   c->sumStarted = 0;
+  c->expected = 0;
   c->state = ObjState::Live;
   c->destroyFlags = 0;
+  c->recheck = false;
   c->done = nullptr;
   c->doneArg = nullptr;
 
@@ -507,10 +839,16 @@ CmiRegion CmiRegionCreate(void *base, size_t bytes, CmiMemKind kind, int devId,
     slot = ps->freeRegions.front();
     ps->freeRegions.pop_front();
   } else {
+    if (ps->regions.size() >= kMaxRegionsPerPe)
+      CmiAbort("CmiRegionCreate: PE %d already has %u regions, the limit\n",
+               CmiMyPe(), kMaxRegionsPerPe);
     slot = (uint32_t)ps->regions.size();
     ps->regions.push_back(nullptr);
     ps->regionGen.push_back(0);
   }
+  // the previous region in the slot completed its destroy only once its
+  // puts had landed
+  allocLanded(ps, slot)->store(0, std::memory_order_relaxed);
   auto *r = new CmiRegionRec();
   r->base = base;
   r->bytes = bytes;
@@ -519,8 +857,17 @@ CmiRegion CmiRegionCreate(void *base, size_t bytes, CmiMemKind kind, int devId,
   r->ownerPe = CmiMyPe();
   r->slot = slot;
   r->generation = ps->regionGen[slot];
+  r->mr = comm_backend::MR_NULL;
+  memset(r->rkey, 0, sizeof(r->rkey));
+  if (g_useRma && CmiNumNodes() > 1) {
+    // registered once, on this PE's network device (design 6)
+    r->mr = comm_backend::registerMemory(base, bytes);
+    comm_backend::getRMR(r->mr, r->rkey, sizeof(r->rkey));
+  }
+  r->expectedUncounted = 0;
   r->state = ObjState::Live;
   r->destroyFlags = 0;
+  r->recheck = false;
   r->done = nullptr;
   r->doneArg = nullptr;
   ps->regions[slot] = r;
@@ -608,13 +955,19 @@ CmiTarget CmiTargetMake(CmiRegion r, int piece, CmiCounter c) {
     t.pieceAddr = (uint64_t)(uintptr_t)((char *)r->base + offset);
     t.pieceDisp = offset;
     t.pieceBytes = bytes;
+    if (r->mr != comm_backend::MR_NULL) {
+      t.flags |= kTargetHasRkey;
+      memcpy(t.rkey, r->rkey, sizeof(t.rkey));
+    }
+    t.sigKind = kSignalRegion;
+    t.sigValue = (uint16_t)r->slot;
   }
   if (c != nullptr) {
     t.flags |= kTargetHasCounter;
     if (c->action.kind != CMI_ACTION_NONE) t.flags |= kTargetQdCounted;
     t.counterIndex = c->index;
     t.counterGen = c->generation;
-    t.sigKind = 0;
+    t.sigKind = kSignalCounter;
     t.sigValue = (uint16_t)c->index;
   }
   if (r != nullptr && c != nullptr &&
@@ -627,7 +980,7 @@ CmiTarget CmiTargetMake(CmiRegion r, int piece, CmiCounter c) {
 }
 
 // ---------------------------------------------------------------------------
-// The data paths within a process (design 5.2 (a), 6)
+// The data paths (design 5.2, 6)
 
 namespace {
 
@@ -646,9 +999,18 @@ CmiAttachmentRec *checkHandle(CmiAttachment a, const char *call) {
   return a;
 }
 
-// The target's counter, checked against the target's generation in every
-// build: the check reads the line the contribution writes next.
-CounterLine *liveLine(CmiAttachmentRec *a, const char *call) {
+bool isLocal(const CmiTarget &t) { return t.ownerNode == CmiMyNode(); }
+
+// One more contribution through this attachment, for its detach notice
+// (design 10.2); returns how many there have been.
+uint64_t counted(CmiAttachmentRec *a) {
+  return a->contributions.fetch_add(1, std::memory_order_relaxed) + 1;
+}
+
+// The target's counter, in this process, checked against the target's
+// generation in every build: the check reads the line the contribution
+// writes next. k is this contribution's number through the attachment.
+CounterLine *liveLine(CmiAttachmentRec *a, uint64_t k, const char *call) {
   const CmiTarget &t = a->target;
   CounterLine *L = lineOf(CmiRankOf(t.ownerPe), t.counterIndex);
   if (L == nullptr ||
@@ -660,21 +1022,67 @@ CounterLine *liveLine(CmiAttachmentRec *a, const char *call) {
 #if CMI_REGION_CHECKS
   // the k-th contribution through one attachment needs round k armed
   if (L->flags.load(std::memory_order_relaxed) & kLineCheckRounds) {
-    uint32_t k = a->seq.fetch_add(1, std::memory_order_relaxed) + 1;
     uint32_t armed = L->armedRounds.load(std::memory_order_acquire);
     if (k > armed)
       abortReadiness(call, L,
-                     "this attachment's contribution %u arrived while the "
+                     "this attachment's contribution %llu arrived while the "
                      "owner had armed %u rounds, so it would count in place "
-                     "of another origin's", k, armed);
+                     "of another origin's", (unsigned long long)k, armed);
   }
+#else
+  (void)k;
 #endif
   return L;
 }
 
-void contributeLocal(CmiCounter local, const char *call) {
-  if (local->action.kind != CMI_ACTION_NONE) qdCount(1, 0);
-  contribute(local->line, 1, call);
+// QD (design 4.8): a contribution to a counter with an action is processed
+// with its round; a put without a counter, when it lands.
+void qdIssued(const CmiTarget &t, bool contributes, CmiCounter local) {
+  if (contributes && (t.flags & kTargetHasCounter
+                          ? (t.flags & kTargetQdCounted) != 0
+                          : !isLocal(t)))
+    qdCount(1, 0);
+  if (local != nullptr && local->action.kind != CMI_ACTION_NONE) qdCount(1, 0);
+}
+
+void showPath(int path, size_t bytes, const CmiTarget &t) {
+  if (!g_verbose || g_pathShown[path].exchange(true)) return;
+  CmiPrintf("Reconverse> regions: a %zu-byte CmiPut to process %d travels %s\n",
+            bytes, t.ownerNode,
+            path == 0 ? "as a put with signal"
+                      : "in one message with its signal");
+}
+
+void putRemote(CmiAttachmentRec *a, size_t offset, const void *src,
+               size_t bytes, CmiCounter local) {
+  const CmiTarget &t = a->target;
+  if (g_usePutSignal && (t.flags & kTargetHasRkey) && bytes > g_putMessageMax) {
+    showPath(0, bytes, t);
+    a->rec->outstanding.fetch_add(1, std::memory_order_relaxed);
+    comm_backend::issueRputSignal(
+        CmiNodeToGlobal(t.ownerNode), src, bytes, comm_backend::MR_NULL,
+        (uintptr_t)(t.pieceDisp + offset), const_cast<uint8_t *>(t.rkey),
+        CmiRankOf(t.ownerPe), g_putKinds[t.sigKind], t.sigValue, putLocalDone,
+        new PutCtx{a->rec, local});
+    return;
+  }
+  showPath(1, bytes, t);
+  int size = (int)(sizeof(PutDataMsg) + bytes);
+  auto *m = static_cast<PutDataMsg *>(CmiAlloc(size));
+  m->pieceAddr = t.pieceAddr;
+  m->offset = offset;
+  m->bytes = bytes;
+  m->regionSlot = t.regionSlot;
+  m->regionGen = t.regionGen;
+  m->counterIndex = t.counterIndex;
+  m->counterGen = t.counterGen;
+  m->flags = t.flags;
+  m->pad = 0;
+  m->fromPe = CmiMyPe();
+  memcpy(m + 1, src, bytes);
+  CmiSetHandler(m, CpvAccess(regionPutDataHandlerIdx));
+  CmiSyncSendAndFree(t.ownerPe, size, m);
+  if (local != nullptr) contribute(local->line, 1, "CmiPut");
 }
 
 } // namespace
@@ -687,11 +1095,18 @@ int CmiPut(CmiAttachment t, size_t offset, const void *src, size_t bytes,
   if (srcLayout != nullptr || stream != nullptr) return CMI_REGION_EUNSUPPORTED;
   if (offset > tg.pieceBytes || bytes > tg.pieceBytes - offset)
     return CMI_REGION_ECAPACITY;
-  CounterLine *L = (tg.flags & kTargetHasCounter) ? liveLine(a, "CmiPut") : nullptr;
-  if (tg.flags & kTargetQdCounted) qdCount(1, 0);
+  bool hasCounter = (tg.flags & kTargetHasCounter) != 0;
+  if (!isLocal(tg)) {
+    counted(a);
+    qdIssued(tg, true, local);
+    putRemote(a, offset, src, bytes, local);
+    return CMI_REGION_OK;
+  }
+  CounterLine *L = hasCounter ? liveLine(a, counted(a), "CmiPut") : nullptr;
+  qdIssued(tg, hasCounter, local);
   memcpy((char *)(uintptr_t)tg.pieceAddr + offset, src, bytes);
   if (L != nullptr) contribute(L, 1, "CmiPut");
-  if (local != nullptr) contributeLocal(local, "CmiPut");
+  if (local != nullptr) contribute(local->line, 1, "CmiPut");
   return CMI_REGION_OK;
 }
 
@@ -703,8 +1118,33 @@ int CmiGet(void *dst, size_t bytes, const CmiLayout *dstLayout,
   if (dstLayout != nullptr || stream != nullptr) return CMI_REGION_EUNSUPPORTED;
   if (offset > tg.pieceBytes || bytes > tg.pieceBytes - offset)
     return CMI_REGION_ECAPACITY;
-  memcpy(dst, (const char *)(uintptr_t)tg.pieceAddr + offset, bytes);
-  if (local != nullptr) contributeLocal(local, "CmiGet");
+  if (isLocal(tg)) {
+    memcpy(dst, (const char *)(uintptr_t)tg.pieceAddr + offset, bytes);
+    qdIssued(tg, false, local);
+    if (local != nullptr) contribute(local->line, 1, "CmiGet");
+    return CMI_REGION_OK;
+  }
+  // created here, processed at its completion (design 4.8)
+  qdCount(1, 0);
+  qdIssued(tg, false, local);
+  a->rec->outstanding.fetch_add(1, std::memory_order_relaxed);
+  auto *ctx = new GetCtx{a->rec, local, dst};
+  if (g_useRma && (tg.flags & kTargetHasRkey) && bytes > 0) {
+    comm_backend::issueRget(CmiNodeToGlobal(tg.ownerNode), dst, bytes,
+                            comm_backend::MR_NULL,
+                            (void *)(uintptr_t)(tg.pieceAddr + offset),
+                            const_cast<uint8_t *>(tg.rkey), getLocalDone, ctx);
+    return CMI_REGION_OK;
+  }
+  auto *m = static_cast<GetRequestMsg *>(CmiAlloc(sizeof(GetRequestMsg)));
+  m->src = tg.pieceAddr + offset;
+  m->bytes = bytes;
+  m->regionSlot = tg.regionSlot;
+  m->regionGen = tg.regionGen;
+  m->replyPe = CmiMyPe();
+  m->ctx = ctx;
+  CmiSetHandler(m, CpvAccess(regionGetRequestHandlerIdx));
+  CmiSyncSendAndFree(tg.ownerPe, sizeof(GetRequestMsg), m);
   return CMI_REGION_OK;
 }
 
@@ -712,8 +1152,20 @@ int CmiSignal(CmiAttachment t) {
   CmiAttachmentRec *a = checkHandle(t, "CmiSignal");
   const CmiTarget &tg = a->target;
   if (!(tg.flags & kTargetHasCounter)) return CMI_REGION_ENOCOUNTER;
-  CounterLine *L = liveLine(a, "CmiSignal");
-  if (tg.flags & kTargetQdCounted) qdCount(1, 0);
+  if (!isLocal(tg)) {
+    counted(a);
+    qdIssued(tg, true, nullptr);
+    auto *m = static_cast<SignalMsg *>(CmiAlloc(sizeof(SignalMsg)));
+    m->rank = CmiRankOf(tg.ownerPe);
+    m->index = tg.counterIndex;
+    m->gen = tg.counterGen;
+    reinterpret_cast<CmiMessageHeader *>(m)->messageSize = sizeof(SignalMsg);
+    comm_backend::issueAm(CmiNodeToGlobal(tg.ownerNode), m, sizeof(SignalMsg),
+                          MRFIELD(m), CommLocalHandler, g_signalAm, nullptr);
+    return CMI_REGION_OK;
+  }
+  CounterLine *L = liveLine(a, counted(a), "CmiSignal");
+  qdIssued(tg, true, nullptr);
   contribute(L, 1, "CmiSignal");
   return CMI_REGION_OK;
 }

@@ -19,16 +19,27 @@
 #define CMI_REGION_CHECKS 0
 #endif
 
+struct CmiAttachRec;
+
 namespace cmi_region {
 
-// A PE's counters are numbered below this, the 16-bit signal's range.
+// A PE's counters, and its regions, are numbered below this, the 16-bit
+// signal's range.
 constexpr uint32_t kMaxCountersPerPe = 65536;
+constexpr uint32_t kMaxRegionsPerPe = 65536;
 
 // CmiTarget::flags
 enum TargetFlags : uint16_t {
   kTargetHasRegion = 1,
   kTargetHasCounter = 2,
   kTargetQdCounted = 4, // the counter has an action, so QD counts its rounds
+  kTargetHasRkey = 8,   // the region is registered with the network
+};
+
+// CmiTarget::sigKind: what a put with signal's 16-bit signal names.
+enum SignalKind : uint16_t {
+  kSignalCounter = 0, // a counter of the owner PE: decrement it
+  kSignalRegion = 1,  // a region of the owner PE, for a put without a counter
 };
 
 enum LineFlags : uint32_t {
@@ -58,6 +69,8 @@ static_assert(sizeof(CounterLine) == CMI_CACHE_LINE_SIZE,
 // that phase 3 can place the chunks in a shared area.
 struct CounterSlice {
   std::atomic<CounterLine *> *chunks; // kMaxCountersPerPe / linesPerChunk
+  // per region slot, the puts without a counter that have landed
+  std::atomic<std::atomic<uint64_t> *> *landedChunks;
 };
 
 // The message that runs a counter's action on the owner PE (design 5.3).
@@ -71,7 +84,8 @@ struct FireMsg {
 enum class ObjState : int { Live, Destroying };
 
 // Attach-protocol message: registrations or detach notices for objects of
-// one owner process, from one origin process (design 10.1).
+// one owner process, from one origin process (design 10.1). A notice says
+// how many contributions the process made, per counter (design 10.2).
 enum class AttachOp : uint8_t { Register = 1, Notice = 2 };
 enum class ObjKind : uint8_t { Region = 1, Counter = 2 };
 struct AttachEntry {
@@ -80,15 +94,29 @@ struct AttachEntry {
   uint32_t gen;
   uint8_t kind;  // ObjKind
   uint8_t pad[3];
+  uint32_t firstCount, nCounts; // this entry's CountEntries in the message
+};
+// Contributions through one registration: to a counter, or (counterIndex
+// kUncounted) puts without a counter into the region.
+constexpr uint32_t kUncounted = 0xffffffffu;
+struct CountEntry {
+  uint32_t counterIndex, counterGen;
+  uint64_t count;
 };
 struct AttachMsg {
   char core[CmiMsgHeaderSizeBytes];
   int32_t fromNode;
-  int32_t n;
+  int32_t n, nCounts;
   uint8_t op; // AttachOp
-  uint8_t pad[7];
-  AttachEntry entries[1]; // n of them
+  uint8_t pad[3];
+  // n AttachEntries, then nCounts CountEntries
 };
+inline AttachEntry *attachEntries(AttachMsg *m) {
+  return reinterpret_cast<AttachEntry *>(m + 1);
+}
+inline CountEntry *countEntries(AttachMsg *m) {
+  return reinterpret_cast<CountEntry *>(attachEntries(m) + m->n);
+}
 
 // Owner to origin process: detach from this object (10.1, 10.2).
 struct DetachRequestMsg {
@@ -118,6 +146,9 @@ struct PeState {
 
 PeState *peState();
 CounterLine *lineOf(int rank, uint32_t index); // null if never allocated
+// the landed count of a region slot of a PE of this process; null if never
+// allocated
+std::atomic<uint64_t> *regionLandedOf(int rank, uint32_t slot);
 
 // Converse handler indices, the same on every PE.
 int attachHandlerIdx();
@@ -127,14 +158,19 @@ void postDone(CmiDoneFn fn, void *arg);
 void qdCount(int created, int processed);
 
 // Owner side of the attach protocol (conv-region.cpp): a registration or
-// notice for one of this PE's objects; false if the object's generation is
-// gone.
-bool applyAttach(AttachOp op, const AttachEntry &e, int fromNode);
+// notice, with its counts, for one of this PE's objects; false if the
+// object's generation is gone.
+bool applyAttach(AttachOp op, const AttachEntry &e, const CountEntry *counts,
+                 int fromNode);
 void sendDetachRequest(int toNode, const AttachEntry &e);
 
 // Init, called from conv-region-attach.cpp's module init.
 void attachNodeInit();
 void attachPeInit();
+
+// A network operation through a registration has completed locally (origin
+// side); the last one of a registration whose notice waits sends it.
+void operationDone(CmiAttachRec *rec);
 
 } // namespace cmi_region
 
@@ -154,8 +190,12 @@ struct CmiRegionRec {
   std::vector<Piece> pieces;
   std::unordered_map<int, int> balance; // process: registrations - notices
   std::vector<CmiCounterRec *> pairedCounters;
+  comm_backend::mr_t mr; // MR_NULL when not registered
+  uint8_t rkey[CMI_TARGET_RKEY_BYTES];
+  uint64_t expectedUncounted; // puts without a counter, from the notices
   ObjState state;
   int destroyFlags;
+  bool recheck; // a timer will check the destroy again
   CmiDoneFn done;
   void *doneArg;
 };
@@ -173,28 +213,44 @@ struct CmiCounterRec {
   uint64_t sumArmed, sumStarted;
   std::vector<CmiRegionRec *> pairedRegions;
   std::unordered_map<int, int> balance; // counter-only attachments
+  uint64_t expected; // contributions reported by the notices
   ObjState state;
   int destroyFlags;
+  bool recheck; // a timer will check the destroy again
   CmiDoneFn done;
   void *doneArg;
 };
 
 // An origin process's registration with one region (or counter) of one
-// generation, shared by its attachments (design 3.1, 10.1).
+// generation, shared by its attachments (design 3.1, 10.1). Fields other
+// than the atomics are under the table lock.
 enum class AttachState : int { Registered, DetachedByOwner };
 struct CmiAttachRec {
   int32_t ownerNode;
   cmi_region::AttachEntry entry;
-  int refs; // under the table lock
+  int refs;
+  bool inTable;
+  bool noticeSent;
   std::atomic<int> state; // AttachState
+  // network operations issued and not yet locally complete, plus
+  // kNoticePending once the notice waits for them to reach zero
+  std::atomic<uint64_t> outstanding;
+  int noticeRank;   // the PE that sends the notice that waited
+  void *noticeMsg;  // the message that tells it to
+  std::vector<CmiAttachmentRec *> handles;
+  // contributions of detached handles: (counter index, generation) or
+  // kUncounted, to count
+  std::unordered_map<uint64_t, uint64_t> retired;
 };
+constexpr uint64_t kNoticePending = 1ull << 63;
 
 // One CmiAttachTarget's handle.
 struct CmiAttachmentRec {
   uint32_t magic;
   CmiTarget target;
   CmiAttachRec *rec;
-  std::atomic<uint32_t> seq; // contributions so far (round check)
+  // contributions through this handle; also the round check's k
+  std::atomic<uint64_t> contributions;
 };
 
 #endif // CONV_REGION_INTERNAL_H
