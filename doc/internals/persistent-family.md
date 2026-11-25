@@ -166,14 +166,13 @@ the device.
 | `CmiGet`, without one-sided support | a request to the owner PE | its handler copies the piece into the reply; the reply's handler copies it into the destination |
 
 The two put-with-signal kinds, "counter" (the signal is a counter index) and
-"region" (the signal is a region slot), are registered at start-up through
-`CmiRegisterRputSignalKind` on rank 0 of each process, the same kinds in the
-same order everywhere. They go through Converse's table rather than straight
-to the backend because that table numbers its kinds as the backend does, so
-that kinds other code adds keep their numbers. A put with signal reaches a
-given PE's counters because the backend gives each (kind, local rank) its own
-remote completion; the 16-bit signal then names one of that PE's 65536
-counters or regions (5.5).
+"region" (the signal is a region slot), are registered with the backend
+(`comm_backend::registerPutSignalKind`) at start-up, before the PE threads
+start, the same kinds in the same order in every process. Converse's own
+kinds (`CmiRegisterRputSignalKind`) take the backend's numbers too, so the two
+do not collide. A put with signal reaches a given PE's counters because the
+backend gives each (kind, local rank) its own remote completion; the 16-bit
+signal then names one of that PE's 65536 counters or regions (5.5).
 
 **Which way a put goes.** A put travels in a message where the backend has no
 put with signal (`+nordma`, `+lci_no_put_signal`, a backend without it), for

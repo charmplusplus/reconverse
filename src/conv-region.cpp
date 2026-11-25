@@ -486,14 +486,12 @@ CounterLine *arrivedLine(int rank, uint32_t index, const uint32_t *gen,
 }
 
 // Put with signal, kind kSignalCounter: the data is in place.
-void counterSignalHandler(void *, int destPe, uint16_t signal, int, size_t) {
-  contribute(arrivedLine(CmiRankOf(destPe), signal, nullptr, "CmiPut"), 1,
-             "CmiPut");
+void counterSignalHandler(void *, int destRank, uint16_t signal, int, size_t) {
+  contribute(arrivedLine(destRank, signal, nullptr, "CmiPut"), 1, "CmiPut");
 }
 
 // Put with signal, kind kSignalRegion: a put without a counter landed.
-void regionSignalHandler(void *, int destPe, uint16_t signal, int, size_t) {
-  int destRank = CmiRankOf(destPe);
+void regionSignalHandler(void *, int destRank, uint16_t signal, int, size_t) {
   std::atomic<uint64_t> *landed = regionLandedOf(destRank, signal);
   if (landed == nullptr)
     CmiAbort("CmiPut: a put from another process reached region slot %u of "
@@ -661,6 +659,14 @@ void CmiRegionNodeInit(char **argv) {
   // signal in the network operation where the backend can.
   g_useRma = comm_backend::isRMACapable() && !CmiUseCopyBasedRDMA;
   g_usePutSignal = g_useRma && comm_backend::isPutSignalCapable();
+  if (g_usePutSignal) {
+    // the same kinds in the same order in every process, before the
+    // start-up barrier that precedes any put
+    g_putKinds[kSignalCounter] =
+        comm_backend::registerPutSignalKind(counterSignalHandler, nullptr, nranks);
+    g_putKinds[kSignalRegion] =
+        comm_backend::registerPutSignalKind(regionSignalHandler, nullptr, nranks);
+  }
   if (g_useRma &&
       comm_backend::getRMR(comm_backend::MR_NULL, nullptr, 0) >
           CMI_TARGET_RKEY_BYTES)
@@ -698,16 +704,6 @@ void CmiRegionPeInit(void) {
   CpvInitialize(int, regionGetReplyHandlerIdx);
   CpvAccess(regionGetReplyHandlerIdx) = CmiRegisterHandler(getReplyHandler);
   attachPeInit();
-  // The signal kinds, registered through Converse's table so that kinds
-  // other code adds keep its numbering; the same kinds in the same order in
-  // every process, before the start-up barrier that precedes any put. The
-  // other PEs read them after the node barrier that follows.
-  if (CmiMyRank() == 0 && g_usePutSignal) {
-    g_putKinds[kSignalCounter] =
-        CmiRegisterRputSignalKind(counterSignalHandler, nullptr);
-    g_putKinds[kSignalRegion] =
-        CmiRegisterRputSignalKind(regionSignalHandler, nullptr);
-  }
 }
 
 void CmiRegionSetQdHook(CmiRegionQdFn fn) {
