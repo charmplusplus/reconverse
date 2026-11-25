@@ -172,20 +172,29 @@ int ownerPeOfLine(const CounterLine *L) {
 // A contribution of weight k (design 4.2, 5.3): the one that takes the word
 // to zero queues the counter's message on the owner PE. The message is read
 // before the decrement, so a destroy that completes right after the
-// decrement cannot hand this thread another counter's message.
-inline void contribute(CounterLine *L, int32_t k, const char *call) {
+// decrement cannot hand this thread another counter's message. The count
+// check is for a target's counter; a local counter's completion that comes
+// before its re-arm is no readiness error, and counts toward the next round.
+inline void contribute(CounterLine *L, int32_t k, const char *call,
+                       bool checked = true) {
   void *fire = L->fireMsg.load(std::memory_order_relaxed);
   int32_t old = L->word.fetch_sub(k, std::memory_order_acq_rel);
 #if CMI_REGION_CHECKS
-  if (old < k)
+  if (checked && old < k)
     abortReadiness(call, L,
                    "a contribution arrived after the round fired and before "
                    "the owner re-armed it (count %d, contribution %d)",
                    old, k);
 #else
   (void)call;
+  (void)checked;
 #endif
   if (old == k && fire != nullptr) CmiPushPE(L->ownerRank, fire);
+}
+
+// A local (source-completion) counter's contribution.
+inline void contributeLocal(CmiCounter local, const char *call) {
+  contribute(local->line, 1, call, false);
 }
 
 void rearmInternal(CmiCounterRec *c, int32_t n) {
@@ -195,9 +204,10 @@ void rearmInternal(CmiCounterRec *c, int32_t n) {
   c->sumArmed += (uint64_t)n;
   L->armedRounds.store(c->roundsArmed, std::memory_order_release);
   int32_t v = L->word.fetch_add(n, std::memory_order_acq_rel) + n;
-  // the next round had already arrived in full (design 4.2)
+  // the next round had already arrived in full (design 4.2); below zero,
+  // more than that, and the action re-arms again to count the rest
   void *fire = L->fireMsg.load(std::memory_order_relaxed);
-  if (v == 0 && fire != nullptr) CmiPushPE(L->ownerRank, fire);
+  if (v <= 0 && fire != nullptr) CmiPushPE(L->ownerRank, fire);
 }
 
 void runAction(CmiCounterRec *c, const CmiCounterAction &a, uint32_t round) {
@@ -574,7 +584,7 @@ void getRequestHandler(void *vmsg) {
 
 // A get has completed at the reader: by the network, or by the reply.
 void getDone(GetCtx *ctx) {
-  if (ctx->local != nullptr) contribute(ctx->local->line, 1, "CmiGet");
+  if (ctx->local != nullptr) contributeLocal(ctx->local, "CmiGet");
   qdCount(0, 1);
   operationDone(ctx->rec);
   delete ctx;
@@ -599,7 +609,7 @@ struct PutCtx {
 
 void putLocalDone(comm_backend::Status status) {
   auto *ctx = static_cast<PutCtx *>(status.user_context);
-  if (ctx->local != nullptr) contribute(ctx->local->line, 1, "CmiPut");
+  if (ctx->local != nullptr) contributeLocal(ctx->local, "CmiPut");
   operationDone(ctx->rec);
   delete ctx;
 }
@@ -1082,7 +1092,7 @@ void putRemote(CmiAttachmentRec *a, size_t offset, const void *src,
   memcpy(m + 1, src, bytes);
   CmiSetHandler(m, CpvAccess(regionPutDataHandlerIdx));
   CmiSyncSendAndFree(t.ownerPe, size, m);
-  if (local != nullptr) contribute(local->line, 1, "CmiPut");
+  if (local != nullptr) contributeLocal(local, "CmiPut");
 }
 
 } // namespace
@@ -1106,7 +1116,7 @@ int CmiPut(CmiAttachment t, size_t offset, const void *src, size_t bytes,
   qdIssued(tg, hasCounter, local);
   memcpy((char *)(uintptr_t)tg.pieceAddr + offset, src, bytes);
   if (L != nullptr) contribute(L, 1, "CmiPut");
-  if (local != nullptr) contribute(local->line, 1, "CmiPut");
+  if (local != nullptr) contributeLocal(local, "CmiPut");
   return CMI_REGION_OK;
 }
 
@@ -1121,7 +1131,7 @@ int CmiGet(void *dst, size_t bytes, const CmiLayout *dstLayout,
   if (isLocal(tg)) {
     memcpy(dst, (const char *)(uintptr_t)tg.pieceAddr + offset, bytes);
     qdIssued(tg, false, local);
-    if (local != nullptr) contribute(local->line, 1, "CmiGet");
+    if (local != nullptr) contributeLocal(local, "CmiGet");
     return CMI_REGION_OK;
   }
   // created here, processed at its completion (design 4.8)

@@ -146,7 +146,9 @@ void CmiRegionDestroy(CmiRegion r, int flags, CmiDoneFn done, void *arg);
 /* Counters (owner PE) */
 CmiCounter CmiCounterCreate(int32_t n, CmiCounterAction action, int flags);
 /* Arms the next round with n contributions. Legal once the current round's
-   action has started (for CMI_ACTION_NONE: once the value is at most 0). */
+   action has started (for CMI_ACTION_NONE: once the value is at most 0). If
+   n or more of the next round's contributions have already arrived, the
+   round fires at once. */
 void CmiCounterRearm(CmiCounter c, int32_t n);
 int32_t CmiCounterValue(CmiCounter c);
 /* Completes once every process attached to it has detached and every region
@@ -169,8 +171,10 @@ void CmiDetachTargets(CmiAttachment *a, int n);
 
 /* Writes bytes from src at offset within the target's piece, and decrements
    the target's counter, if it has one. local, if not NULL, is a counter of
-   this process decremented once src may be reused. srcLayout and stream must
-   be NULL. */
+   this process decremented once src may be reused; a completion that comes
+   before the local counter's re-arm is not an error (error-checking builds
+   do not check it), and counts toward its next round. srcLayout and stream
+   must be NULL. */
 int CmiPut(CmiAttachment t, size_t offset, const void *src, size_t bytes,
            const CmiLayout *srcLayout, CmiCounter local, void *stream);
 /* Reads bytes at offset within the target's piece into dst; decrements local
