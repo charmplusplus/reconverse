@@ -186,6 +186,7 @@ void CldModuleInit(char **);
 
 // PE LOCALS that need global access sometimes
 static ConverseQueue<void *> **Cmi_queues; // array of queue pointers
+static ConverseQueue<void *> **Cmi_urgentQueues; // per-PE, polled before every other queue
 
 // PE LOCALS
 // -1 until CmiInitState runs, so a thread that is not a PE never matches its
@@ -798,6 +799,7 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
 
   // allocate global arrays
   Cmi_queues = new ConverseQueue<void *> *[Cmi_mynodesize];
+  Cmi_urgentQueues = new ConverseQueue<void *> *[Cmi_mynodesize];
   CmiHandlerTable = new std::vector<CmiHandlerInfo> *[Cmi_mynodesize];
   CmiNodeQueue = new ConverseNodeQueue<void *>();
 
@@ -841,6 +843,7 @@ void CmiInitState(int rank) {
   std::vector<CmiHandlerInfo> *handlerTable = new std::vector<CmiHandlerInfo>();
 
   Cmi_queues[Cmi_myrank] = queue;
+  Cmi_urgentQueues[Cmi_myrank] = new ConverseQueue<void *>();
   CmiHandlerTable[Cmi_myrank] = handlerTable;
 
   // random
@@ -870,6 +873,7 @@ void CmiInitState(int rank) {
 }
 
 ConverseQueue<void *> *CmiGetQueue(int rank) { return Cmi_queues[rank]; }
+ConverseQueue<void *> *CmiGetUrgentQueue(int rank) { return Cmi_urgentQueues[rank]; }
 
 int CmiMyRank() { return CmiGetState()->rank; }
 
@@ -937,12 +941,29 @@ void CmiNumberHandlerEx(int n, CmiHandlerEx h, void *userPtr) {
   CmiGetHandlerTable()->at(n) = newEntry;
 }
 
+void CmiPushPEUrgent(int destRank, void *msg) {
+  CmiAssertMsg(destRank >= 0 && destRank < Cmi_mynodesize,
+               "CmiPushPEUrgent: rank %d out of range", destRank);
+  Cmi_urgentQueues[destRank]->push(msg);
+}
+
+void CmiSyncSendAndFreeUrgent(int destPE, int messageSize, void *msg) {
+  ((CmiMessageHeader *)msg)->urgent = 1;
+  CmiSyncSendAndFree(destPE, messageSize, msg);
+}
+
 void CmiPushPE(int destRank, int messageSize, void *msg) {
   int rank = destRank;
   CmiAssertMsg(
       rank >= 0 && rank < Cmi_mynodesize,
       "CmiPushPE(myPe: %d, destPe: %d, nodeSize: %d): rank out of range",
       CmiMyPe(), destRank, Cmi_mynodesize);
+  // an urgent message (CmiSyncSendAndFreeUrgent) goes to the destination's
+  // urgent queue whichever way it arrived: local push, IPC block, or network
+  if (((CmiMessageHeader *)msg)->urgent) {
+    Cmi_urgentQueues[rank]->push(msg);
+    return;
+  }
   Cmi_queues[rank]->push(msg);
 }
 
@@ -990,6 +1011,9 @@ void *CmiAlloc(int size) {
     // Set zcMsgType in the converse message header to CMK_REG_NO_ZC_MSG
     CMI_ZC_MSGTYPE((void *)ptr) = CMK_REG_NO_ZC_MSG;
     CmiSetMsgNokeep((void *)ptr, 0);
+    // CmiPushPE reads the mark on every message it routes, including ones
+    // pushed without a send call: a new message starts unmarked.
+    ((CmiMessageHeader *)ptr)->urgent = 0;
   }
 
   REFFIELDSET(ptr, 1);
@@ -1095,7 +1119,9 @@ void CmiSyncSendAndFreeNoPersistent(int destPE, int messageSize, void *msg) {
   }
 
   if (CmiMyNode() == destNode) {
-    if (CmiRankOf(destPE) == Cmi_myrank) CsdEnqueue(msg);
+    // a self-send goes straight to this PE's priority queue, except an urgent
+    // one, which CmiPushPE routes to the urgent queue like every other arrival
+    if (CmiRankOf(destPE) == Cmi_myrank && !header->urgent) CsdEnqueue(msg);
     else CmiPushPE(CmiRankOf(destPE), messageSize, msg);
   } else if (!CmiIpcTrySendAndFree(destNode, CmiRankOf(destPE), messageSize,
                                    msg)) {

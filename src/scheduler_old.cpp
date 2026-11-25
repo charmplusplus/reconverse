@@ -25,6 +25,7 @@ CpvExtern(TaskQueue, CsdTaskQueue);
 void CsdSchedulerOld() {
   // get pthread level queue
   ConverseQueue<void *> *queue = CmiGetQueue(CmiMyRank());
+  ConverseQueue<void *> *urgentQueue = CmiGetUrgentQueue(CmiMyRank());
 
   // get node level queue
   ConverseNodeQueue<void *> *nodeQueue = CmiGetNodeQueue();
@@ -47,6 +48,17 @@ void CsdSchedulerOld() {
     // messages from peer processes on this host (+ipc)
     CmiSchedulerPollIpc();
 
+    // urgent queue first: expedited messages (see CmiSyncSendAndFreeUrgent)
+    if (!urgentQueue->empty()) {
+      auto r = urgentQueue->pop();
+      if (r) {
+        tq_streak = 0;
+        nq_streak = 0;
+        CmiSchedulerReleaseIdle();
+        ((CmiMessageHeader *)*r)->urgent = 0;   // the mark applies to one send
+        CmiHandleMessage(*r);
+      }
+    }
     // poll node queue (the process's converse node queue), ahead of this PE's
     // own queues. After +node_queue_max node-level messages in a row (from
     // here or the node priority queue below), one iteration skips it if the
@@ -54,7 +66,7 @@ void CsdSchedulerOld() {
     // the thread queue (other PEs' messages, CmiExit's among them) or the
     // priority queue (#273). Any iteration that runs something else, or
     // nothing, resets the streak.
-    if (!nodeQueue->empty() &&
+    else if (!nodeQueue->empty() &&
         (nq_streak < node_queue_max ||
          (queue->empty() && QueueEmpty(CpvAccess(CsdSchedQueue))))) {
       auto result = nodeQueue->pop();
@@ -262,6 +274,7 @@ void CsdSchedulerOld() {
 void CsdSchedulePollOld() {
   // get pthread level queue
   ConverseQueue<void *> *queue = CmiGetQueue(CmiMyRank());
+  ConverseQueue<void *> *urgentQueue = CmiGetUrgentQueue(CmiMyRank());
 
   // get node level queue
   ConverseNodeQueue<void *> *nodeQueue = CmiGetNodeQueue();
@@ -277,6 +290,17 @@ void CsdSchedulePollOld() {
     // messages from peer processes on this host (+ipc)
     CmiSchedulerPollIpc();
 
+    // urgent queue first: expedited messages (see CmiSyncSendAndFreeUrgent)
+    if (!urgentQueue->empty()) {
+      auto r = urgentQueue->pop();
+      if (r) {
+        tq_streak = 0;
+        nq_streak = 0;
+        CmiSchedulerReleaseIdle();
+        ((CmiMessageHeader *)*r)->urgent = 0;   // the mark applies to one send
+        CmiHandleMessage(*r);
+      }
+    }
     // poll node queue (the process's converse node queue), ahead of this PE's
     // own queues. After +node_queue_max node-level messages in a row (from
     // here or the node priority queue below), one iteration skips it if the
@@ -284,7 +308,7 @@ void CsdSchedulePollOld() {
     // the thread queue (other PEs' messages, CmiExit's among them) or the
     // priority queue (#273). Any iteration that runs something else, or
     // nothing, resets the streak.
-    if (!nodeQueue->empty() &&
+    else if (!nodeQueue->empty() &&
         (nq_streak < node_queue_max ||
          (queue->empty() && QueueEmpty(CpvAccess(CsdSchedQueue))))) {
       auto result = nodeQueue->pop();

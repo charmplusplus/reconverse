@@ -3,8 +3,8 @@
 // A debugging mode for shaking out message-order races. Each loop iteration
 //   1. moves one shared-memory IPC block onto its local queue and runs the
 //      backend progress, as the registered loop does;
-//   2. drains the PE's own sources -- thread queue and thread priority
-//      queue (CsdSchedQueue, which also holds its self-sends) -- into one
+//   2. drains the PE's own sources -- urgent queue, thread queue and thread
+//      priority queue (CsdSchedQueue, which also holds its self-sends) -- into one
 //      per-PE pool, and takes at
 //      most one message from each shared source -- node queue, node priority
 //      queue and, with CMK_TASKQUEUE, the task queue;
@@ -90,6 +90,8 @@ bool fillPool(std::vector<void *> &pool) {
   took |= drainInto(pool, 1, CmiTakeTaskQueue);
 #endif
   // this PE's own sources: everything present when the drain starts
+  took |= drainInto(pool, CmiGetUrgentQueue(CmiMyRank())->size(),
+                    CmiTakeUrgentQueue);
   took |= drainInto(pool, CmiGetQueue(CmiMyRank())->size(), CmiTakeThreadQueue);
   took |= drainInto(pool, (size_t)QueueSize(CpvAccess(CsdSchedQueue)),
                     CmiTakeThreadPrioQueue);
