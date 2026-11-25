@@ -14,7 +14,20 @@ namespace lci_impl {
 // A breach of the comm_backend interface with direct access to CmiAlloc/CmiFree
 // There are another way to do this, but this is the simplest way to do it
 struct AllocatorLCI : lci::allocator_base_t {
-  void *allocate(size_t size) override { return CmiAlloc(size); }
+  // LCI asks for 0 bytes for a message without payload, which is what carries
+  // the signal where LCI emulates a put with signal: the write, then a
+  // zero-length message (cxi without FI_CXI_ENABLE_WRITEDATA, and
+  // +lci_put_signal_emulate). CmiAlloc refuses 0 bytes: it prints "CmiAlloc:
+  // size <= 0" and returns NULL, once per signal. Such a request gets a
+  // shared empty buffer instead, which nothing writes (LCI copies 0 bytes
+  // into it) and deallocate ignores.
+  static void *emptyBuffer() {
+    static char empty[1];
+    return empty;
+  }
+  void *allocate(size_t size) override {
+    return size == 0 ? emptyBuffer() : CmiAlloc(size);
+  }
 
 #if RECONVERSE_LCI_ALLOCATE_WITH_MR
   // A rendezvous AM's receive buffer, with the registration its pool block
@@ -24,7 +37,9 @@ struct AllocatorLCI : lci::allocator_base_t {
                          lci::mr_t *mr) override;
 #endif
 
-  void deallocate(void *ptr) override { CmiFree(ptr); }
+  void deallocate(void *ptr) override {
+    if (ptr != nullptr && ptr != emptyBuffer()) CmiFree(ptr);
+  }
 };
 
 struct MempoolOptions {
