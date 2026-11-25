@@ -149,7 +149,8 @@ size_t CmiRegionPieceLength(CmiRegion r, int piece);
    CmiRegionCreate may be freed once done has run. done may be NULL.
    If the region's counter also serves another region still in use, or a
    target with no region, call this only after the counter has fired the last
-   round that a put into this region counted toward (design 10.2). */
+   round that a put into this region counted toward (the shared-counter
+   rule, design 10.2). */
 void CmiRegionDestroy(CmiRegion r, int flags, CmiDoneFn done, void *arg);
 
 /* Counters (owner PE) */

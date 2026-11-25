@@ -257,7 +257,8 @@ destroyed: every contribution to it came through that region, and its destroy
 may be called at any time after the application stops putting. A counter
 that also serves another region still in use, or a target with no region,
 counts their contributions too, which can make up for a put of this region
-still in flight. For that case the rule is the application's (design 10.2):
+still in flight. For that case the application follows the shared-counter
+rule (design 10.2):
 destroy the region only after the counter has fired the last round that a
 put into the region counted toward. That firing means every contribution of
 the round, this region's among them, has landed.
