@@ -37,6 +37,7 @@ public:
                void *user_context) override;
   bool progress(void) override;
   void barrier(void) override;
+  size_t getMaxEagerBytes() override { return eager_threshold; }
 
 private:
   struct threadContext {

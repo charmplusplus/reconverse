@@ -79,6 +79,7 @@ public:
                  uintptr_t remote_disp, void *rmr,
                  CompHandler localComp, void *user_context) override;
   bool isPutSignalCapable() override { return m_put_signal_capable; }
+  size_t getMaxEagerBytes() override { return m_maxEager; }
   bool isPutSignalNative() override {
     return m_put_signal_capable && m_put_signal_native && !m_put_signal_emulate;
   }
