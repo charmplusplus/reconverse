@@ -2,6 +2,7 @@
 #define _CONV_RDMA_H
 
 #include "cmirdmautils.h"
+#include <cstdint>
 #include <functional>
 
 /* Reconverse itself has no PUP dependency, but Charm++ builds on top of this
@@ -81,6 +82,61 @@ void CmiIssueRget(NcpyOperationInfo *ncpyOpInfo);
  */
 
 void CmiIssueRput(NcpyOperationInfo *ncpyOpInfo);
+
+/* Put with signal: a put whose arrival raises a handler in the destination's
+ * process, after the data is visible there, with a 16-bit signal the initiator
+ * chose. The signal names one of 65536 entries of one PE (destPe), and the
+ * kind says what the entries are; puts of different kinds or to different PEs
+ * share no signal values.
+ *
+ * The handler runs on whatever thread of the destination's process received
+ * the signal, possibly not destPe's, so it must not block, and it must only
+ * hand work on (CmiPushPE onto destPe, say). srcNode is the initiator's
+ * process (numbered as CmiMyNodeGlobal() numbers it) and size the bytes
+ * written, or -1 and 0 where that path does not know them: the LCI backend
+ * reports neither for a write with immediate data, so code that needs the
+ * length carries it with the data. */
+class CmiNcpyBuffer;
+typedef void (*CmiRputSignalHandler)(void *ctx, int destPe, uint16_t signal,
+                                     int srcNode, size_t size);
+#define CMI_PUT_SIGNAL_MAX 65535
+
+/* Adds a kind of put signal and returns its number. Collective: rank 0 of
+ * every process calls it, with the same kinds in the same order, before any
+ * process issues a put of the new kind (follow it with CmiBarrier(), say). */
+int CmiRegisterRputSignalKind(CmiRputSignalHandler handler, void *ctx);
+
+/* 1 when a put with signal between processes goes to the backend's
+ * comm_backend::issueRputSignal (LCI: a write with immediate data, or, where
+ * the provider has none, LCI's emulation: the write, then a zero-length
+ * message with the signal). 0 when CmiIssueRputSignal sends the data and the
+ * signal together in one Converse message to destPe, which copies the data
+ * and then raises the handler: copy-based RDMA (+nordma, or a backend without
+ * RMA), a backend without put with signal, or +lci_no_put_signal. That needs
+ * no ordering between two operations, and costs a copy at each end. It is
+ * never a put followed by a message after the put's local completion: an
+ * injected put (LCI) completes locally when it is posted, so such a message
+ * could overtake the data. */
+int CmiIsPutSignalCapable(void);
+
+/* CmiIssueRput, then the handler of `kind` with (destPe, signal) in the
+ * process of ncpyOpInfo->destPe once the data has landed. destPe must be in
+ * that process, and the destination buffer must be registered (the put goes
+ * to the start of its registration, as CmiIssueRput's does). The initiator's
+ * acknowledgement is CmiIssueRput's: the Direct API ack handler on local
+ * completion. Within a process the data is copied and the handler is called
+ * from inside this call. */
+void CmiIssueRputSignal(NcpyOperationInfo *ncpyOpInfo, int destPe, int kind,
+                        uint16_t signal);
+
+/* A one-sided write with no operation record and no acknowledgement: the
+ * src.cnt bytes at src.ptr go to dest.ptr + destOffset in dest's process,
+ * where dest is a registered buffer as its owner described it and src a
+ * registered one of this process. Nothing reports completion, so the source
+ * must stay unchanged until something the caller arranged shows the data
+ * has landed. Within a process it is a memcpy. Needs RMA (not +nordma). */
+void CmiRdmaPutRaw(const CmiNcpyBuffer &src, const CmiNcpyBuffer &dest,
+                   size_t destOffset);
 
 void CmiDeregisterMem(const void *ptr, void *info, int pe,
                       unsigned short int mode);

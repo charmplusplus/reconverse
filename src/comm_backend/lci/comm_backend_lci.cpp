@@ -63,6 +63,59 @@ void remoteCallback(lci::status_t status) {
 // For alloc_mempool_block, which the mempool calls without a backend.
 static CommBackendLCI *g_lci_backend = nullptr;
 
+// The target side of issueRputSignal: one per kind and local rank, registered
+// as an rcomp. A handler comp would not do, since LCI gives its callback the
+// status only (no context), so this is a completion object of its own, which
+// LCI allows (comp_impl_t::signal), and it knows its kind and rank.
+class PutSignalComp : public lci::comp_impl_t {
+public:
+  PutSignalComp(PutSignalHandler handler, void *ctx, int dest_rank,
+                AllocatorLCI *allocator)
+      : m_handler(handler), m_ctx(ctx), m_dest_rank(dest_rank),
+        m_allocator(allocator) {}
+
+  void signal(lci::status_t status) override {
+    // With a buffer, the signal came as a message: LCI's emulation, or
+    // +lci_put_signal_emulate. The message is empty (AllocatorLCI's shared
+    // empty buffer), and LCI reports its source. A write with immediate data
+    // has no buffer, and LCI reports neither its source nor its length: the
+    // ibv and ofi pollers leave the rank of a remote write at 0 and its
+    // length unset (progress_remote_write).
+    void *buf = status.get_buffer();
+    int src_rank = buf != nullptr ? status.get_rank() : -1;
+    size_t size = buf != nullptr ? 0 : status.get_size();
+    if (buf != nullptr) m_allocator->deallocate(buf);
+    m_handler(m_ctx, m_dest_rank, static_cast<uint16_t>(status.get_tag()),
+              src_rank, size);
+  }
+
+private:
+  PutSignalHandler m_handler;
+  void *m_ctx;
+  int m_dest_rank;
+  AllocatorLCI *m_allocator;
+};
+
+// +lci_put_signal_emulate: the put has completed, so send its signal.
+struct EmulatedSignalArgs {
+  CompHandler localComp;
+  void *user_context;
+  int rank;
+  int dev;
+  lci::rcomp_t rcomp;
+  uint16_t signal;
+};
+
+void emulatedSignalPutDone(lci::status_t status) {
+  auto args = static_cast<EmulatedSignalArgs *>(status.get_user_context());
+  g_lci_backend->sendEmulatedSignal(args->rank, args->dev, args->rcomp,
+                                    args->signal);
+  CompHandler handler = args->localComp;
+  void *user_context = args->user_context;
+  delete args;
+  handler({status.get_buffer(), status.get_size(), user_context});
+}
+
 // What an mr_t from registerMemory() points to: the buffer, and one LCI
 // registration per device, each made the first time a transfer asks for that
 // device (getDeviceMR). A transfer reads one device's registration on each
@@ -308,6 +361,36 @@ void CommBackendLCI::init(char **argv) {
   m_remote_comp = lci::alloc_handler(remoteCallback);
   m_rcomp = lci::register_rcomp(m_remote_comp);
   lci::set_allocator(&m_allocator);
+  // Put with signal: the 16-bit signal is the put's tag, which with the rcomp
+  // has to fit LCI's immediate data (a larger tag goes in the payload, which a
+  // put cannot carry). The rcomps are checked as each kind registers them.
+  // Every process decides alike: same provider, attributes and arguments.
+  {
+    bool off = CmiGetArgFlagDesc(argv, "+lci_no_put_signal",
+                                 "do not use LCI put with remote completion "
+                                 "for a put with signal");
+    m_put_signal_emulate = CmiGetArgFlagDesc(
+        argv, "+lci_put_signal_emulate",
+        "carry the signal of a put with signal in a zero-length message after "
+        "the put completes, as LCI does on networks without write with "
+        "immediate data");
+    bool verbose = CmiGetArgFlagDesc(argv, "+lci_put_signal_verbose",
+                                     "report how a put's signal travels");
+    bool native = lci::get_default_net_context().get_attr_support_putimm();
+    m_put_signal_capable =
+        !off && lci::get_g_runtime().get_attr_max_imm_tag() >= UINT16_MAX;
+    m_emulated_signal_comp = lci::alloc_handler(emulatedSignalPutDone);
+    if (verbose && lci::get_rank_me() == 0)
+      CmiPrintf("Reconverse> put with signal: %s\n",
+                !m_put_signal_capable
+                    ? "off in the LCI backend (CmiIssueRputSignal sends the "
+                      "data and the signal in one message)"
+                : m_put_signal_emulate
+                    ? "write, then a zero-length message (+lci_put_signal_emulate)"
+                : native ? "write with immediate data"
+                         : "write, then a zero-length message (LCI's emulation: "
+                           "the provider has no write with immediate data)");
+  }
 
   // Rendezvous sends in flight may hold half of the packets the posted
   // receives do not, so the receives can always be reposted (see issueAm).
@@ -377,6 +460,14 @@ void CommBackendLCI::exit() {
   m_devices.clear();
   lci::free_comp(&m_local_comp);
   lci::free_comp(&m_remote_comp);
+  lci::free_comp(&m_emulated_signal_comp);
+  for (int k = 0; k < m_num_put_signal_kinds.load(); k++) {
+    PutSignalKind *kind = m_put_signal_kinds[k].exchange(nullptr);
+    for (lci::comp_t &comp : kind->comps)
+      lci::free_comp(&comp);
+    delete kind;
+  }
+  m_num_put_signal_kinds.store(0);
   lci::g_runtime_fina();
   lci::global_finalize();
 
@@ -583,6 +674,120 @@ void CommBackendLCI::issueRput(int rank, const void *local_buf, size_t size,
     localComp({local_buf, size, user_context});
     delete args;
   }
+}
+
+// One rcomp per local rank. LCI numbers rcomps in the order a process
+// registers them, so every process registering the same kinds in the same
+// order (and every process has the same number of ranks) gives each (kind,
+// rank) the same rcomp everywhere, and an initiator names the target's from
+// its own table.
+int CommBackendLCI::registerPutSignalKind(PutSignalHandler handler, void *ctx,
+                                          int nranks) {
+  int kind = m_num_put_signal_kinds.load(std::memory_order_relaxed);
+  if (kind >= kMaxPutSignalKinds)
+    CmiAbort("LCI backend: more than %d kinds of put signal\n",
+             kMaxPutSignalKinds);
+  uint64_t max_rcomp = lci::get_g_runtime().get_attr_max_imm_rcomp();
+  auto entry = new PutSignalKind;
+  for (int r = 0; r < nranks; r++) {
+    lci::comp_t comp(new PutSignalComp(handler, ctx, r, &m_allocator));
+    lci::rcomp_t rcomp = lci::register_rcomp(comp);
+    if ((uint64_t)rcomp > max_rcomp)
+      CmiAbort("LCI backend: put-signal kind %d needs remote completion %u for "
+               "rank %d, but LCI's immediate data holds remote completions up "
+               "to %llu: %d kinds of put signal with %d ranks per process are "
+               "too many\n",
+               kind, (unsigned)rcomp, r, (unsigned long long)max_rcomp,
+               kind + 1, nranks);
+    entry->comps.push_back(comp);
+    entry->rcomps.push_back(rcomp);
+  }
+  m_put_signal_kinds[kind].store(entry, std::memory_order_release);
+  m_num_put_signal_kinds.store(kind + 1, std::memory_order_release);
+  return kind;
+}
+
+// issueRput with the signal as the tag of an LCI remote completion: the target
+// gets a write with immediate data (ibv IBV_WR_RDMA_WRITE_WITH_IMM, ofi
+// fi_writedata), whose target completion is raised after the data is placed.
+// Where the provider has none (cxi without FI_CXI_ENABLE_WRITEDATA), LCI
+// posts the write and, once it completes, a zero-length message with the
+// same immediate data; for a write small enough to inject, LCI posts the
+// message right after the write without waiting.
+void CommBackendLCI::issueRputSignal(int rank, const void *local_buf,
+                                     size_t size, mr_t local_mr,
+                                     uintptr_t remote_disp, void *rmr,
+                                     int dest_rank, int kind, uint16_t signal,
+                                     CompHandler localComp,
+                                     void *user_context) {
+  if (!m_put_signal_capable)
+    CmiAbort("LCI backend: put with signal is off\n");
+  if (kind < 0 || kind >= m_num_put_signal_kinds.load(std::memory_order_acquire))
+    CmiAbort("LCI backend: put signal of kind %d, which is not registered\n",
+             kind);
+  PutSignalKind *entry = m_put_signal_kinds[kind].load(std::memory_order_acquire);
+  if (dest_rank < 0 || dest_rank >= (int)entry->rcomps.size())
+    CmiAbort("LCI backend: put signal to rank %d, but the kind has %zu ranks\n",
+             dest_rank, entry->rcomps.size());
+  lci::rcomp_t rcomp = entry->rcomps[dest_rank];
+  lci::status_t status;
+  WireRMR remote = readWireRMR(rmr);
+  int dev = checkedDeviceIndex(remote.device_idx);
+  // Same reentrancy guard as issueRput.
+  bool allow_retry = !detail::g_in_progress_callback;
+  if (m_put_signal_emulate) {
+    // A plain write, reported when the network has completed it (not merely
+    // when the source is free, as a buffer-copied put is), then the message.
+    auto args = new EmulatedSignalArgs{localComp, user_context, rank, dev,
+                                       rcomp, signal};
+    do {
+      status = lci::post_put_x(rank, const_cast<void *>(local_buf), size,
+                               m_emulated_signal_comp, remote_disp, remote.rmr)
+                   .mr(getDeviceMR(local_mr, dev))
+                   .device(m_devices[dev])
+                   .comp_semantic(lci::comp_semantic_t::network)
+                   .user_context(args)
+                   .allow_retry(allow_retry)();
+      if (allow_retry) progressForPost(dev);
+    } while (status.is_retry());
+    if (status.is_done()) {
+      sendEmulatedSignal(rank, dev, rcomp, signal);
+      localComp({local_buf, size, user_context});
+      delete args;
+    }
+    return;
+  }
+  auto args = new localCallbackArgs{localComp, user_context};
+  do {
+    status = lci::post_put_x(rank, const_cast<void *>(local_buf), size,
+                             m_local_comp, remote_disp, remote.rmr)
+                 .mr(getDeviceMR(local_mr, dev))
+                 .device(m_devices[dev])
+                 .remote_comp(rcomp)
+                 .tag(signal)
+                 .user_context(args)
+                 .allow_retry(allow_retry)();
+    if (allow_retry) progressForPost(dev);
+  } while (status.is_retry());
+  if (status.is_done()) {
+    localComp({local_buf, size, user_context});
+    delete args;
+  }
+}
+
+// The message LCI sends for a put with signal when the provider has no write
+// with immediate data (post_putImm_fallback, progress_write): no payload, the
+// tag and rcomp in the immediate data, on the device of the write.
+void CommBackendLCI::sendEmulatedSignal(int rank, int dev, lci::rcomp_t rcomp,
+                                        uint16_t signal) {
+  // COMP_NULL never spins: a send that cannot go now waits in LCI's backlog.
+  lci::status_t status =
+      lci::post_am_x(rank, nullptr, 0, lci::COMP_NULL, rcomp)
+          .device(m_devices[dev])
+          .tag(signal)();
+  if (!status.is_done())
+    CmiAbort("LCI backend: the message of an emulated put signal was not "
+             "sent: %s\n", status.error.get_str());
 }
 
 bool CommBackendLCI::threadMustPoll() {

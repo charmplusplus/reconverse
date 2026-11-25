@@ -78,6 +78,17 @@ public:
   void issueRput(int rank, const void *local_buf, size_t size, mr_t local_mr,
                  uintptr_t remote_disp, void *rmr,
                  CompHandler localComp, void *user_context) override;
+  bool isPutSignalCapable() override { return m_put_signal_capable; }
+  int registerPutSignalKind(PutSignalHandler handler, void *ctx,
+                            int nranks) override;
+  void issueRputSignal(int rank, const void *local_buf, size_t size,
+                       mr_t local_mr, uintptr_t remote_disp, void *rmr,
+                       int dest_rank, int kind, uint16_t signal,
+                       CompHandler localComp, void *user_context) override;
+  // +lci_put_signal_emulate: the zero-length message that carries a signal
+  // once its put has completed
+  void sendEmulatedSignal(int rank, int dev, lci::rcomp_t rcomp,
+                          uint16_t signal);
   bool progress(void) override;
   bool threadMustPoll() override;
   void barrier(void) override;
@@ -109,6 +120,28 @@ private:
   lci::comp_t m_local_comp;
   lci::comp_t m_remote_comp;
   lci::rcomp_t m_rcomp;
+  // Put with signal. Each kind has one rcomp per local rank, so the 16-bit
+  // signal names one of 65536 entries of that rank, and the rcomp says which
+  // rank and kind. Behind each rcomp is a PutSignalComp, which knows both;
+  // the signal is the put's tag, carried with the rcomp in the immediate
+  // data of a write with immediate data (ibv, ofi fi_writedata), or of the
+  // zero-length message that follows the write where LCI emulates it
+  // (support_putimm false). Kinds are published once, before any put of
+  // theirs, so issueRputSignal reads them without a lock.
+  static constexpr int kMaxPutSignalKinds = 64;
+  struct PutSignalKind {
+    std::vector<lci::comp_t> comps;    // per local rank
+    std::vector<lci::rcomp_t> rcomps;  // per local rank
+  };
+  std::atomic<PutSignalKind *> m_put_signal_kinds[kMaxPutSignalKinds] = {};
+  std::atomic<int> m_num_put_signal_kinds{0};
+  bool m_put_signal_capable = false;
+  // +lci_put_signal_emulate: reconverse posts the write, and after its
+  // completion the zero-length message, as LCI does without support_putimm,
+  // so that path can be tested where the provider has write with immediate
+  // data
+  bool m_put_signal_emulate = false;
+  lci::comp_t m_emulated_signal_comp;
   AllocatorLCI m_allocator;
 
   // Memory regions handed out by registerMemory() that have not been given back
