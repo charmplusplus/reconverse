@@ -32,6 +32,9 @@ struct KeyHash {
 // request and a notice that waited touch it, never a put.
 CmiNodeLock g_lock;
 std::unordered_map<Key, CmiAttachRec *, KeyHash> *g_table = nullptr;
+// Detached handles, kept for later attachments and never freed, so that the
+// check of a handle detached already reads memory that is still ours.
+std::vector<CmiAttachmentRec *> *g_freeHandles = nullptr;
 
 Key keyOf(int ownerNode, const AttachEntry &e) {
   return Key{ownerNode, e.ownerPe, e.slot, e.gen, e.kind};
@@ -283,6 +286,7 @@ void operationDone(CmiAttachRec *rec) {
 void attachNodeInit() {
   g_lock = CmiCreateLock();
   g_table = new std::unordered_map<Key, CmiAttachRec *, KeyHash>();
+  g_freeHandles = new std::vector<CmiAttachmentRec *>();
 }
 
 void attachPeInit() {
@@ -319,7 +323,13 @@ int CmiAttachTargets(const CmiTarget *t, int n, CmiAttachment *out) {
       owed[t[i].ownerNode].push_back(Pending{e, {}});
     }
     rec->refs++;
-    auto *a = new CmiAttachmentRec();
+    CmiAttachmentRec *a;
+    if (g_freeHandles->empty()) {
+      a = new CmiAttachmentRec();
+    } else {
+      a = g_freeHandles->back();
+      g_freeHandles->pop_back();
+    }
     a->magic = CMI_TARGET_MAGIC;
     a->target = t[i];
     a->rec = rec;
@@ -350,7 +360,7 @@ void CmiDetachTargets(CmiAttachment *a, int n) {
     CmiAttachRec *rec = a[i]->rec;
     retire(rec, a[i]);
     a[i]->magic = 0;
-    delete a[i];
+    g_freeHandles->push_back(a[i]);
     a[i] = nullptr;
     if (--rec->refs > 0) continue;
     if (rec->inTable) {
