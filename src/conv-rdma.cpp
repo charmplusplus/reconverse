@@ -731,16 +731,21 @@ void CmiIssueRput(NcpyOperationInfo *ncpyOpInfo) {
 /****************************** Put with signal
  * *****************************/
 
-// The kinds, process-wide. CmiRegisterRputSignalKind fills an entry, then
-// publishes it by raising the count, so a reader that sees the count sees it.
+// The kinds this process registered through CmiRegisterRputSignalKind,
+// indexed by the kind's number. That number is the backend's, from
+// comm_backend::registerPutSignalKind, so it is the same one the backend's
+// signals carry; a kind registered with the backend directly leaves its slot
+// here empty. Without the backend's put with signal, there are no backend
+// kinds, and kinds are numbered here, from 0 in registration order. An entry
+// is published by its pointer before the count that covers it.
 namespace {
 struct RputSignalKind {
   CmiRputSignalHandler handler;
   void *ctx;
 };
 constexpr int kMaxRputSignalKinds = 64;
-RputSignalKind rputSignalKinds[kMaxRputSignalKinds];
-std::atomic<int> numRputSignalKinds{0};
+std::atomic<RputSignalKind *> rputSignalKinds[kMaxRputSignalKinds];
+std::atomic<int> numRputSignalKinds{0};  // one past the highest kind here
 
 // A put that Converse carries as one message: the data, its destination and,
 // for a put with signal (kind >= 0), the signal. The data follows the struct.
@@ -755,21 +760,28 @@ struct PutSignalMsg {
 };
 } // namespace
 
-static void raiseRputSignal(int kind, int destPe, uint16_t signal, int srcNode,
-                            size_t size) {
-  if (kind < 0 ||
-      kind >= numRputSignalKinds.load(std::memory_order_acquire))
-    CmiAbort("put with signal: kind %d is not registered in this process "
-             "(%d kinds)\n", kind, numRputSignalKinds.load());
-  const RputSignalKind &k = rputSignalKinds[kind];
-  k.handler(k.ctx, destPe, signal, srcNode, size);
+static const RputSignalKind *findRputSignalKind(int kind) {
+  if (kind < 0 || kind >= numRputSignalKinds.load(std::memory_order_acquire))
+    return nullptr;
+  return rputSignalKinds[kind].load(std::memory_order_acquire);
 }
 
-// The backend's handler for every kind; ctx is the kind's number.
+static void raiseRputSignal(int kind, int destPe, uint16_t signal, int srcNode,
+                            size_t size) {
+  const RputSignalKind *k = findRputSignalKind(kind);
+  if (k == nullptr)
+    CmiAbort("put with signal: kind %d is not registered with "
+             "CmiRegisterRputSignalKind in this process\n", kind);
+  k->handler(k->ctx, destPe, signal, srcNode, size);
+}
+
+// The backend's handler for every kind registered here; ctx is the kind's
+// entry.
 static void backendRputSignal(void *ctx, int destRank, uint16_t signal,
                               int srcRank, size_t size) {
-  raiseRputSignal((int)(intptr_t)ctx, CmiNodeFirst(CmiMyNode()) + destRank,
-                  signal, srcRank, size);
+  const RputSignalKind *k = (const RputSignalKind *)ctx;
+  k->handler(k->ctx, CmiNodeFirst(CmiMyNode()) + destRank, signal, srcRank,
+             size);
 }
 
 int CmiIsPutSignalCapable(void) {
@@ -782,19 +794,20 @@ int CmiRegisterRputSignalKind(CmiRputSignalHandler handler, void *ctx) {
              "not on PE %d (rank %d)\n", CmiMyPe(), CmiMyRank());
   if (handler == nullptr)
     CmiAbort("CmiRegisterRputSignalKind: no handler\n");
-  int kind = numRputSignalKinds.load(std::memory_order_relaxed);
-  if (kind >= kMaxRputSignalKinds)
-    CmiAbort("CmiRegisterRputSignalKind: more than %d kinds\n",
-             kMaxRputSignalKinds);
-  rputSignalKinds[kind] = {handler, ctx};
-  numRputSignalKinds.store(kind + 1, std::memory_order_release);
-  if (CmiIsPutSignalCapable()) {
-    int backendKind = comm_backend::registerPutSignalKind(
-        backendRputSignal, (void *)(intptr_t)kind, CmiMyNodeSize());
-    if (backendKind != kind)
-      CmiAbort("CmiRegisterRputSignalKind: the backend numbered kind %d as "
-               "%d\n", kind, backendKind);
-  }
+  RputSignalKind *entry = new RputSignalKind{handler, ctx};
+  int count = numRputSignalKinds.load(std::memory_order_relaxed);
+  int kind = CmiIsPutSignalCapable()
+                 ? comm_backend::registerPutSignalKind(
+                       backendRputSignal, entry, CmiMyNodeSize())
+                 : count;
+  if (kind < 0 || kind >= kMaxRputSignalKinds)
+    CmiAbort("CmiRegisterRputSignalKind: kind %d is outside 0 to %d\n", kind,
+             kMaxRputSignalKinds - 1);
+  if (rputSignalKinds[kind].load(std::memory_order_relaxed) != nullptr)
+    CmiAbort("CmiRegisterRputSignalKind: kind %d is registered twice\n", kind);
+  rputSignalKinds[kind].store(entry, std::memory_order_release);
+  if (kind >= count)
+    numRputSignalKinds.store(kind + 1, std::memory_order_release);
   return kind;
 }
 
@@ -836,8 +849,9 @@ void CmiIssueRputSignal(NcpyOperationInfo *ncpyOpInfo, int destPe, int kind,
   if (destPe < 0 || destPe >= CmiNumPes() || CmiNodeOf(destPe) != target_node)
     CmiAbort("CmiIssueRputSignal: PE %d is not in the process of the "
              "destination buffer (PE %d)\n", destPe, ncpyOpInfo->destPe);
-  if (kind < 0 || kind >= numRputSignalKinds.load(std::memory_order_acquire))
-    CmiAbort("CmiIssueRputSignal: kind %d is not registered\n", kind);
+  if (findRputSignalKind(kind) == nullptr)
+    CmiAbort("CmiIssueRputSignal: kind %d is not registered with "
+             "CmiRegisterRputSignalKind\n", kind);
   // See CmiIssueRget: the transfer is bounded by both buffers.
   size_t len = std::min(ncpyOpInfo->srcSize, ncpyOpInfo->destSize);
   comm_backend::Status status;

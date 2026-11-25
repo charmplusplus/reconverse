@@ -37,7 +37,7 @@ public:
     // Default implementation: not supported
     CmiAbort("Rput not supported in this backend");
   }
-  // Put with signal: unsupported unless a backend overrides all three.
+  // Put with signal: unsupported unless a backend overrides all four.
   virtual bool isPutSignalCapable() { return false; }
   virtual bool isPutSignalNative() { return false; }
   virtual int registerPutSignalKind(PutSignalHandler handler, void *ctx,

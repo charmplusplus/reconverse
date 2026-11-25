@@ -101,9 +101,13 @@ typedef void (*CmiRputSignalHandler)(void *ctx, int destPe, uint16_t signal,
                                      int srcNode, size_t size);
 #define CMI_PUT_SIGNAL_MAX 65535
 
-/* Adds a kind of put signal and returns its number. Collective: rank 0 of
- * every process calls it, with the same kinds in the same order, before any
- * process issues a put of the new kind (follow it with CmiBarrier(), say). */
+/* Adds a kind of put signal and returns its number. The number is the one
+ * the backend gives the kind (comm_backend::registerPutSignalKind), so Converse
+ * and the backend share one numbering; where CmiIsPutSignalCapable() is 0 the
+ * backend has no kinds, and Converse numbers them from 0 in registration
+ * order. Collective: rank 0 of every process calls it, with the same kinds in
+ * the same order, before any process issues a put of the new kind (follow it
+ * with CmiBarrier(), say). */
 int CmiRegisterRputSignalKind(CmiRputSignalHandler handler, void *ctx);
 
 /* 1 when a put with signal between processes goes to the backend's

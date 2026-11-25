@@ -444,6 +444,10 @@ static void mymain(int argc, char **argv) {
   if (CmiMyRank() == 0) {
     kinds[0] = CmiRegisterRputSignalKind(signalHandler, &kindCtx[0]);
     kinds[1] = CmiRegisterRputSignalKind(signalHandler, &kindCtx[1]);
+    // the backend's numbers when it has put with signal, else Converse's
+    if (kinds[0] < 0 || kinds[1] < 0 || kinds[0] == kinds[1])
+      CmiAbort("put_signal: the kinds were numbered %d and %d\n", kinds[0],
+               kinds[1]);
     if (me == 0)
       CmiPrintf("put_signal: CmiIsPutSignalCapable() = %d\n",
                 CmiIsPutSignalCapable());
