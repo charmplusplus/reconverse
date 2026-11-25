@@ -226,14 +226,17 @@ void runAction(CmiCounterRec *c, const CmiCounterAction &a, uint32_t round) {
 }
 
 // The counter's message: runs its action on the owner PE (design 5.3). A
-// message whose counter was destroyed while it waited is freed here.
+// message whose counter was destroyed while it waited gives its index back.
 void fireHandler(void *vmsg) {
   auto *m = static_cast<FireMsg *>(vmsg);
   PeState *ps = peState();
   CmiCounterRec *c =
       m->index < ps->counters.size() ? ps->counters[m->index] : nullptr;
   if (c == nullptr || c->generation != m->generation) {
-    CmiFree(m);
+    if (m->index < ps->withheld.size() && ps->withheld[m->index]) {
+      ps->withheld[m->index] = 0;
+      ps->freeCounters.push_back(m->index);
+    }
     return;
   }
   c->roundsStarted++;
@@ -267,17 +270,20 @@ void completeCounter(CmiCounterRec *c) {
     int64_t unconsumed = landed - (int64_t)c->sumStarted;
     if (unconsumed > 0) qdCount(0, (int)unconsumed);
   }
-  // fired and queued: fireHandler frees the message when it finds the
-  // counter gone
+  // fired and queued (or about to be): the index waits for the message's
+  // handler, so that no later counter there queues it a second time
   bool queued = hasAction && word <= 0 && c->roundsStarted < c->roundsArmed;
-  void *fire = L->fireMsg.load(std::memory_order_relaxed);
   L->flags.store(0, std::memory_order_release);
   L->fireMsg.store(nullptr, std::memory_order_relaxed);
   L->word.store(0, std::memory_order_relaxed);
   L->generation.fetch_add(1, std::memory_order_release);
   ps->counters[c->index] = nullptr;
-  ps->freeCounters.push_back(c->index);
-  if (fire != nullptr && !queued) CmiFree(fire);
+  if (queued) {
+    if (ps->withheld.size() <= c->index) ps->withheld.resize(c->index + 1, 0);
+    ps->withheld[c->index] = 1;
+  } else {
+    ps->freeCounters.push_back(c->index);
+  }
   postDone(c->done, c->doneArg);
   delete c;
 }
@@ -764,12 +770,17 @@ CmiCounter CmiCounterCreate(int32_t n, CmiCounterAction action, int flags) {
 
   FireMsg *fire = nullptr;
   if (action.kind != CMI_ACTION_NONE) {
-    fire = static_cast<FireMsg *>(CmiAlloc(sizeof(FireMsg)));
-    fire->rank = ps->rank;
-    fire->index = index;
+    if (ps->messages.size() <= index) ps->messages.resize(index + 1, nullptr);
+    fire = ps->messages[index];
+    if (fire == nullptr) {
+      fire = static_cast<FireMsg *>(CmiAlloc(sizeof(FireMsg)));
+      fire->rank = ps->rank;
+      fire->index = index;
+      CmiSetHandler(fire, CpvAccess(regionFireHandlerIdx));
+      reinterpret_cast<CmiMessageHeader *>(fire)->messageSize = sizeof(FireMsg);
+      ps->messages[index] = fire;
+    }
     fire->generation = c->generation;
-    CmiSetHandler(fire, CpvAccess(regionFireHandlerIdx));
-    reinterpret_cast<CmiMessageHeader *>(fire)->messageSize = sizeof(FireMsg);
   }
   L->word.store(n, std::memory_order_relaxed);
   L->armedRounds.store(1, std::memory_order_relaxed);

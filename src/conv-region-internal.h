@@ -138,6 +138,13 @@ struct PeState {
   std::vector<CmiCounterRec *> counters;
   std::deque<uint32_t> freeCounters; // least recently freed first
   uint32_t nextCounter = 0;
+  // each index's message, made for the first counter with an action there
+  // and kept for every later one: never freed, so a late push (an
+  // erroneous program) cannot reach freed memory
+  std::vector<FireMsg *> messages;
+  // an index whose destroyed counter's message is still queued; its
+  // handler returns the index to freeCounters
+  std::vector<uint8_t> withheld;
   // regions, by slot
   std::vector<CmiRegionRec *> regions;
   std::vector<uint32_t> regionGen; // outlives the records
