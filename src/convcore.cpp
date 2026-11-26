@@ -397,6 +397,12 @@ static void CmiNodeTeardown(const char *caller) {
   CmiHandlerTable = nullptr;
 }
 
+/* CmiSetExitHook (converse.h). Process-wide, so that it holds before
+   ConverseInit. */
+static std::atomic<CmiExitHookFn> exitHook{nullptr};
+
+void CmiSetExitHook(CmiExitHookFn hook) { exitHook.store(hook); }
+
 //function to exit converse and terminate the program
 //waits for all threads to call, then does cleanup on rank 0
 void ConverseExit(int exitcode)
@@ -438,8 +444,12 @@ void ConverseExit(int exitcode)
   }
 
   CmiNodeTeardown("ConverseExit");
-  if (CmiMyRank() == 0)
+  if (CmiMyRank() == 0) {
+    CmiExitHookFn hook = exitHook.load();
+    if (hook != nullptr)
+      hook(exitcode);
     exit(exitcode);
+  }
   // Ranks > 0 block here; rank 0 ends the process.
   while (true)
     std::this_thread::sleep_for(std::chrono::milliseconds(100));

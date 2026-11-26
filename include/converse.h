@@ -938,6 +938,13 @@ CMK_NORETURN void CmiAbort(const char *format, ...);
    It must not take Converse locks. NULL removes it. See README.md. */
 typedef void (*CmiAbortHookFn)(int code, const char *msg);
 void CmiSetAbortHook(CmiAbortHookFn hook);
+/* A function ConverseExit calls once per process, on the thread of rank 0
+   (the thread that called ConverseInit), after every PE of the process has
+   stopped and the node is torn down, immediately before exit(exitcode). Not
+   called when ConverseExit returns (CmiInteropReturnOnExit) or on an abort.
+   NULL removes it. */
+typedef void (*CmiExitHookFn)(int exitcode);
+void CmiSetExitHook(CmiExitHookFn hook);
 /* Registers a function that CmiAbort calls once per process, after printing
    the reason and the stack and before the abort hook, to write out state that
    the process would otherwise lose at abort(), such as a coverage profile.
