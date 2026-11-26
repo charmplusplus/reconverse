@@ -111,7 +111,8 @@ else()
   message(WARNING
     "hwloc was not found, so CPU affinity is DISABLED: a run given "
     "+setcpuaffinity or +pemap aborts at startup, and +showcpuaffinity "
-    "reports that it is off. Do not use this build for timing. Install hwloc "
+    "reports that it is off. Do not use this build for timing. On a cluster, "
+    "load the hwloc module before configuring; otherwise install hwloc "
     "(libhwloc-dev on Debian/Ubuntu, hwloc-devel on RHEL, 'brew install hwloc' "
     "on macOS) and reconfigure to enable them.")
 endif()
