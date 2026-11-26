@@ -250,7 +250,9 @@ static void targetHandler(void *vmsg) {
 
 CmiStartFn mymain(int argc, char **argv) {
   (void)argc;
-  (void)argv;
+  // Bind this PE per +setcpuaffinity/+pemap (every PE takes part);
+  // ConverseInit does not.
+  CmiInitCPUAffinity(argv);
   CpvInitialize(int, targetIdx);
   CpvAccess(targetIdx) = CmiRegisterHandler(targetHandler);
   CpvInitialize(int, startIdx);
