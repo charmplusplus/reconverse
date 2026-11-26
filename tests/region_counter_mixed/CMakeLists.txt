@@ -109,3 +109,17 @@ add_test(NAME region_put_bench
           fresh iters=5 max=262144 +pe 2)
 set_tests_properties(region_put_bench PROPERTIES TIMEOUT 60
   PASS_REGULAR_EXPRESSION "262144 B: .*region_put_bench PASS")
+# Source buffers whose addresses change: in turn from a few, and new pages
+# every put.
+add_test(NAME region_put_bench_rotate
+  COMMAND ${RECONVERSE_TEST_LAUNCHER} -n 2 $<TARGET_FILE:region_put_bench>
+          rotate count=4 iters=5 max=262144 +pe 2)
+set_tests_properties(region_put_bench_rotate PROPERTIES TIMEOUT 60
+  PASS_REGULAR_EXPRESSION "rotate4 262144 B: .*region_put_bench PASS")
+if(NOT WIN32)
+  add_test(NAME region_put_bench_mmap
+    COMMAND ${RECONVERSE_TEST_LAUNCHER} -n 2 $<TARGET_FILE:region_put_bench>
+            mmap iters=5 max=262144 +pe 2)
+  set_tests_properties(region_put_bench_mmap PROPERTIES TIMEOUT 60
+    PASS_REGULAR_EXPRESSION "mmap 262144 B: .*fill.*region_put_bench PASS")
+endif()
