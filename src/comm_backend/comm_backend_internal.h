@@ -42,6 +42,11 @@ public:
   // True if this thread must poll progress whatever +backend_poll_thread says,
   // because no other thread would progress something it depends on
   virtual bool threadMustPoll() { return false; }
+  virtual void flushSends() {}
+  virtual size_t pendingSends(size_t *bytes) {
+    if (bytes) *bytes = 0;
+    return 0;
+  }
   virtual void barrier(void) = 0;
   virtual mr_t registerMemory(void *addr, size_t size) { return MR_NULL; }
   virtual size_t getRMR(mr_t mr, void *addr, size_t size) { return 0; }
