@@ -89,6 +89,19 @@ bool progress(void);
  */
 bool threadMustPoll(void);
 /**
+ * @brief Make progress until the backend has handed the network every
+ * operation issued so far by this process (see pendingSends). Arriving
+ * messages are queued for their PEs as progress() does; no Converse handler
+ * runs. Not to be called from a completion handler.
+ */
+void flushSends(void);
+/**
+ * @brief The number of issued operations the backend holds because the
+ * network could not take them yet, and optionally their total size in bytes.
+ * progress() hands them over later. Thread-safe.
+ */
+size_t pendingSends(size_t *bytes = nullptr);
+/**
  * @brief Block until all nodes have reached this point. Thread-safe.
  */
 void barrier(void);

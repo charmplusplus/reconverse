@@ -425,6 +425,9 @@ void ConverseExit(int exitcode)
   static std::atomic<int> barrier_done{0};
 
   if (CmiMyRank() == 0) {
+    // hand the network the sends the backend still holds, so that messages
+    // sent just before exit are not dropped at the barrier
+    comm_backend::flushSends();
     // participate in the global barrier (blocks until other nodes arrive)
     comm_backend::barrier();
     // let other local threads know barrier has completed

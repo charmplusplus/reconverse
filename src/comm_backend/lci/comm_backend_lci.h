@@ -6,7 +6,9 @@
 #include "comm_backend_internal.h"
 
 #include <deque>
+#include <memory>
 #include <mutex>
+#include <unordered_map>
 #include <unordered_set>
 
 namespace comm_backend {
@@ -65,6 +67,8 @@ public:
                  CompHandler localComp, void *user_context) override;
   bool progress(void) override;
   bool threadMustPoll() override;
+  void flushSends() override;
+  size_t pendingSends(size_t *bytes) override;
   void barrier(void) override;
   mr_t registerMemory(void *addr, size_t size) override;
   // registerMemory, then registered on every device at once
@@ -107,29 +111,43 @@ private:
 
   bool m_remote_free = true;  // off with +nomempool_remote_free
 
-  // An AM larger than m_maxEager goes by LCI's rendezvous protocol, and holds
-  // a packet of the pool receives are posted from until the destination's
-  // ready-to-receive arrives and the data is written. So that such sends can
-  // never take the packets the receives need (issue #257), at most m_rdvMax
-  // are in flight (detail::g_rdv_inflight); the rest wait in m_pending, oldest
-  // first, and progress() posts them as earlier ones complete.
-  struct PendingAm {
+  // An operation LCI did not take (it answered retry m_postTries times, or
+  // an AM larger than m_maxEager found m_rdvMax of them in flight already)
+  // waits in m_pending, and the caller goes on. Each destination rank has its
+  // own queue, oldest first, and an operation for a rank with a nonempty
+  // queue joins it, so it cannot overtake the ones waiting. progress() posts
+  // from the queues. See README.md, "Sends that LCI cannot take at once".
+  struct PendingOp {
+    enum Kind : uint8_t { AM, GET, PUT } kind;
     int rank;
+    int dev;  // index of the device it is posted on
     const void *local_buf;
     size_t size;
     mr_t mr;
     CompHandler localComp;
-    AmHandler remoteComp;
+    AmHandler remoteComp;   // AM
     void *user_context;
+    uintptr_t remote_disp;  // GET, PUT
+    lci::rmr_t rmr;         // GET, PUT
   };
+  enum class PostResult { posted, done, retry, locked, capped };
   size_t m_maxEager = 0;
   long m_rdvMax = 0;
+  int m_postTries = 1;  // +lci_post_tries
   std::mutex m_pendingMutex;
-  std::deque<PendingAm> m_pending;
-  // m_pending.size(), read without the lock; drops only once a send is posted
+  std::unordered_map<int, std::deque<PendingOp>> m_pending;  // by rank
+  // The ranks with a queue, in the order postPending() tries them next
+  std::deque<int> m_pendingRanks;
+  // Read without the lock on the send path: operations waiting for each
+  // rank, in all, and their bytes. A count drops only once one is posted.
+  std::unique_ptr<std::atomic<uint32_t>[]> m_pendingOfRank;
   alignas(CMI_CACHE_LINE_SIZE) std::atomic<size_t> m_nPending{0};
-  bool postRendezvous(const PendingAm &am, bool spin);
+  std::atomic<size_t> m_pendingBytes{0};
+  PostResult postOp(const PendingOp &op);
+  void submit(const PendingOp &op);
+  void enqueue(const PendingOp &op);
   void postPending();
+  int getThreadLocalDeviceIndex();
 
   lci::device_t getThreadLocalDevice();
   lci::mr_t getThreadLocalMR(mr_t mr);
