@@ -454,8 +454,9 @@ void CommBackendLCI::issueAm(int rank, const void *local_buf, size_t size, mr_t 
 }
 
 // One attempt to hand an operation to LCI. `done`: it completed in the call
-// and the caller owes op.localComp. `retry`: LCI did not take it. `capped`:
-// an AM above m_maxEager, with m_rdvMax of them in flight.
+// and the caller owes op.localComp. `retry`: LCI did not take it. `locked`:
+// nor did it, because another thread was posting on the device. `capped`: an
+// AM above m_maxEager, with m_rdvMax of them in flight.
 CommBackendLCI::PostResult CommBackendLCI::postOp(const PendingOp &op) {
   bool rdv = op.kind == PendingOp::AM && op.size > m_maxEager;
   if (rdv && detail::g_rdv_inflight.fetch_add(1, std::memory_order_relaxed) >=
@@ -493,29 +494,39 @@ CommBackendLCI::PostResult CommBackendLCI::postOp(const PendingOp &op) {
   if (status.is_posted()) return PostResult::posted;
   delete args;
   if (rdv) detail::g_rdv_inflight.fetch_sub(1, std::memory_order_relaxed);
-  return status.is_retry() ? PostResult::retry : PostResult::done;
+  if (!status.is_retry()) return PostResult::done;
+  return status.get_error().errorcode == lci::errorcode_t::retry_lock
+             ? PostResult::locked
+             : PostResult::retry;
 }
 
 // Hands the operation to LCI, or queues it: at once if its rank has a queue,
 // else after m_postTries attempts (one inside a completion callback) with
-// progress in between. Never waits for LCI to take it.
+// progress in between. An attempt that only lost the device's post lock to
+// another thread is repeated up to kLockTries times without counting. Never
+// waits for LCI to take the operation.
 void CommBackendLCI::submit(const PendingOp &op) {
+  const int kLockTries = 1000;
   if (m_nPending.load(std::memory_order_relaxed) == 0 ||
       m_pendingOfRank[op.rank].load(std::memory_order_relaxed) == 0) {
     bool mayProgress = !detail::g_in_progress_callback;
     // An AM above m_maxEager polls only between attempts; the others, after
     // every post.
     bool pollAlways = op.kind != PendingOp::AM || op.size <= m_maxEager;
-    for (int tries = 1;; tries++) {
+    int tries = 0, lockTries = 0;
+    while (true) {
       PostResult r = postOp(op);
-      if (mayProgress && (pollAlways || r == PostResult::retry))
+      if (mayProgress && (pollAlways || r == PostResult::retry ||
+                          r == PostResult::locked))
         progressForPost(op.dev);
       if (r == PostResult::posted) return;
       if (r == PostResult::done) {
         op.localComp({op.local_buf, op.size, op.user_context});
         return;
       }
-      if (r == PostResult::capped || !mayProgress || tries >= m_postTries)
+      if (r == PostResult::capped || !mayProgress) break;
+      if (r == PostResult::locked ? ++lockTries >= kLockTries
+                                  : ++tries >= m_postTries)
         break;
     }
   }

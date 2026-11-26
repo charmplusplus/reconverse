@@ -130,7 +130,7 @@ private:
     uintptr_t remote_disp;  // GET, PUT
     lci::rmr_t rmr;         // GET, PUT
   };
-  enum class PostResult { posted, done, retry, capped };
+  enum class PostResult { posted, done, retry, locked, capped };
   size_t m_maxEager = 0;
   long m_rdvMax = 0;
   int m_postTries = 1;  // +lci_post_tries
