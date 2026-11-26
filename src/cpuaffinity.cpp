@@ -839,12 +839,13 @@ void CmiInitCPUAffinity(char **argv) {
 
   if (CmiMyPe() != 0)
     return;
-  if (affinity_flag)
-    CmiPrintf("Reconverse> +setcpuaffinity disabled: this build has no hwloc "
-              "(configure with RECONVERSE_ENABLE_CPU_AFFINITY=ON).\n");
-  if (pemap != NULL)
-    CmiPrintf("Reconverse> +pemap disabled: this build has no hwloc "
-              "(configure with RECONVERSE_ENABLE_CPU_AFFINITY=ON).\n");
+  // A run that asks for binding must not go on unbound.
+  if (affinity_flag || pemap != NULL)
+    CmiAbort("%s was given, but this build cannot bind threads: it was "
+             "configured without hwloc. Install hwloc and rebuild (configure "
+             "reports RECONVERSE_ENABLE_CPU_AFFINITY), or run without "
+             "+setcpuaffinity and +pemap.",
+             affinity_flag ? "+setcpuaffinity" : "+pemap");
   if (show_affinity_flag)
     CmiPrintf("Reconverse> +showcpuaffinity disabled: this build has no hwloc "
               "(configure with RECONVERSE_ENABLE_CPU_AFFINITY=ON).\n");

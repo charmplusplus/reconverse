@@ -93,10 +93,9 @@ jobs:
           - config: with-hwloc
             packages: cmake ninja-build libhwloc-dev
             expect_affinity: 'ON'
-          # hwloc absent: affinity is compiled out. CmiInitCPUAffinity must
-          # still strip +setcpuaffinity, +pemap and +showcpuaffinity from argv,
-          # or a caller such as Charm++'s init.C reports them as unparsed '+'
-          # arguments. No MPI packages here: libopenmpi-dev depends on
+          # hwloc absent: affinity is compiled out. A run given +setcpuaffinity
+          # or +pemap must abort at startup, and +showcpuaffinity must still
+          # be consumed and reported. No MPI packages here: libopenmpi-dev depends on
           # libhwloc-dev and would put hwloc back.
           - config: without-hwloc
             packages: cmake ninja-build
@@ -136,13 +135,12 @@ jobs:
             && got=ON || got=OFF
           echo "RECONVERSE_ENABLE_CPU_AFFINITY=$got (expected ${{ matrix.expect_affinity }})"
           test "$got" = "${{ matrix.expect_affinity }}"
-          # A build with no affinity has to say so at configure time; that
-          # warning is the only early hint that the flags will do nothing.
+          # A build with no affinity has to say so at configure time.
           if [ "${{ matrix.expect_affinity }}" = "OFF" ]; then
             grep -q "CPU affinity is DISABLED" configure.log
           fi
 
-      - name: The affinity flags are consumed either way
+      - name: Affinity flags bind with hwloc and abort the run without it
         run: ctest --test-dir build --extra-verbose --timeout 60 -R cpuaffinity_args
 
       - name: Requesting affinity without hwloc fails loudly
