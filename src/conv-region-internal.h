@@ -64,13 +64,23 @@ static_assert(std::atomic<int32_t>::is_always_lock_free,
 static_assert(sizeof(CounterLine) == CMI_CACHE_LINE_SIZE,
               "one counter per cache line");
 
+// What threads other than the owner read of a region slot: the puts without
+// a counter that have landed in it, and its generation (the live region's,
+// or the next region's once the destroy has completed), which an in-process
+// put or get checks against its target's.
+struct RegionSlot {
+  std::atomic<uint64_t> landed;
+  std::atomic<uint32_t> generation;
+  uint32_t pad;
+};
+
 // A PE's counters, in chunks of a page of lines, allocated by the owner PE
 // on first use and never freed. A lookup goes through the chunk table, so
 // that phase 3 can place the chunks in a shared area.
 struct CounterSlice {
   std::atomic<CounterLine *> *chunks; // kMaxCountersPerPe / linesPerChunk
-  // per region slot, the puts without a counter that have landed
-  std::atomic<std::atomic<uint64_t> *> *landedChunks;
+  // the region slots, in chunks of the same kind
+  std::atomic<RegionSlot *> *slotChunks;
 };
 
 // The message that runs a counter's action on the owner PE (design 5.3).
@@ -153,9 +163,8 @@ struct PeState {
 
 PeState *peState();
 CounterLine *lineOf(int rank, uint32_t index); // null if never allocated
-// the landed count of a region slot of a PE of this process; null if never
-// allocated
-std::atomic<uint64_t> *regionLandedOf(int rank, uint32_t slot);
+// a region slot of a PE of this process; null if never allocated
+RegionSlot *regionSlotOf(int rank, uint32_t slot);
 
 // Converse handler indices, the same on every PE.
 int attachHandlerIdx();

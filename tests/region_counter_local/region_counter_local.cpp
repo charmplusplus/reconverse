@@ -50,6 +50,8 @@
     rearm_early  a re-arm before the round's action started (every build)
     stale        a signal through a target whose counter was destroyed: the
                  generation check of every build
+    stale_region  a put through a target with no counter whose region was
+                 destroyed: the region's generation check of every build
     wrong_pe     a re-arm on a PE that does not own the counter
     table_limit  more counters than +counter_table allows
     round_skip   a second contribution through one attachment in one round
@@ -1474,6 +1476,18 @@ void stale() {
   CmiSignal(a);
   fail("a signal through a destroyed counter's target was not refused");
 }
+// The same for a region, through a target with no counter: the slot's
+// generation refuses the put before it writes into freed memory.
+void staleRegion() {
+  CmiRegion r;
+  CmiRegionAlloc(64, CMI_MEM_HOST, 0, 0, &r);
+  CmiTarget t = CmiTargetMake(r, CMI_PIECE_ALL, nullptr);
+  a = CmiAttachTarget(&t);
+  CmiRegionDestroy(r, 0, nullptr, nullptr);
+  unsigned char b[8] = {0};
+  int rc = CmiPut(a, 0, b, sizeof(b), nullptr, nullptr, nullptr);
+  fail("a put through a destroyed region's target returned %d", rc);
+}
 // With CMI_DESTROY_DETACH_ALL the owner's detach request reaches this
 // process before the done callback (the urgent queue first), and every
 // build refuses the attachment itself.
@@ -1601,6 +1615,7 @@ static const Case kCases[] = {
     {"rearm_early", aborts::rearmEarly},
     {"round_skip", aborts::roundSkip},
     {"stale", aborts::stale},       {"detached", aborts::detached},
+    {"stale_region", aborts::staleRegion},
     {"late_attach", aborts::lateAttach},
     {"detach_all_put", aborts::detachAllPut},
     {"wrong_pe", aborts::wrongPe},  {"table_limit", aborts::tableLimit},

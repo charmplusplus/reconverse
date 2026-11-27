@@ -26,9 +26,10 @@ are refused where they would be given.
 | registration (`CmiAttachRec`) | the origin process's attachment table | its PEs, under the table lock, and its in-flight count |
 | attachment (`CmiAttachmentRec`, what a `CmiAttachment` points to) | heap of the origin's process, never freed | the origin |
 
-Only atomics are written by more than one thread: the fields of a counter
-line, a region slot's landed count, an attachment's contribution count, and
-a registration's state and in-flight count. Everything else has one writer,
+Only atomics are written by more than one thread, or read by other
+threads while their owner writes them: the fields of a counter line, a
+region slot's landed count and generation, an attachment's contribution
+count, and a registration's state and in-flight count. Everything else has one writer,
 which is why the owner's calls (`CmiRegionCreate`, `CmiRegionAddPiece`,
 `CmiCounterCreate`, `CmiCounterRearm`, `CmiTargetMake`, the destroys) abort on
 any other PE.
@@ -43,9 +44,11 @@ bytes on Apple's 16 KiB pages). The owner allocates a chunk the first time it
 needs an index in it, and publishes it with a release store; every lookup
 (`lineOf(rank, index)`) goes through the chunk table with an acquire load. No
 chunk is freed before the process exits, so a late lookup never reaches freed
-memory. Each PE has a second table of the same kind, one 64-bit count per
-region slot (up to 65536 regions): the puts without a counter that have
-landed in the region.
+memory. Each PE has a second table of the same kind, one entry per region
+slot (up to 65536 regions): the puts without a counter that have landed in
+the region, and the slot's generation, which the destroy increments before
+it deregisters or frees the memory, and which an in-process put or get
+checks against its target's.
 
 A line is one cache line (`CMI_CACHE_LINE_SIZE`) and holds only what a
 contribution reads or writes:
@@ -135,14 +138,16 @@ rule below.
 
 1. checks that the owner has not ended the registration (a load of its
    state, in every build);
-2. counts the contribution on the attachment, for its detach notice;
-3. checks the target's counter: its line must be `LIVE` with the target's
+2. checks the target's region: the slot's generation must be the target's
+   (one load, every build);
+3. counts the contribution on the attachment, for its detach notice;
+4. checks the target's counter: its line must be `LIVE` with the target's
    generation, in every build (the line is about to be written anyway);
-4. with `CHECK_ROUNDS` in an error-checking build, the round check;
-5. reports a created contribution to the QD hook, if the counter has an
+5. with `CHECK_ROUNDS` in an error-checking build, the round check;
+6. reports a created contribution to the QD hook, if the counter has an
    action, and one more if `local` has one;
-6. copies the source into the piece;
-7. `contribute()` on the target's counter, then on `local`.
+7. copies the source into the piece;
+8. `contribute()` on the target's counter, then on `local`.
 
 The source may be reused when `CmiPut` returns. Memory ordering: the copy
 happens before the acq_rel decrement; each later decrement continues the
@@ -150,8 +155,9 @@ release sequence, the firing one synchronizes with every earlier
 contribution, and the queue push and the owner's pop carry that to the owner
 PE (5.4). The same PE and another PE of the process run the same code.
 
-`CmiSignal` is the same without a copy. `CmiGet` copies the piece into the
-destination and decrements `local`; it does not touch the target's counter.
+`CmiSignal` is the same without a copy or a region. `CmiGet` checks the
+registration and the region as above, copies the piece into the destination
+and decrements `local`; it does not touch the target's counter.
 
 ## The paths to another process
 
@@ -335,8 +341,9 @@ configure; `ON` or `OFF` overrides it. It adds:
 
 Every build checks the attachment and target (`magic`), the capacity, a
 put, get or signal through a registration its owner ended (above), the
-counter's generation on an in-process contribution and at the owner of a
-remote signal or message, a signal that names a counter or region that does
+region's generation on an in-process put or get, the counter's generation
+on an in-process contribution and at the owner of a remote signal or
+message, a signal that names a counter or region that does
 not exist, re-arm legality, and that the owner's calls run on the owner PE.
 The readiness aborts name the counter, its generation, the owner PE and the
 round, and end with design 11's advice to use a message send.

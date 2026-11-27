@@ -29,7 +29,7 @@ const char kReadinessAdvice[] =
 
 CounterSlice *g_slices = nullptr;
 uint32_t g_linesPerChunk = 0;
-uint32_t g_landedPerChunk = 0;
+uint32_t g_slotsPerChunk = 0;
 uint32_t g_counterLimit = kMaxCountersPerPe;
 std::atomic<CmiRegionQdFn> g_qdHook{nullptr};
 
@@ -94,13 +94,13 @@ CounterLine *lineOf(int rank, uint32_t index) {
   return chunk ? chunk + index % g_linesPerChunk : nullptr;
 }
 
-std::atomic<uint64_t> *regionLandedOf(int rank, uint32_t slot) {
+RegionSlot *regionSlotOf(int rank, uint32_t slot) {
   if (rank < 0 || rank >= CmiMyNodeSize() || slot >= kMaxRegionsPerPe)
     return nullptr;
-  std::atomic<uint64_t> *chunk = g_slices[rank]
-                                     .landedChunks[slot / g_landedPerChunk]
-                                     .load(std::memory_order_acquire);
-  return chunk ? chunk + slot % g_landedPerChunk : nullptr;
+  RegionSlot *chunk = g_slices[rank]
+                          .slotChunks[slot / g_slotsPerChunk]
+                          .load(std::memory_order_acquire);
+  return chunk ? chunk + slot % g_slotsPerChunk : nullptr;
 }
 
 void qdCount(int created, int processed) {
@@ -148,18 +148,21 @@ CounterLine *allocLine(PeState *ps, uint32_t index) {
   return chunk + index % g_linesPerChunk;
 }
 
-// A region slot's landed count, allocated as allocLine allocates lines.
-std::atomic<uint64_t> *allocLanded(PeState *ps, uint32_t slot) {
-  std::atomic<std::atomic<uint64_t> *> &entry =
-      g_slices[ps->rank].landedChunks[slot / g_landedPerChunk];
-  std::atomic<uint64_t> *chunk = entry.load(std::memory_order_relaxed);
+// A region slot, allocated as allocLine allocates lines.
+RegionSlot *allocSlot(PeState *ps, uint32_t slot) {
+  std::atomic<RegionSlot *> &entry =
+      g_slices[ps->rank].slotChunks[slot / g_slotsPerChunk];
+  RegionSlot *chunk = entry.load(std::memory_order_relaxed);
   if (chunk == nullptr) {
-    chunk = new std::atomic<uint64_t>[g_landedPerChunk];
-    for (uint32_t i = 0; i < g_landedPerChunk; i++)
-      chunk[i].store(0, std::memory_order_relaxed);
+    chunk = new RegionSlot[g_slotsPerChunk];
+    for (uint32_t i = 0; i < g_slotsPerChunk; i++) {
+      chunk[i].landed.store(0, std::memory_order_relaxed);
+      chunk[i].generation.store(0, std::memory_order_relaxed);
+      chunk[i].pad = 0;
+    }
     entry.store(chunk, std::memory_order_release);
   }
-  return chunk + slot % g_landedPerChunk;
+  return chunk + slot % g_slotsPerChunk;
 }
 
 #if CMI_REGION_CHECKS
@@ -325,6 +328,10 @@ void tryCompleteCounter(CmiCounterRec *c) {
 void completeRegion(CmiRegionRec *r) {
   PeState *ps = peState();
   ps->regionGen[r->slot]++;
+  // before the memory goes: an in-process put through a target of this
+  // region now aborts
+  regionSlotOf(ps->rank, r->slot)
+      ->generation.store(ps->regionGen[r->slot], std::memory_order_release);
   ps->regions[r->slot] = nullptr;
   ps->freeRegions.push_back(r->slot);
   if (r->mr != comm_backend::MR_NULL) comm_backend::deregisterMemory(r->mr);
@@ -345,8 +352,8 @@ void completeRegion(CmiRegionRec *r) {
 // the region's own count, those with one by their counters'.
 void tryCompleteRegion(CmiRegionRec *r) {
   if (r->state != ObjState::Destroying || !r->balance.empty()) return;
-  std::atomic<uint64_t> *landed = regionLandedOf(peState()->rank, r->slot);
-  bool waiting = landed->load(std::memory_order_acquire) < r->expectedUncounted;
+  RegionSlot *rs = regionSlotOf(peState()->rank, r->slot);
+  bool waiting = rs->landed.load(std::memory_order_acquire) < r->expectedUncounted;
   for (CmiCounterRec *c : r->pairedCounters) {
     // Exact for a counter paired with this region alone. For a counter
     // shared with another region in use or a target with no region, others'
@@ -504,12 +511,12 @@ void counterSignalHandler(void *, int destRank, uint16_t signal, int, size_t) {
 
 // Put with signal, kind kSignalRegion: a put without a counter landed.
 void regionSignalHandler(void *, int destRank, uint16_t signal, int, size_t) {
-  std::atomic<uint64_t> *landed = regionLandedOf(destRank, signal);
-  if (landed == nullptr)
+  RegionSlot *rs = regionSlotOf(destRank, signal);
+  if (rs == nullptr)
     CmiAbort("CmiPut: a put from another process reached region slot %u of "
              "PE %d, which never existed\n", signal,
              CmiNodeFirst(CmiMyNode()) + destRank);
-  landed->fetch_add(1, std::memory_order_release);
+  rs->landed.fetch_add(1, std::memory_order_release);
   qdCount(0, 1);
 }
 
@@ -560,8 +567,8 @@ void putDataHandler(void *vmsg) {
                            "CmiPut"),
                1, "CmiPut");
   } else {
-    regionLandedOf(peState()->rank, m->regionSlot)
-        ->fetch_add(1, std::memory_order_release);
+    regionSlotOf(peState()->rank, m->regionSlot)
+        ->landed.fetch_add(1, std::memory_order_release);
     qdCount(0, 1);
   }
   CmiFree(m);
@@ -651,18 +658,18 @@ void CmiRegionNodeInit(char **argv) {
   g_linesPerChunk = (uint32_t)(page / sizeof(CounterLine));
   uint32_t nchunks =
       (kMaxCountersPerPe + g_linesPerChunk - 1) / g_linesPerChunk;
-  g_landedPerChunk = (uint32_t)(page / sizeof(std::atomic<uint64_t>));
-  uint32_t nlanded =
-      (kMaxRegionsPerPe + g_landedPerChunk - 1) / g_landedPerChunk;
+  g_slotsPerChunk = (uint32_t)(page / sizeof(RegionSlot));
+  uint32_t nslotChunks =
+      (kMaxRegionsPerPe + g_slotsPerChunk - 1) / g_slotsPerChunk;
   int nranks = CmiMyNodeSize();
   g_slices = new CounterSlice[nranks];
   for (int r = 0; r < nranks; r++) {
     g_slices[r].chunks = new std::atomic<CounterLine *>[nchunks];
     for (uint32_t i = 0; i < nchunks; i++)
       g_slices[r].chunks[i].store(nullptr, std::memory_order_relaxed);
-    g_slices[r].landedChunks = new std::atomic<std::atomic<uint64_t> *>[nlanded];
-    for (uint32_t i = 0; i < nlanded; i++)
-      g_slices[r].landedChunks[i].store(nullptr, std::memory_order_relaxed);
+    g_slices[r].slotChunks = new std::atomic<RegionSlot *>[nslotChunks];
+    for (uint32_t i = 0; i < nslotChunks; i++)
+      g_slices[r].slotChunks[i].store(nullptr, std::memory_order_relaxed);
   }
   attachNodeInit();
 
@@ -891,8 +898,10 @@ CmiRegion CmiRegionCreate(void *base, size_t bytes, CmiMemKind kind, int devId,
     ps->regionGen.push_back(0);
   }
   // the previous region in the slot completed its destroy only once its
-  // puts had landed
-  allocLanded(ps, slot)->store(0, std::memory_order_relaxed);
+  // puts had landed; the generation is already this region's
+  RegionSlot *rs = allocSlot(ps, slot);
+  rs->landed.store(0, std::memory_order_relaxed);
+  rs->generation.store(ps->regionGen[slot], std::memory_order_release);
   auto *r = new CmiRegionRec();
   r->base = base;
   r->bytes = bytes;
@@ -1107,6 +1116,19 @@ CounterLine *liveLine(CmiAttachmentRec *a, uint64_t k, const char *call) {
   return L;
 }
 
+// The target's region, in this process, checked against the target's
+// generation in every build: one load of the slot's generation, which the
+// destroy changes before it deregisters or frees the memory. A destroy that
+// completes between this check and the copy is the application's error.
+void liveRegionHere(const CmiTarget &t, const char *call) {
+  RegionSlot *rs = regionSlotOf(CmiRankOf(t.ownerPe), t.regionSlot);
+  if (rs == nullptr ||
+      rs->generation.load(std::memory_order_acquire) != t.regionGen)
+    CmiAbort("%s: region slot %u (generation %u) of PE %d was destroyed; "
+             "this target is stale. %s\n", call, t.regionSlot, t.regionGen,
+             t.ownerPe, kReadinessAdvice);
+}
+
 // QD (design 4.8): a contribution to a counter with an action is processed
 // with its round; a put without a counter, when it lands.
 void qdIssued(const CmiTarget &t, bool contributes, CmiCounter local) {
@@ -1176,6 +1198,7 @@ int CmiPut(CmiAttachment t, size_t offset, const void *src, size_t bytes,
     return CMI_REGION_OK;
   }
   checkLocalState(a, "CmiPut");
+  liveRegionHere(tg, "CmiPut");
   CounterLine *L = hasCounter ? liveLine(a, counted(a), "CmiPut") : nullptr;
   qdIssued(tg, hasCounter, local);
   memcpy((char *)(uintptr_t)tg.pieceAddr + offset, src, bytes);
@@ -1194,6 +1217,7 @@ int CmiGet(void *dst, size_t bytes, const CmiLayout *dstLayout,
     return CMI_REGION_ECAPACITY;
   if (isLocal(tg)) {
     checkLocalState(a, "CmiGet");
+    liveRegionHere(tg, "CmiGet");
     memcpy(dst, (const char *)(uintptr_t)tg.pieceAddr + offset, bytes);
     qdIssued(tg, false, local);
     if (local != nullptr) contributeLocal(local, "CmiGet");

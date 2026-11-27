@@ -47,6 +47,8 @@ foreach(_pes 1 4)
   region_counter_abort_test(rearm_early ${_pes}
     "re-armed before the round's action started")
   region_counter_abort_test(stale ${_pes} "was destroyed; this target is stale")
+  region_counter_abort_test(stale_region ${_pes}
+    "CmiPut: region slot [0-9]+ \\(generation [0-9]+\\) of PE 0 was destroyed; this target is stale")
   region_counter_abort_test(table_limit ${_pes}
     "already has 3 counters, the limit" +counter_table 3)
   region_counter_abort_test(detached ${_pes}
