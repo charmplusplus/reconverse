@@ -1,4 +1,4 @@
-# Per-sender order and loss through the PE thread queue, across ring growth,
+# Per-sender order and loss through the PE thread queue, across a long burst,
 # pushes to the PE's own queue and steady streaming (issue #271), with the
 # shared FIFO (default), with +thread_queue_per_producer, and under the old
 # scheduler. +randomized_msgq reorders on purpose, so it is not run here.

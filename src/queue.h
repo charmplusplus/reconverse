@@ -9,6 +9,14 @@
 #include <memory>
 #include <cstdint>
 #include <type_traits>
+#include <thread>
+#include <vector>
+#include <algorithm>
+#if defined(__x86_64__) || defined(__i386__) || defined(_M_X64) || defined(_M_IX86)
+#include <immintrin.h> // _mm_pause
+#elif defined(_M_ARM64)
+#include <intrin.h> // __yield
+#endif
 #include "concurrentqueue.h"
 #include <atomic>
 #include "converse.h" // CMI_CACHE_LINE_SIZE
@@ -114,32 +122,83 @@ class AtomicAccessControl {
     }
 };
 
+// For a wait the thread queue below makes rare, a producer at a segment
+// boundary waiting for the one that links the next segment: pause in the
+// spin, which hands the core to a sibling hardware thread, and after a while
+// yield it, so that the thread the wait depends on can run when there are
+// more threads than cores.
+class QueueBackoff {
+    unsigned spins = 0;
+public:
+    void wait() {
+        if (++spins < 64) {
+#if defined(__x86_64__) || defined(__i386__) || defined(_M_X64) || defined(_M_IX86)
+            _mm_pause();
+#elif defined(_M_ARM64)
+            __yield();
+#elif defined(__aarch64__) || defined(__arm__)
+            asm volatile("yield" ::: "memory");
+#endif
+        } else {
+            std::this_thread::yield();
+        }
+    }
+};
+
 // The PE thread queue (issue #271): one FIFO that every producer shares, so
 // taking a message costs the consumer the same with 2 producers or 127.
 // AtomicAccessControl above walks its per-producer sub-queues to find a
 // message; it stays available with +thread_queue_per_producer.
 //
-// A ring of slots, each null or a message. A producer takes a ticket with one
-// fetch_add on the ring's tail and stores its message in slot ticket % cap.
-// The consumer takes the slots in ticket order and nulls each one it takes,
-// so its empty check and its pop each load the one slot at its head. It
-// publishes its position (headPub) every kPublish messages.
+// A chain of segments of kSegSize slots, each slot null or a message. A
+// segment is filled once, front to back; when the consumer has drained it, it
+// goes back to this queue's pool, to be linked again later.
 //
-// A ticket that lands cap - 2 * kSpare or more past headPub closes the ring
-// once its message is stored. With at most kSpare threads pushing at once,
-// every ticket handed out before the close names a slot that is already
-// null: the ones that passed that check by construction, and the ones after
-// the last of those because they come at most one per pushing thread (a
-// thread holding one closes the ring before it pushes again). A producer
-// still waits for its slot to read null, so a broken bound costs a wait,
-// never a message.
+// Push: a producer takes a ticket with one fetch_add on the tail segment's
+// counter and stores its message in that ticket's slot. Every slot is null
+// when its segment is linked, and each ticket is handed out once per linking,
+// so a producer never waits for the consumer (a PE pushes to its own queue),
+// and any number of threads may push.
 //
-// The close is a bit in the tail: a producer whose ticket carries it, a
-// delayed one included, goes on to the next ring. The closer links that ring,
-// twice as large, and then stores a marker in the slot of the first ticket
-// not handed out, so the consumer moves on when it reaches the marker. A
-// closed ring is freed only with the queue, because a delayed producer may
-// still read it; the closed rings add up to less than the live one.
+// Pop: the consumer takes the slots in order and nulls each one it takes, so
+// its empty check and its pop each load the one slot at its head. Slot
+// kSegSize is never filled. The consumer stops there and moves on once the
+// next segment is linked, returning the drained one to the pool.
+//
+// The boundary: ticket kSegSize goes to exactly one producer per linking.
+// That producer takes a segment from the pool and, in this order, makes it
+// tailSeg, links it after the full one, and opens it by setting its counter
+// to 0. A producer whose ticket is past kSegSize waits until tailSeg moves on
+// or the segment it tried opens again, and then starts over from tailSeg. It
+// may have tried while that segment sat in the pool, and the segment may
+// since have become tailSeg again and even filled; the wait ends whenever no
+// one holds that segment's ticket kSegSize, so that the producer can take it.
+//
+// Segments come back, so a producer may take a ticket on a segment it read in
+// an earlier life of that segment. Three rules make that harmless:
+//   1. A segment in the pool, or claimed and not yet open, carries kClosed in
+//      its counter, so a ticket on it is refused. A ticket taken after the
+//      segment opens again names a slot of this same queue, which delivers
+//      it with the rest of that life.
+//   2. Only the producer holding ticket kSegSize moves tailSeg on. Otherwise
+//      a delayed producer could move it to, or past, a segment in that
+//      segment's next life, and the consumer would wait forever at slots that
+//      no ticket fills.
+//   3. tailSeg moves before the link is stored. The consumer recycles a
+//      segment only after reading its link, so tailSeg has left a segment
+//      before the segment can come back, and tailSeg only moves along the
+//      chain.
+// Segments are freed only with the queue, because a delayed producer may
+// still touch one.
+//
+// The pool is one cache line of segment pointers. A producer claims an entry
+// by exchanging it with null, which is the whole claim (no ABA). Only the
+// consumer fills entries, so a plain store into one it reads as null is
+// enough; when all are full it keeps the rest on a list of its own and moves
+// them in as entries empty. The queue starts with two segments, both touched
+// by the constructing thread (the consumer), one linked and one in the pool.
+// With a small backlog it alternates between those two. After a burst it
+// keeps the segments the burst needed (about 8 KB each) and reuses them.
 //
 // Order is ticket order: FIFO per producer, and across producers in the order
 // their tickets were taken. Only the owning PE may call pop, empty and size.
@@ -147,126 +206,143 @@ template <typename MessageType>
 class ThreadQueue {
     static_assert(std::is_pointer<MessageType>::value,
                   "ThreadQueue holds pointers: null marks an empty slot");
-    static constexpr uint64_t kInitialCap = 4096;
-    static constexpr uint64_t kSpare = 512;   // threads that may push at once
-    static constexpr uint64_t kPublish = 256; // pops between headPub stores
+    static constexpr uint64_t kSegSize = 1024;
     static constexpr uint64_t kClosed = 1ull << 63;
-    static constexpr uint64_t kOpen = ~0ull;  // closedAt until the close
-    static_assert((kInitialCap & (kInitialCap - 1)) == 0 &&
-                  kInitialCap > 2 * kSpare + kPublish, "ThreadQueue sizes");
+    static constexpr int kPoolSlots = CMI_CACHE_LINE_SIZE / sizeof(void *);
 
-    struct Ring {
-        alignas(CMI_CACHE_LINE_SIZE) std::atomic<uint64_t> tail{0};    // producers' line
-        alignas(CMI_CACHE_LINE_SIZE) std::atomic<uint64_t> headPub{0}; // consumer's line
-        // read-mostly from here on
-        alignas(CMI_CACHE_LINE_SIZE) const uint64_t cap;
-        std::atomic<MessageType> *const slots;
-        std::atomic<Ring *> next{nullptr};
-        std::atomic<uint64_t> closedAt{kOpen}; // tickets handed out before the close
+    struct Segment {
+        alignas(CMI_CACHE_LINE_SIZE) std::atomic<uint64_t> tail{kClosed}; // producers' line
+        alignas(CMI_CACHE_LINE_SIZE) std::atomic<Segment *> next{nullptr};
+        Segment *allNext = nullptr; // every segment, for the destructor
+        alignas(CMI_CACHE_LINE_SIZE) std::atomic<MessageType> slots[kSegSize + 1];
 
-        explicit Ring(uint64_t c) : cap(c), slots(new std::atomic<MessageType>[c]) {
-            for (uint64_t i = 0; i < c; i++)
-                slots[i].store(nullptr, std::memory_order_relaxed);
+        Segment() {
+            for (auto &s : slots) s.store(nullptr, std::memory_order_relaxed);
         }
-        ~Ring() { delete[] slots; }
-
-        std::atomic<MessageType> &slot(uint64_t ticket) { return slots[ticket & (cap - 1)]; }
     };
 
-    alignas(CMI_CACHE_LINE_SIZE) std::atomic<Ring *> tailRing; // producers start here
+    alignas(CMI_CACHE_LINE_SIZE) std::atomic<Segment *> tailSeg; // producers start here
+    alignas(CMI_CACHE_LINE_SIZE) std::atomic<Segment *> pool[kPoolSlots];
+    alignas(CMI_CACHE_LINE_SIZE) std::atomic<Segment *> allSegs{nullptr};
     // consumer only
-    alignas(CMI_CACHE_LINE_SIZE) std::atomic<MessageType> *headSlot; // the slot of ticket head
-    uint64_t head = 0;
-    Ring *headRing;
-    Ring *const firstRing; // the destructor frees the chain from here
+    alignas(CMI_CACHE_LINE_SIZE) std::atomic<MessageType> *headSlot;
+    std::atomic<MessageType> *headEnd; // &headSeg->slots[kSegSize], never filled
+    Segment *headSeg = nullptr;
+    std::vector<Segment *> spare; // drained segments the pool had no entry for
     std::unique_ptr<AtomicAccessControl<MessageType>> perProducer;
 
-    static MessageType closedMark() { return reinterpret_cast<MessageType>(uintptr_t(1)); }
-
-    // The ring after r, linking one if no one has.
-    static Ring *link(Ring *r) {
-        Ring *n = r->next.load(std::memory_order_acquire);
-        if (n != nullptr) return n;
-        Ring *fresh = new Ring(r->cap * 2);
-        if (r->next.compare_exchange_strong(n, fresh, std::memory_order_acq_rel,
-                                            std::memory_order_acquire))
-            return fresh;
-        delete fresh;
-        return n;
+    Segment *allocate() {
+        Segment *s = new Segment;
+        Segment *h = allSegs.load(std::memory_order_relaxed);
+        do {
+            s->allNext = h;
+        } while (!allSegs.compare_exchange_weak(h, s, std::memory_order_release,
+                                                std::memory_order_relaxed));
+        return s;
     }
 
-    // Closes r unless someone has: links the next ring, then marks the slot of
-    // the first ticket not handed out.
-    void close(Ring *r) {
-        uint64_t end = r->tail.fetch_or(kClosed, std::memory_order_acq_rel);
-        if (end & kClosed) return;
-        r->closedAt.store(end, std::memory_order_release);
-        Ring *n = link(r);
-        std::atomic<MessageType> &mark = r->slot(end);
-        while (mark.load(std::memory_order_acquire) != nullptr) {} // only past the kSpare bound
-        mark.store(closedMark(), std::memory_order_release);
-        tailRing.compare_exchange_strong(r, n, std::memory_order_acq_rel,
-                                         std::memory_order_relaxed);
+    // A closed segment for the producer that links the next one.
+    Segment *claim() {
+        for (auto &p : pool) {
+            if (p.load(std::memory_order_relaxed) == nullptr) continue;
+            Segment *s = p.exchange(nullptr, std::memory_order_acq_rel);
+            if (s != nullptr) return s;
+        }
+        return allocate();
     }
 
-    // The marker is at head: every ticket of this ring has been taken, and
-    // the next ring was linked before the marker was stored.
-    void nextRing() {
-        headRing = headRing->next.load(std::memory_order_acquire);
-        head = 0;
-        headSlot = &headRing->slot(0);
+    // The consumer is done with s: close it and put it back.
+    void recycle(Segment *s) {
+        s->tail.store(kClosed, std::memory_order_relaxed);
+        s->next.store(nullptr, std::memory_order_relaxed);
+        spare.push_back(s);
+        for (auto &p : pool) {
+            if (spare.empty()) break;
+            if (p.load(std::memory_order_relaxed) != nullptr) continue;
+            p.store(spare.back(), std::memory_order_release);
+            spare.pop_back();
+        }
+    }
+
+    // At headEnd: move to the next segment if one is linked.
+    bool advance() {
+        Segment *n = headSeg->next.load(std::memory_order_acquire);
+        if (n == nullptr) return false;
+        Segment *done = headSeg;
+        headSeg = n;
+        headSlot = &n->slots[0];
+        headEnd = &n->slots[kSegSize];
+        recycle(done);
+        return true;
     }
 
     MessageType take() {
         for (;;) {
             MessageType m = headSlot->load(std::memory_order_acquire);
-            if (m == nullptr) return nullptr;
-            if (m == closedMark()) { nextRing(); continue; }
-            headSlot->store(nullptr, std::memory_order_relaxed);
-            if ((++head & (kPublish - 1)) == 0)
-                headRing->headPub.store(head, std::memory_order_release);
-            headSlot = &headRing->slot(head);
-            return m;
+            if (m != nullptr) {
+                headSlot->store(nullptr, std::memory_order_relaxed);
+                ++headSlot;
+                return m;
+            }
+            if (headSlot != headEnd || !advance()) return nullptr;
         }
     }
 
 public:
-    explicit ThreadQueue(bool perProducerQueue = false)
-        : firstRing(perProducerQueue ? nullptr : new Ring(kInitialCap)) {
-        tailRing.store(firstRing, std::memory_order_relaxed);
-        headRing = firstRing;
-        headSlot = firstRing ? &firstRing->slot(0) : nullptr;
-        if (perProducerQueue) perProducer.reset(new AtomicAccessControl<MessageType>());
+    explicit ThreadQueue(bool perProducerQueue = false) {
+        for (auto &p : pool) p.store(nullptr, std::memory_order_relaxed);
+        if (perProducerQueue) {
+            perProducer.reset(new AtomicAccessControl<MessageType>());
+            tailSeg.store(nullptr, std::memory_order_relaxed);
+            headSlot = headEnd = nullptr;
+            return;
+        }
+        headSeg = allocate();
+        headSeg->tail.store(0, std::memory_order_relaxed);
+        headSlot = &headSeg->slots[0];
+        headEnd = &headSeg->slots[kSegSize];
+        tailSeg.store(headSeg, std::memory_order_relaxed);
+        pool[0].store(allocate(), std::memory_order_relaxed);
     }
     ThreadQueue(const ThreadQueue &) = delete;
     ThreadQueue &operator=(const ThreadQueue &) = delete;
     ~ThreadQueue() {
-        for (Ring *r = firstRing; r != nullptr;) {
-            Ring *n = r->next.load(std::memory_order_relaxed);
-            delete r;
-            r = n;
+        for (Segment *s = allSegs.load(std::memory_order_relaxed); s != nullptr;) {
+            Segment *n = s->allNext;
+            delete s;
+            s = n;
         }
     }
 
     void push(MessageType message) {
-        if (reinterpret_cast<uintptr_t>(message) <= 1) // null, or the marker
-            CmiAbort("ThreadQueue: null message pushed");
+        if (message == nullptr) CmiAbort("ThreadQueue: null message pushed");
         if (perProducer) { perProducer->push(message); return; }
-        Ring *start = tailRing.load(std::memory_order_acquire);
-        Ring *r = start;
-        uint64_t t;
-        while ((t = r->tail.fetch_add(1, std::memory_order_acq_rel)) & kClosed)
-            r = link(r);
-        uint64_t h = r->headPub.load(std::memory_order_acquire);
-        std::atomic<MessageType> &slot = r->slot(t);
-        while (slot.load(std::memory_order_acquire) != nullptr) {} // only past the kSpare bound
-        slot.store(message, std::memory_order_release);
-        // move the producers' starting ring on; it only ever moves forward,
-        // from a ring to one linked after it
-        if (r != start)
-            tailRing.compare_exchange_strong(start, r, std::memory_order_acq_rel,
-                                             std::memory_order_relaxed);
-        if (t - h >= r->cap - 2 * kSpare) close(r);
+        QueueBackoff backoff;
+        for (;;) {
+            Segment *s = tailSeg.load(std::memory_order_acquire);
+            uint64_t t = s->tail.fetch_add(1, std::memory_order_acq_rel);
+            if (t < kSegSize) {
+                s->slots[t].store(message, std::memory_order_release);
+                return;
+            }
+            if (t == kSegSize) {
+                // s is full and this producer links the next segment, which
+                // stays closed until it is linked (rules 2 and 3)
+                Segment *n = claim();
+                tailSeg.store(n, std::memory_order_release);
+                s->next.store(n, std::memory_order_release);
+                n->tail.store(0, std::memory_order_release);
+                continue;
+            }
+            // s is full or closed. Wait while tailSeg is s and s's counter is
+            // past kSegSize: either a producer holds ticket kSegSize and will
+            // move tailSeg on, or s is closed and its claimer will open it.
+            // A counter at kSegSize or below means s has opened again since
+            // this producer's ticket, so it tries again.
+            while (tailSeg.load(std::memory_order_acquire) == s &&
+                   s->tail.load(std::memory_order_relaxed) > kSegSize)
+                backoff.wait();
+        }
     }
 
     QueueResult<MessageType> pop() {
@@ -279,22 +355,22 @@ public:
     bool empty() {
         if (perProducer) return perProducer->empty();
         for (;;) {
-            MessageType m = headSlot->load(std::memory_order_acquire);
-            if (m != closedMark()) return m == nullptr;
-            nextRing();
+            if (headSlot->load(std::memory_order_acquire) != nullptr) return false;
+            if (headSlot != headEnd || !advance()) return true;
         }
     }
 
-    // Tickets handed out and not yet taken; a ticket whose message is still
-    // being stored counts.
+    // An estimate, for the randomized scheduler's drain: tickets handed out
+    // and not yet taken, a ticket whose message is still being stored
+    // included.
     size_t size() {
         if (perProducer) return perProducer->size();
         size_t n = 0;
-        uint64_t from = head;
-        for (Ring *r = headRing; r != nullptr; r = r->next.load(std::memory_order_acquire)) {
-            uint64_t end = r->closedAt.load(std::memory_order_acquire);
-            if (end == kOpen) end = r->tail.load(std::memory_order_acquire) & ~kClosed;
-            n += end - from;
+        uint64_t from = headSlot - &headSeg->slots[0];
+        for (Segment *s = headSeg; s != nullptr; s = s->next.load(std::memory_order_acquire)) {
+            uint64_t t = s->tail.load(std::memory_order_acquire);
+            if (t & kClosed) break; // linked, not yet opened
+            n += std::min(t, kSegSize) - from;
             from = 0;
         }
         return n;

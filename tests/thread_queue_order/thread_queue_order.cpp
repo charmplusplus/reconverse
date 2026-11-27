@@ -2,14 +2,14 @@
 // carries its sender and a per-sender sequence number, and PE 0 checks that
 // each sender's messages arrive complete and in order, in three phases:
 //   1. burst:  PE 0 blocks in a handler while every other PE of its process
-//              pushes `burst` messages at it, so its queue fills far past
-//              its first ring and grows several times under concurrent
-//              producers before PE 0 takes anything;
+//              pushes `burst` messages at it, so its queue links segment
+//              after segment under concurrent producers before PE 0 takes
+//              anything;
 //   2. self:   PE 0 pushes `self` messages to its own thread queue from one
-//              handler (CmiPushPE), so the consumer itself makes it grow;
+//              handler (CmiPushPE), so the consumer itself links segments;
 //   3. stream: every other PE sends `stream` messages while PE 0 takes them,
-//              so the ring wraps many times with producers and the consumer
-//              active together.
+//              so segments are drained, recycled and linked again many times
+//              with producers and the consumer active together.
 // Single process only (the phase 1 hand-off is a process-local counter).
 //
 // Usage: thread_queue_order +pe N [burst] [self] [stream]
