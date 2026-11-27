@@ -169,6 +169,21 @@ bool threadMustPoll(void) {
   return gCommBackend->threadMustPoll();
 }
 
+void flushSends(void) {
+  if (gCommBackend == nullptr) {
+    return;
+  }
+  gCommBackend->flushSends();
+}
+
+size_t pendingSends(size_t *bytes) {
+  if (gCommBackend == nullptr) {
+    if (bytes) *bytes = 0;
+    return 0;
+  }
+  return gCommBackend->pendingSends(bytes);
+}
+
 void barrier(void) {
   if (gCommBackend == nullptr) {
     return;

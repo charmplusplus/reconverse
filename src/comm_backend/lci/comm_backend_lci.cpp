@@ -2,6 +2,7 @@
 #include "lci.hpp"
 #include "lct.h"
 #include "comm_backend/lci/comm_backend_lci.h"
+#include <csignal>
 #include <cstdlib>
 #include <memory>
 #include <string>
@@ -24,19 +25,29 @@ struct ThreadContext {
 
 thread_local ThreadContext g_thread_context;
 
-// Set while a thread is inside lci::progress_x() (i.e., executing a completion
-// callback fired by progress). Used to break the reentrancy deadlock: if issueAm
-// or issueRget are called from within a callback, they must not spin-retry (which
-// would hold m_progress_locks indefinitely and prevent CQ polling). Instead they
-// push to the LCI backlog queue with allow_retry=false and return immediately
-// (a rendezvous AM waits in CommBackendLCI::m_pending instead).
+// Set while a thread is inside lci::progress_x(), i.e. possibly in a
+// completion callback, with its device's progress lock held. An operation
+// issued then is tried once and queued if LCI does not take it: a retry loop
+// could not poll the device.
 thread_local bool g_in_progress_callback = false;
+
+// Set while a thread is in postPending(), so that an operation issued by a
+// completion handler it calls does not start another pass.
+thread_local bool g_in_post_pending = false;
 
 // Rendezvous AMs posted and not yet completed (CommBackendLCI::m_rdvMax).
 alignas(CMI_CACHE_LINE_SIZE) std::atomic<long> g_rdv_inflight{0};
 } // namespace detail
 
 std::vector<CompHandler> g_handlers;
+
+// Set by SIGUSR2; the next progress() of the process prints its send queues.
+static std::atomic<bool> g_report_requested{false};
+#ifndef _WIN32
+static void reportSignalHandler(int) {
+  g_report_requested.store(true, std::memory_order_relaxed);
+}
+#endif
 
 struct localCallbackArgs {
   CompHandler handler;
@@ -321,6 +332,28 @@ void CommBackendLCI::init(char **argv) {
                        "that are not preposted receives)"))
     m_rdvMax = rdvMax;
   if (m_rdvMax < 1) m_rdvMax = 1;
+  CmiGetArgIntDesc(argv, "+lci_post_tries", &m_postTries,
+                   "attempts to hand LCI a send, with progress in between, "
+                   "before it is queued and the PE goes on (default: 4)");
+  if (m_postTries < 1) m_postTries = 1;
+  m_sendStats = CmiGetArgFlagDesc(argv, "+lci_send_stats",
+      "each process that queued sends prints how many: at exit, and every 10 "
+      "seconds while any are queued");
+  m_lastReport = CmiWallTimer();
+#ifndef _WIN32
+  // SIGUSR2 asks for the queue line, unless the program uses the signal.
+  struct sigaction old;
+  if (sigaction(SIGUSR2, nullptr, &old) == 0 && old.sa_handler == SIG_DFL) {
+    struct sigaction sa {};
+    sa.sa_handler = reportSignalHandler;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = SA_RESTART;
+    sigaction(SIGUSR2, &sa, nullptr);
+  }
+#endif
+  m_pendingOfRank.reset(new std::atomic<uint32_t>[lci::get_rank_n()]);
+  for (int i = 0; i < lci::get_rank_n(); i++)
+    m_pendingOfRank[i].store(0, std::memory_order_relaxed);
   g_lci_backend = this;
   barrier();
 }
@@ -339,12 +372,20 @@ void CommBackendLCI::abortAll(int exit_code, const char *msg) {
 }
 
 void CommBackendLCI::exit() {
-  // Sends still waiting for a rendezvous slot after the final barrier are not
-  // delivered; give their buffers back.
-  for (const PendingAm &am : m_pending)
-    am.localComp({am.local_buf, am.size, am.user_context});
+  if (m_sendStats && m_everQueued != 0) {
+    std::lock_guard<std::mutex> lock(m_pendingMutex);
+    reportQueues("at exit");
+  }
+  // Operations still queued (ConverseExit's flushSends gave up, or they were
+  // issued after it) are not delivered; give the messages' buffers back.
+  for (auto &entry : m_pending)
+    for (const PendingOp &op : entry.second)
+      if (op.kind == PendingOp::AM)
+        op.localComp({op.local_buf, op.size, op.user_context});
   m_pending.clear();
+  m_pendingRanks.clear();
   m_nPending.store(0, std::memory_order_relaxed);
+  m_pendingBytes.store(0, std::memory_order_relaxed);
   // A rendezvous AM's data is written using the registrations of pool blocks
   // on both ends (the send buffer's, and the receive buffer's through
   // AllocatorLCI::allocate_with_mr), which deregisterAllMemory releases. So
@@ -427,87 +468,230 @@ AmHandler CommBackendLCI::registerAmHandler(CompHandler handler) {
   return g_handlers.size() - 1;
 }
 
+int CommBackendLCI::getThreadLocalDeviceIndex() {
+  return detail::g_thread_context.tls_device.is_empty()
+             ? 0
+             : detail::g_thread_context.device_idx;
+}
+
 void CommBackendLCI::issueAm(int rank, const void *local_buf, size_t size, mr_t mr,
                               CompHandler localComp, AmHandler remoteComp, void *user_context) {
-  if (size > m_maxEager) {
-    // Rendezvous. Posted now if there is room and no older one is waiting;
-    // otherwise it waits in m_pending and the PE goes on, rather than spin
-    // here for a slot only completed sends can give back.
-    PendingAm am{rank, local_buf, size, mr, localComp, remoteComp, user_context};
-    if (m_nPending.load(std::memory_order_relaxed) == 0 &&
-        postRendezvous(am, !detail::g_in_progress_callback))
-      return;
-    std::lock_guard<std::mutex> lock(m_pendingMutex);
-    m_pending.push_back(am);
-    m_nPending.fetch_add(1, std::memory_order_relaxed);
+  submit(PendingOp{PendingOp::AM, rank, getThreadLocalDeviceIndex(), local_buf,
+                   size, mr, localComp, remoteComp, user_context, 0,
+                   lci::rmr_t()});
+}
+
+// One attempt to hand an operation to LCI. `done`: it completed in the call
+// and the caller owes op.localComp. `retry`: LCI did not take it. `locked`:
+// nor did it, because another thread was posting on the device. `capped`: an
+// AM above m_maxEager, with m_rdvMax of them in flight.
+CommBackendLCI::PostResult CommBackendLCI::postOp(const PendingOp &op) {
+  bool rdv = op.kind == PendingOp::AM && op.size > m_maxEager;
+  if (rdv && detail::g_rdv_inflight.fetch_add(1, std::memory_order_relaxed) >=
+                 m_rdvMax) {
+    detail::g_rdv_inflight.fetch_sub(1, std::memory_order_relaxed);
+    return PostResult::capped;
+  }
+  auto args = new localCallbackArgs{op.localComp, op.user_context, rdv};
+  void *buf = const_cast<void *>(op.local_buf);
+  lci::status_t status;
+  switch (op.kind) {
+  case PendingOp::AM:
+    // the LCI tag carries remoteComp
+    status = lci::post_am_x(op.rank, buf, op.size, m_local_comp, m_rcomp)
+                 .mr(getDeviceMR(op.mr, op.dev))
+                 .device(m_devices[op.dev])
+                 .tag(op.remoteComp)
+                 .user_context(args)();
+    break;
+  case PendingOp::GET:
+    status = lci::post_get_x(op.rank, buf, op.size, m_local_comp,
+                             op.remote_disp, op.rmr)
+                 .mr(getDeviceMR(op.mr, op.dev))
+                 .device(m_devices[op.dev])
+                 .user_context(args)();
+    break;
+  case PendingOp::PUT:
+    status = lci::post_put_x(op.rank, buf, op.size, m_local_comp,
+                             op.remote_disp, op.rmr)
+                 .mr(getDeviceMR(op.mr, op.dev))
+                 .device(m_devices[op.dev])
+                 .user_context(args)();
+    break;
+  }
+  if (status.is_posted()) return PostResult::posted;
+  delete args;
+  if (rdv) detail::g_rdv_inflight.fetch_sub(1, std::memory_order_relaxed);
+  if (!status.is_retry()) return PostResult::done;
+  return status.get_error().errorcode == lci::errorcode_t::retry_lock
+             ? PostResult::locked
+             : PostResult::retry;
+}
+
+// Hands the operation to LCI, or queues it: at once if its rank has a queue
+// (then polling up to m_postTries times while it has), else after m_postTries
+// attempts (one inside a completion callback) with progress in between. An attempt that only lost the device's post lock to
+// another thread is repeated up to kLockTries times without counting. Never
+// waits for LCI to take the operation.
+void CommBackendLCI::submit(const PendingOp &op) {
+  const int kLockTries = 1000;
+  bool mayProgress = !detail::g_in_progress_callback;
+  // An AM above m_maxEager polls only between attempts; the others, after
+  // every post.
+  bool pollAlways = op.kind != PendingOp::AM || op.size <= m_maxEager;
+  if (m_nPending.load(std::memory_order_relaxed) != 0 &&
+      m_pendingOfRank[op.rank].load(std::memory_order_relaxed) != 0) {
+    enqueue(op);
+    // Give a destination that is receiving the chance to take what is queued
+    // before the caller allocates its next message.
+    if (mayProgress)
+      for (int i = 0; i < m_postTries &&
+                      m_pendingOfRank[op.rank].load(std::memory_order_relaxed) != 0;
+           i++)
+        progressForPost(op.dev);
     return;
   }
-  auto args = new localCallbackArgs{localComp, user_context};
-  lci::status_t status;
-  // When called from inside a completion callback (g_in_progress_callback=true),
-  // m_progress_locks is held by the outer progress() frame. Spinning here would
-  // hold that lock indefinitely, preventing CQ polling and deadlocking the TX
-  // queue. Use allow_retry=false so LCI pushes to its backlog queue and returns
-  // immediately; the backlog is drained in the next progress() call.
-  bool allow_retry = !detail::g_in_progress_callback;
-  do {
-    // we use LCI tag to pass the remoteComp
-    status = lci::post_am_x(rank, const_cast<void *>(local_buf), size,
-                            m_local_comp, m_rcomp)
-                 .mr(getThreadLocalMR(mr))
-                 .device(getThreadLocalDevice())
-                 .tag(remoteComp)
-                 .user_context(args)
-                 .allow_retry(allow_retry)();
-    if (allow_retry) progress();
-  } while (status.is_retry());
-  if (status.is_done()) {
-    localComp({local_buf, size, user_context});
-    delete args;
-  }
-}
-
-// False if the send was not posted (no room under m_rdvMax, or, without
-// `spin`, any retry), and the caller keeps it. With `spin` a retry is retried
-// with progress, as issueAm does for other sends: under m_rdvMax the packets
-// the rendezvous sends hold leave enough for the receives, so a missing
-// packet is one held by another thread's share of the pool, and a later
-// attempt finds it. Without `spin` this never spins, so it is safe inside a
-// completion callback.
-bool CommBackendLCI::postRendezvous(const PendingAm &am, bool spin) {
-  if (detail::g_rdv_inflight.fetch_add(1, std::memory_order_relaxed) >=
-      m_rdvMax) {
-    detail::g_rdv_inflight.fetch_sub(1, std::memory_order_relaxed);
-    return false;
-  }
-  auto args = new localCallbackArgs{am.localComp, am.user_context, true};
-  lci::status_t status;
+  int tries = 0, lockTries = 0;
   while (true) {
-    status = lci::post_am_x(am.rank, const_cast<void *>(am.local_buf), am.size,
-                            m_local_comp, m_rcomp)
-                 .mr(getThreadLocalMR(am.mr))
-                 .device(getThreadLocalDevice())
-                 .tag(am.remoteComp)
-                 .user_context(args)();
-    if (!spin || !status.is_retry()) break;
-    progress();
+    PostResult r = postOp(op);
+    if (mayProgress && (pollAlways || r == PostResult::retry ||
+                        r == PostResult::locked))
+      progressForPost(op.dev);
+    if (r == PostResult::posted) return;
+    if (r == PostResult::done) {
+      op.localComp({op.local_buf, op.size, op.user_context});
+      return;
+    }
+    if (r == PostResult::capped || !mayProgress) break;
+    if (r == PostResult::locked ? ++lockTries >= kLockTries
+                                : ++tries >= m_postTries)
+      break;
   }
-  if (status.is_posted()) return true;
-  delete args;
-  detail::g_rdv_inflight.fetch_sub(1, std::memory_order_relaxed);
-  if (status.is_retry()) return false;
-  am.localComp({am.local_buf, am.size, am.user_context});
-  return true;
+  enqueue(op);
 }
 
-// Posts waiting rendezvous sends, oldest first, while there is room. A send
-// leaves m_pending only once posted, so a new one cannot overtake it.
+void CommBackendLCI::enqueue(const PendingOp &op) {
+  std::lock_guard<std::mutex> lock(m_pendingMutex);
+  std::deque<PendingOp> &q = m_pending[op.rank];
+  if (q.empty()) m_pendingRanks.push_back(op.rank);
+  q.push_back(op);
+  m_pendingOfRank[op.rank].fetch_add(1, std::memory_order_relaxed);
+  m_pendingBytes.fetch_add(op.size, std::memory_order_relaxed);
+  size_t n = m_nPending.fetch_add(1, std::memory_order_relaxed) + 1;
+  m_everQueued++;
+  m_everQueuedBytes += op.size;
+  if (n > m_maxQueued) m_maxQueued = n;
+}
+
+// Posts queued operations, each rank's oldest first, until LCI refuses; the
+// pass ends after kFailedRanks ranks were refused, and the next one starts
+// with the ranks this one did not reach. One thread at a time (try-lock), and
+// an operation leaves its queue under the lock once posted, so it is posted
+// once. Handlers of operations that completed in the post run after the lock
+// is released, since they may issue operations.
 void CommBackendLCI::postPending() {
+  const int kFailedRanks = 4;
   std::unique_lock<std::mutex> lock(m_pendingMutex, std::try_to_lock);
   if (!lock.owns_lock()) return;  // being posted, or appended to
-  while (!m_pending.empty() && postRendezvous(m_pending.front(), false)) {
-    m_pending.pop_front();
-    m_nPending.fetch_sub(1, std::memory_order_relaxed);
+  detail::g_in_post_pending = true;
+  if (m_sendStats && CmiWallTimer() - m_lastReport > 10.0) {
+    reportQueues("periodic");
+    m_lastReport = CmiWallTimer();
+  }
+  std::vector<PendingOp> completed;
+  int failed = 0;
+  for (size_t n = m_pendingRanks.size(); n > 0 && failed < kFailedRanks; n--) {
+    int rank = m_pendingRanks.front();
+    m_pendingRanks.pop_front();
+    auto it = m_pending.find(rank);
+    std::deque<PendingOp> &q = it->second;
+    while (!q.empty()) {
+      PostResult r = postOp(q.front());
+      if (r != PostResult::posted && r != PostResult::done) break;
+      if (r == PostResult::done) completed.push_back(q.front());
+      m_pendingBytes.fetch_sub(q.front().size, std::memory_order_relaxed);
+      q.pop_front();
+      m_pendingOfRank[rank].fetch_sub(1, std::memory_order_relaxed);
+      m_nPending.fetch_sub(1, std::memory_order_release);
+    }
+    if (q.empty()) {
+      m_pending.erase(it);
+    } else {
+      m_pendingRanks.push_back(rank);
+      failed++;
+    }
+  }
+  lock.unlock();
+  for (const PendingOp &op : completed)
+    op.localComp({op.local_buf, op.size, op.user_context});
+  detail::g_in_post_pending = false;
+}
+
+void CommBackendLCI::reportQueues(const char *when) {
+  std::string ranks;
+  int listed = 0;
+  for (const auto &entry : m_pending) {
+    if (listed++ == 16) {
+      ranks += " ...";
+      break;
+    }
+    ranks += " " + std::to_string(entry.first) + "(" +
+             std::to_string(entry.second.size()) + ")";
+  }
+  CmiError("Reconverse> LCI sends, process %d, %s: %zu operations (%zu bytes) "
+           "queued now, for %zu destination processes [process(operations):%s]; "
+           "since start %zu operations (%zu bytes) waited in a queue, at most "
+           "%zu at a time; %ld rendezvous sends in flight (limit %ld)\n",
+           lci::get_rank_me(), when,
+           m_nPending.load(std::memory_order_relaxed),
+           m_pendingBytes.load(std::memory_order_relaxed), m_pending.size(),
+           ranks.c_str(), m_everQueued, m_everQueuedBytes, m_maxQueued,
+           detail::g_rdv_inflight.load(std::memory_order_relaxed), m_rdvMax);
+}
+
+size_t CommBackendLCI::pendingSends(size_t *bytes) {
+  if (bytes) *bytes = m_pendingBytes.load(std::memory_order_relaxed);
+  return m_nPending.load(std::memory_order_relaxed);
+}
+
+// Polls every device and posts from the queues until they are empty. Gives up
+// once kFlushStallSeconds pass with no queued operation posted (a destination
+// that never drains), and reports what is left.
+void CommBackendLCI::flushSends() {
+  const double kFlushStallSeconds = 60.0;
+  size_t last = m_nPending.load(std::memory_order_acquire);
+  double lastChange = CmiWallTimer();
+  for (unsigned long iter = 1; last != 0; iter++) {
+    for (int i = 0; i < (int)m_devices.size(); i++)
+      progressDevice(i);
+    postPending();
+    size_t now = m_nPending.load(std::memory_order_acquire);
+    if (now != last) {
+      last = now;
+      lastChange = CmiWallTimer();
+    } else if (iter % 1024 == 0 &&
+               CmiWallTimer() - lastChange > kFlushStallSeconds) {
+      std::string ranks;
+      int listed = 0;
+      {
+        std::lock_guard<std::mutex> lock(m_pendingMutex);
+        for (const auto &entry : m_pending) {
+          if (listed++ == 16) {
+            ranks += " ...";
+            break;
+          }
+          ranks += " " + std::to_string(entry.first) + "(" +
+                   std::to_string(entry.second.size()) + ")";
+        }
+      }
+      CmiPrintf("Reconverse> Warning: process %d gives up flushing its sends "
+                "after %.0f s without progress: %zu operations (%zu bytes) "
+                "were not handed to the network; destination process "
+                "(operations):%s\n",
+                lci::get_rank_me(), kFlushStallSeconds, now,
+                m_pendingBytes.load(std::memory_order_relaxed), ranks.c_str());
+      return;
+    }
   }
 }
 
@@ -535,54 +719,20 @@ static WireRMR readWireRMR(const void *rmr) {
 void CommBackendLCI::issueRget(int rank, const void *local_buf, size_t size,
                                 mr_t local_mr, void* remote_buf, void *rmr,
                                 CompHandler localComp, void *user_context) {
-  auto args = new localCallbackArgs{localComp, user_context};
-  lci::status_t status;
   WireRMR remote = readWireRMR(rmr);
   int dev = checkedDeviceIndex(remote.device_idx);
   uintptr_t remote_disp = (uintptr_t)remote_buf - remote.rmr.base;
-  // Same reentrancy guard as issueAm: don't spin when called from a completion
-  // callback, push to backlog instead.
-  bool allow_retry = !detail::g_in_progress_callback;
-  do {
-    status = lci::post_get_x(rank, const_cast<void *>(local_buf), size,
-                             m_local_comp, remote_disp, remote.rmr)
-                 .mr(getDeviceMR(local_mr, dev))
-                 .device(m_devices[dev])
-                 .user_context(args)
-                 .allow_retry(allow_retry)();
-    if (allow_retry) progressForPost(dev);
-  } while (status.is_retry());
-  if (status.is_done()) {
-    localComp({local_buf, size, user_context});
-    delete args;
-  }
+  submit(PendingOp{PendingOp::GET, rank, dev, local_buf, size, local_mr,
+                   localComp, 0, user_context, remote_disp, remote.rmr});
 }
 
 void CommBackendLCI::issueRput(int rank, const void *local_buf, size_t size,
                                 mr_t local_mr, uintptr_t remote_disp, void *rmr,
                                 CompHandler localComp, void *user_context) {
-  auto args = new localCallbackArgs{localComp, user_context};
-  lci::status_t status;
   WireRMR remote = readWireRMR(rmr);
   int dev = checkedDeviceIndex(remote.device_idx);
-  // Same reentrancy guard as issueAm/issueRget: when called from inside a
-  // completion callback this thread already holds m_progress_locks[dev], so the
-  // nested progress() below is a no-op. Spinning on retry would then hold that
-  // lock forever and wedge the device CQ. Push to the LCI backlog instead.
-  bool allow_retry = !detail::g_in_progress_callback;
-  do {
-    status = lci::post_put_x(rank, const_cast<void *>(local_buf), size,
-                             m_local_comp, remote_disp, remote.rmr)
-                 .mr(getDeviceMR(local_mr, dev))
-                 .device(m_devices[dev])
-                 .user_context(args)
-                 .allow_retry(allow_retry)();
-    if (allow_retry) progressForPost(dev);
-  } while (status.is_retry());
-  if (status.is_done()) {
-    localComp({local_buf, size, user_context});
-    delete args;
-  }
+  submit(PendingOp{PendingOp::PUT, rank, dev, local_buf, size, local_mr,
+                   localComp, 0, user_context, remote_disp, remote.rmr});
 }
 
 bool CommBackendLCI::threadMustPoll() {
@@ -599,9 +749,6 @@ bool CommBackendLCI::progressDevice(int dev_idx) {
           std::memory_order_relaxed)) {
     return false;
   }
-  // Mark that completion callbacks fired inside progress_x() are reentrant.
-  // issueAm/issueRget check this flag to avoid spinning (which would hold
-  // m_progress_locks indefinitely and deadlock the TX queue drain path).
   bool prev_in_cb = detail::g_in_progress_callback;
   detail::g_in_progress_callback = true;
   auto ret = lci::progress_x().device(m_devices[dev_idx])();
@@ -620,8 +767,14 @@ bool CommBackendLCI::progress(void) {
         did_progress = true;
   }
   if (m_nPending.load(std::memory_order_relaxed) != 0 &&
-      !detail::g_in_progress_callback)
+      !detail::g_in_progress_callback && !detail::g_in_post_pending)
     postPending();
+  if (g_report_requested.load(std::memory_order_relaxed) &&
+      !detail::g_in_progress_callback && !detail::g_in_post_pending &&
+      g_report_requested.exchange(false)) {
+    std::lock_guard<std::mutex> lock(m_pendingMutex);
+    reportQueues("on SIGUSR2");
+  }
   return did_progress;
 }
 
