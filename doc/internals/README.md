@@ -15,6 +15,7 @@ What goes where:
 | Chapter | Status |
 |---|---|
 | [Shared-memory IPC: the `+ipc` pool](shared-memory-ipc.md) | written 2026-11-04 (#319) |
+| [Regions, counters and targets](persistent-family.md) | written 2026-11-25 |
 | Start-up and exit: `ConverseInit`, PE threads, `ConverseExit`, interop return mode (`CmiInteropReturnOnExit`, `ConverseInteropFinalize`) | not yet written |
 | Schedulers and queues: the registered, randomized and old schedulers, per-PE and node queues, priorities, which thread delivers a network message, and the order guarantees that do and do not hold | not yet written |
 | The communication backend: `comm_backend.h`, LCI devices and progress, the registered mempool, LCW/MPI | not yet written |

@@ -40,6 +40,7 @@ public:
   // Put with signal: unsupported unless a backend overrides all four.
   virtual bool isPutSignalCapable() { return false; }
   virtual bool isPutSignalNative() { return false; }
+  virtual size_t getMaxEagerBytes() { return 0; }
   virtual int registerPutSignalKind(PutSignalHandler handler, void *ctx,
                                     int nranks) {
     CmiAbort("Rput with a signal is not supported in this backend");

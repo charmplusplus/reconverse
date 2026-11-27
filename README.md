@@ -120,6 +120,10 @@ set `LCT_PMI_BACKEND=local`.
 - **`+ipcmode <auto|shm|xpmem>`**: pick the mechanism backing the shared-memory pool. Implies `+ipc`. `auto`, the default, is `shm`.
 - **`++ipcpoolsize <bytes>`**: size of each process's shared-memory pool. By default, 512 KiB for each PE of the host's other processes, and at least 8 MiB (see [Memory use](doc/internals/shared-memory-ipc.md#memory-use)).
 - **`++ipccutoff <bytes>`**: largest message the pool will carry. Messages above it go over the communication backend. Defaults to 32 KiB, or to a bin below `poolsize / 25` when that is smaller. At most 1 MiB; a larger value is capped there, with a notice.
+- **`+counter_table <num>`**: the most counters (`CmiCounterCreate`) a PE may have at once; at most and by default 65536. See [Regions and counters](#regions-and-counters-conv-regionh).
+- **`+put_message_max_bytes <num>`**: a `CmiPut` to another process of at most this many bytes travels as one message carrying the data and the signal, a larger one as a put with signal. Default 0 where the put with signal is one network operation (InfiniBand, cxi with native `fi_writedata`), and, where LCI emulates it with a write and a message (cxi otherwise), the most data whose message, with its 72-byte header, fits the backend's eager limit (LCI's buffer-copy size; 8044 bytes for 8116): there a put that fits one eager message is quicker as that message.
+- **`+region_verbose`**: say how a `CmiPut` to another process travels, the first time each way is used.
+- **`+region_destroy_report_s <seconds>`**: a `CmiRegionDestroy` or `CmiCounterDestroy` still waiting after this long prints one line to stderr saying what it waits for (a process that has not detached, contributions that have not landed, regions not yet destroyed). Default 30; 0 turns it off.
 - **`+randomized_msgq`**: run messages in a uniformly random order, for shaking out message-order races. See [Randomized message order](#randomized-message-order-randomized_msgq). Cannot be combined with `+old-scheduler`.
 - **`+randomized_seed <N>`**: base seed for `+randomized_msgq`. Defaults to a value taken from the wall clock; the startup banner prints the seed in use.
 - **`+glibc_tuned_malloc`**: on glibc systems, raise glibc's malloc thresholds at startup (`mallopt`: mmap threshold 32 MB, trim threshold 1 GB, top pad 256 MB) and print `Reconverse> glibc malloc (+glibc_tuned_malloc): ...`. Off by default; accepted and ignored on other C libraries. See [glibc malloc tuning](#glibc-malloc-tuning-glibc_tuned_malloc).
@@ -329,6 +333,135 @@ holds the data by the time the acknowledgement is delivered.
 * A process killed outright (not `CmiExit`) leaves its POSIX shared memory
   segment behind in `/dev/shm`; a clean exit unlinks it. `xpmem` has nothing
   to leave behind.
+
+## Regions and counters (`conv-region.h`)
+
+An owner PE registers a buffer once as a region, divided into pieces if it
+likes, and creates a counter: a count of the contributions it expects in a
+round and an action to run when they have all arrived. It sends each origin a
+target, a plain 160-byte value naming one piece and one counter. The origin
+attaches to the target once (`CmiAttachTarget`) and then, every round,
+`CmiPut` copies its data into the piece and decrements the counter; the
+contribution that completes the round queues the action on the owner PE,
+which re-arms the counter (`CmiCounterRearm`) once it has finished with the
+data. `CmiSignal` is a contribution with no data, `CmiGet` reads a piece, and
+`CmiPut` can decrement a counter of the origin's own when its source may be
+reused.
+
+Implemented so far: contiguous host memory, with origins on the owner's PE, on
+other PEs of its process, and in other processes, which are reached through
+the network (a put with signal, or a message where the network has none) even
+on the same host. The header documents each call; the implementation is
+described in
+[doc/internals/persistent-family.md](doc/internals/persistent-family.md), and
+the design in charm's `doc/persistent-family-design.md`.
+
+**A round protocol.** The owner, on its PE:
+
+```c
+static CmiRegion reg;
+static CmiCounter ctr;
+static int nOrigins, step, lastStep;
+
+static void onRound(void *mem, CmiCounter c) {
+  consume(mem);                     /* the last read of this round's data */
+  if (++step == lastStep) {         /* every origin detaches after its last put */
+    CmiRegionDestroy(reg, 0, NULL, NULL);  /* frees mem once complete */
+    CmiCounterDestroy(ctr, 0, NULL, NULL);
+    return;
+  }
+  CmiCounterRearm(c, nOrigins);     /* after the last read, and before */
+  startNextStep();                  /* anything that lets an origin put again */
+}
+
+void ownerSetup(size_t bytes) {
+  void *mem = CmiRegionAlloc(nOrigins * bytes, CMI_MEM_HOST, 0, 0, &reg);
+  ctr = CmiCounterCreate(nOrigins, CmiCounterActionFn(onRound, mem), 0);
+  for (int o = 0; o < nOrigins; o++) {
+    int piece = CmiRegionAddPiece(reg, o * bytes, bytes, NULL, 0);
+    CmiTarget t = CmiTargetMake(reg, piece, ctr);
+    sendTarget(o, &t);              /* copy it into any message */
+  }
+}
+```
+
+An origin, on any PE, once its target has arrived:
+
+```c
+CmiAttachment a = CmiAttachTarget(&t);
+/* srcFree: a counter of this PE, e.g. N = 1 with CMI_COUNTER_AUTO_REARM,
+   whose action runs once src may be overwritten */
+for (each step) {
+  wait until the program's logic says the owner has finished with the
+  previous step's data;
+  if (CmiPut(a, 0, src, bytes, NULL, srcFree, NULL) != CMI_REGION_OK)
+    CmiAbort("CmiPut failed\n");
+}
+CmiDetachTarget(a, NULL, NULL);     /* after the last put */
+```
+
+Rules that the example follows:
+
+- **Readiness is the application's.** A put lands when it arrives, whatever
+  the owner is doing. An origin puts round r+1 only when the program's logic
+  says the owner has finished with round r's data: a reduction between
+  steps that the owner joins after its last read, two buffers by parity, or
+  a credit counter the owner signals (design 4.9).
+- **Re-arm after the last read**, in the action or later, and before the
+  owner sends anything that lets an origin put the next round. A
+  contribution that arrives before the re-arm is counted correctly, but an
+  error-checking build aborts on it. `CMI_COUNTER_AUTO_REARM` re-arms just
+  before the action runs; use it only when the action is the last use of
+  the data and no origin can put the next round before the action has run,
+  since nothing checks it.
+- **Source reuse.** With a local counter, `src` may be overwritten once it
+  fires. Without one, `src` is free when `CmiPut` returns only within the
+  owner's process and for a put that travels as a message; a put with
+  signal reads it until its local completion.
+- **Teardown.** Origins detach after their last put; transfers still in
+  flight are allowed, and the detach waits for them. The owner destroys
+  after the counter has fired a round that every origin's puts counted
+  toward. For puts without a counter, or a counter destroyed before its last
+  round fired, each origin detaches with a done callback,
+  `CmiDetachTarget(a, done, arg)`, and sends the owner its message from
+  `done`; the owner destroys once it has every origin's message. `done` runs
+  once the owner has applied the origin's detach notice, so the destroy then
+  waits for every put the origin reported. A message sent right after
+  `CmiDetachTarget(a, NULL, NULL)` is not enough in those two cases:
+  messages are not ordered, so it can arrive before the origin's
+  registration and notice, and the destroy then completes without waiting
+  for that origin's puts. A get reads the region until it completes, so the
+  owner destroys only after every origin's gets have completed, not just
+  been issued. A counter given as `local` must outlive the transfers that
+  decrement it.
+- **Check the result** of `CmiPut`, `CmiGet`, `CmiSignal` and
+  `CmiAttachTargets` (they are declared warn-unused-result): an error code
+  means nothing was transferred or counted.
+- **Puts without a counter** tell no one that they have landed. During the
+  run, from another process, only quiescence detection (Charm++) shows it;
+  a message from the origin can arrive before the data, and a put's local
+  completion means only that `src` may be reused. At teardown the origins
+  detach with a done callback and send their message from it, and the
+  region's destroy, called once the owner has every origin's message, waits
+  for every such put (above). When the owner must know during the run, give
+  the target a counter (one with no action costs the same, and
+  `CmiCounterValue` shows the count).
+- **An attachment may be shared** by the PEs of its process, and used by
+  several of them at once.
+
+Every build aborts on a put, get or signal through a detached attachment or
+one whose owner ended it, on an in-process put or get through a target whose
+region or counter was destroyed, and on a re-arm before the round's action
+has started. To another process the refusal is exact: a transfer through an
+attachment the owner ended either aborts or is waited for. Within the
+owner's process it is a check made before the copy, which a destroy that
+completes during the call can miss, so origins there stop before the owner
+destroys, `CMI_DESTROY_DETACH_ALL` or not. The CMake option **`RECONVERSE_ERROR_CHECKING`** (`AUTO`, the
+default, is on in builds where `CMK_OPTIMIZE` is 0, decided again at every
+configure; `ON` or `OFF` overrides it) adds the checks that cost something on
+every contribution: a contribution that arrives after its round fired and
+before the re-arm, and, for counters created with `CMI_COUNTER_CHECK_ROUNDS`,
+one that would count in place of another round's.
 
 ## Randomized message order (`+randomized_msgq`)
 

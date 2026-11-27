@@ -276,6 +276,31 @@ if(RECONVERSE_ROOT_PROJECT)
   target_compile_definitions(reconverse PUBLIC CMK_OPTIMIZE=${CMK_OPTIMIZE})
 endif()
 
+# The checks of regions and counters that cost something on every
+# contribution (include/conv-region.h). AUTO, the default, decides at every
+# configure: on where CMK_OPTIMIZE is 0 (a standalone Debug build, a Charm++
+# build without --with-production), so reconfiguring a directory from Debug
+# to Release turns them off. ON or OFF overrides it.
+set(RECONVERSE_ERROR_CHECKING AUTO CACHE STRING
+    "check the use of regions and counters (readiness, rounds): AUTO (where CMK_OPTIMIZE is 0), ON or OFF")
+set_property(CACHE RECONVERSE_ERROR_CHECKING PROPERTY STRINGS AUTO ON OFF)
+if(RECONVERSE_ERROR_CHECKING STREQUAL "AUTO")
+  if(CMK_OPTIMIZE)
+    set(RECONVERSE_REGION_CHECKS OFF)
+  else()
+    set(RECONVERSE_REGION_CHECKS ON)
+  endif()
+elseif(RECONVERSE_ERROR_CHECKING)
+  set(RECONVERSE_REGION_CHECKS ON)
+else()
+  set(RECONVERSE_REGION_CHECKS OFF)
+endif()
+if(RECONVERSE_REGION_CHECKS)
+  target_compile_definitions(reconverse PRIVATE CMI_REGION_CHECKS=1)
+else()
+  target_compile_definitions(reconverse PRIVATE CMI_REGION_CHECKS=0)
+endif()
+
 if(RECONVERSE_ENABLE_CPU_AFFINITY)
   target_link_libraries(reconverse PUBLIC HWLOC::HWLOC)
 endif()

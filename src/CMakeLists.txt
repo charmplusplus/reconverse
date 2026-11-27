@@ -5,6 +5,7 @@ target_sources(reconverse PRIVATE conv-conds.cpp convcore.cpp random.cpp
                 comm_backend/comm_backend_internal.cpp threads.cpp cldb.rand.cpp cldb.cpp cmirdmautils.cpp 
                 conv-rdma.cpp conv-topology.cpp msgmgr.cpp queueing.cpp cmishmem.cpp
                 conv-taskq.cpp persist-comm.cpp backtrace.cpp futures.cpp memory_usage.cpp
+                conv-region.cpp conv-region-attach.cpp
                 ccs/conv-ccs.cpp ccs/middle-ccs.cpp ccs/ccs-server.cpp
                 ccs/ccs-auth.cpp ccs/sockRoutines.cpp)
 
@@ -18,8 +19,9 @@ target_include_directories(
                      $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
                      
 add_subdirectory(comm_backend)
-# tests/ registers its LCI-only tests on this.
+# tests/ registers its LCI-only and LCW-only tests on these.
 set(RECONVERSE_ENABLE_COMM_LCI2 ${RECONVERSE_ENABLE_COMM_LCI2} PARENT_SCOPE)
+set(RECONVERSE_ENABLE_COMM_LCW ${RECONVERSE_ENABLE_COMM_LCW} PARENT_SCOPE)
 
 # configure needs to be called after add_subdirectory(comm_backend)
 configure_file(converse_config.h.in

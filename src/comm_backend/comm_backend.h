@@ -74,7 +74,9 @@ int getNumNodes();
  */
 bool isRMACapable();
 /**
- * @brief Register an active message handler. Not thread-safe.
+ * @brief Register an active message handler. Not thread-safe. Returns -1
+ * where there is no backend, or where the backend takes no more handlers
+ * (LCW takes one); the caller then uses Converse messages.
  */
 AmHandler registerAmHandler(CompHandler handler);
 /**
@@ -107,6 +109,11 @@ bool isPutSignalCapable();
  * message with the data and the signal. False when !isPutSignalCapable().
  */
 bool isPutSignalNative();
+/**
+ * @brief The largest message the backend sends eagerly, in one packet,
+ * rather than by a rendezvous; 0 when it does not say. Thread-safe.
+ */
+size_t getMaxEagerBytes();
 /**
  * @brief Add a kind of put signal, raising handler(ctx, ...) for puts of this
  * kind to any of the nranks local ranks of this process; returns the kind's

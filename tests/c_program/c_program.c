@@ -1,6 +1,7 @@
 /* A Converse program written in C: compiled by the C compiler, it checks that
    the C-callable API in converse.h links from C (reconverse issue #284). */
 #include "converse.h"
+#include "conv-region.h"
 
 typedef struct {
   CmiMessageHeader header;
@@ -39,6 +40,18 @@ static void ringHandlerFn(void *vmsg) {
   sendRing((CmiMyPe() + 1) % CmiNumPes(), hops + 1);
 }
 
+/* Regions and counters (conv-region.h) link from C too. */
+static void regionCheck(void) {
+  CmiCounter c = CmiCounterCreate(2, CmiCounterActionNone(), 0);
+  CmiTarget t = CmiTargetMake(NULL, CMI_PIECE_ALL, c);
+  CmiAttachment a = CmiAttachTarget(&t);
+  if (CmiSignal(a) != CMI_REGION_OK || CmiCounterValue(c) != 1)
+    CmiAbort("c_program: a signal left the counter at %d, not 1\n",
+             (int)CmiCounterValue(c));
+  CmiDetachTarget(a, NULL, NULL);
+  CmiCounterDestroy(c, 0, NULL, NULL);
+}
+
 static void start(int argc, char **argv) {
   (void)argc;
   (void)argv;
@@ -46,8 +59,10 @@ static void start(int argc, char **argv) {
   if (CmiMyRank() == 0)
     countLock = CmiCreateLock();
   CmiNodeBarrier();
-  if (CmiMyPe() == 0)
+  if (CmiMyPe() == 0) {
+    regionCheck();
     sendRing(CmiNumPes() > 1 ? 1 : 0, 1);
+  }
 }
 
 int main(int argc, char **argv) {

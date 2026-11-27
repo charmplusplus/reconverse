@@ -136,6 +136,10 @@ bool isPutSignalNative() {
   return isPutSignalCapable() && gCommBackend->isPutSignalNative();
 }
 
+size_t getMaxEagerBytes() {
+  return gCommBackend == nullptr ? 0 : gCommBackend->getMaxEagerBytes();
+}
+
 int registerPutSignalKind(PutSignalHandler handler, void *ctx, int nranks) {
   if (!isPutSignalCapable()) {
     return -1;
