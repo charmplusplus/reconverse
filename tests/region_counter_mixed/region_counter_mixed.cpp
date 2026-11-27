@@ -24,6 +24,12 @@
               they say they are done, and the destroy must wait for every
               contribution to land: a new counter in the same index then
               sees no late one
+    detach_stress  half the PEs of the other processes attach, put or
+              get, and detach, rounds= times each, without waiting for the
+              transfer, so that the last detach of a registration finds it
+              in flight and its notice waits for its completion, which runs
+              on another PE, one that polls; every other cycle the next PE
+              of the process does the detach
   These must abort (the CTest entry matches the message):
     count_remote  a remote origin's second contribution before the re-arm
                   (error-checking builds)
@@ -48,12 +54,13 @@ static const int kNumSizes = sizeof(kSizes) / sizeof(kSizes[0]);
 static const int kPiece = 65536;
 
 enum Op { OP_ATTACH, OP_DETACH, OP_SIGNAL, OP_ACK, OP_GO, OP_SETUP, OP_END,
-          OP_POLL };
+          OP_POLL, OP_STEP, OP_HANDOFF };
 
 struct Ctl {
   char core[CmiMsgHeaderSizeBytes];
   int op, slot, round, ack, from, tag, arg;
   CmiTarget t, t2;
+  CmiAttachment h[2]; // OP_HANDOFF: attachments for this PE to detach
 };
 
 CpvDeclare(int, ctlIdx);
@@ -65,6 +72,8 @@ struct PeData {
   int completions = 0, issued = 0;
   CmiRegion region = nullptr;
   unsigned char *mem = nullptr;
+  CmiTarget t, t2; // detach_stress
+  long gets = 0;
 };
 CpvDeclare(PeData *, pd);
 
@@ -510,6 +519,138 @@ void start() {
 }
 } // namespace reuse
 
+// --------------------------------------------------------- detach_stress
+// Half the PEs of each other process (even ranks) run the cycles; the others
+// only poll, so that a cycle's completions run on another PE than its
+// detach. Each cycling PE has a region of its own: a piece that its puts
+// with a counter fill (a counter with no action, shared by every region),
+// then an area for its puts without a counter, then one it reads. A cycle
+// attaches to two targets of it, issues one transfer (every eighth cycle,
+// one of each kind), waits up to 210 us, about when the transfer completes,
+// and detaches; odd cycles hand the attachments to the next PE of the
+// process, which detaches them. The registration ends with most cycles, and
+// the next cycle registers again.
+namespace dstress {
+const int kBytes = 16384;
+const int32_t kBig = 1 << 30;
+std::vector<CmiRegion> regions;
+CmiCounter c;
+int origins, acks, dones;
+void spinUs(int us) {
+  double end = CmiWallTimer() + us * 1e-6;
+  while (CmiWallTimer() < end) {
+  }
+}
+int nextPeOfProcess() {
+  int first = CmiNodeFirst(CmiMyNode());
+  return first + (CmiMyPe() - first + 1) % CmiMyNodeSize();
+}
+void detachBoth(CmiAttachment a, CmiAttachment b, bool batch) {
+  if (batch) {
+    CmiAttachment v[2] = {a, b};
+    CmiDetachTargets(v, 2);
+  } else {
+    CmiDetachTarget(a);
+    CmiDetachTarget(b);
+  }
+}
+void cycle(PeData *p, int k) {
+  CmiAttachment a = CmiAttachTarget(&p->t), b = CmiAttachTarget(&p->t2);
+  unsigned char *src = buf(kBytes); // filled once; read until local completion
+  int kind = k % 8 == 7 ? -1 : k % 3;
+  int rc = CMI_REGION_OK;
+  if (kind < 0 || kind == 0)
+    rc = CmiPut(a, 0, src, kBytes, nullptr, nullptr, nullptr);
+  if (rc == CMI_REGION_OK && (kind < 0 || kind == 1))
+    rc = CmiPut(b, kBytes, src, kBytes, nullptr, nullptr, nullptr);
+  if (rc != CMI_REGION_OK) fail("CmiPut returned %d", rc);
+  if (kind < 0 || kind == 2) {
+    rc = CmiGet(p->dst.data(), kBytes, nullptr, b, 2 * kBytes, p->local,
+                nullptr);
+    if (rc != CMI_REGION_OK) fail("CmiGet returned %d", rc);
+    p->gets++;
+  }
+  spinUs(k % 211);
+  if (k & 1) {
+    Ctl *m = newCtl(OP_HANDOFF);
+    m->h[0] = a;
+    m->h[1] = b;
+    m->round = k;
+    send(nextPeOfProcess(), m);
+  } else {
+    detachBoth(a, b, (k & 2) != 0);
+  }
+}
+void onCtl(Ctl *m) {
+  PeData *p = CpvAccess(pd);
+  if (m->op == OP_GO) {
+    p->t = m->t;
+    p->t2 = m->t2;
+    fill(buf(kBytes), 1, CmiMyPe(), 0, kBytes);
+    p->dst.assign(kBytes, 0);
+    p->local = CmiCounterCreate(kBig, CmiCounterActionNone(), 0);
+    sendOp(CmiMyPe(), OP_STEP, 0, nullptr, 0, 0);
+  } else if (m->op == OP_STEP) {
+    cycle(p, m->round);
+    if (m->round + 1 < g_rounds)
+      sendOp(CmiMyPe(), OP_STEP, 0, nullptr, 0, m->round + 1);
+    else
+      sendOp(CmiMyPe(), OP_POLL, 0, nullptr, 0);
+  } else if (m->op == OP_HANDOFF) {
+    detachBoth(m->h[0], m->h[1], (m->round & 2) != 0);
+  } else if (m->op == OP_POLL) {
+    // every get has completed
+    if (CmiCounterValue(p->local) != kBig - p->gets) {
+      sendOp(CmiMyPe(), OP_POLL, 0, nullptr, 0);
+      return;
+    }
+    expect(p->dst.data(), 0, CmiMyPe(), 0, kBytes, "a get");
+    CmiCounterDestroy(p->local, 0, nullptr, nullptr);
+    p->local = nullptr;
+    ack0(OP_END);
+  }
+}
+void done(void *) {
+  if (++dones == origins + 1)
+    pass("attach, put, get and detach cycles with transfers in flight");
+}
+void destroyAll(void *, double) {
+  for (CmiRegion r : regions) CmiRegionDestroy(r, 0, done, nullptr);
+  CmiCounterDestroy(c, 0, done, nullptr);
+}
+void onAck(Ctl *m) {
+  if (m->tag != OP_END || ++acks < origins) return;
+  // The last cycles' registrations and notices are urgent messages sent
+  // before the acknowledgements, but no message order is guaranteed, and
+  // these puts have no round whose firing would show that they landed
+  // (CmiRegionDestroy): wait for those messages a while.
+  CcdCallFnAfter(destroyAll, nullptr, 20.0);
+}
+void hooks() {
+  g_onAck = onAck;
+  g_onCtl = onCtl;
+}
+void start() {
+  c = CmiCounterCreate(kBig, CmiCounterActionNone(), 0);
+  for (int pe = 0; pe < npes(); pe++) {
+    if (CmiNumNodes() > 1 ? CmiNodeOf(pe) == CmiMyNode() : pe == CmiMyPe())
+      continue;
+    if (CmiMyNodeSize() > 1 && CmiRankOf(pe) % 2 != 0) continue; // a poller
+    CmiRegion r;
+    unsigned char *mem = (unsigned char *)CmiRegionAlloc(
+        3 * kBytes, CMI_MEM_HOST, 0, 0, &r);
+    fill(mem + 2 * kBytes, 0, pe, 0, kBytes);
+    CmiRegionAddPiece(r, 0, kBytes, nullptr, 0);
+    regions.push_back(r);
+    Ctl *m = newCtl(OP_GO);
+    m->t = CmiTargetMake(r, 0, c);
+    m->t2 = CmiTargetMake(r, CMI_PIECE_ALL, nullptr);
+    send(pe, m);
+  }
+  origins = (int)regions.size();
+}
+} // namespace dstress
+
 // ---------------------------------------------------------------- aborts
 namespace aborts {
 CmiCounter c;
@@ -588,6 +729,7 @@ static const Case kCases[] = {
     {"get", getm::hooks, getm::start},
     {"nocounter", nocount::hooks, nocount::start},
     {"reuse", reuse::hooks, reuse::start},
+    {"detach_stress", dstress::hooks, dstress::start},
     {"count_remote", aborts::countHooks, aborts::countRemote},
     {"stale_remote", aborts::staleHooks, aborts::staleRemote},
 };

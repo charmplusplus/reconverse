@@ -42,6 +42,9 @@ size_t g_putMessageMax = 0;   // a put of at most this many bytes is a message
 int g_signalAm = -1;          // the active message of CmiSignal
 bool g_verbose = false;       // +region_verbose
 std::atomic<bool> g_pathShown[2] = {{false}, {false}};
+#if CMI_REGION_CHECKS
+int g_completionDelayUs = 0; // +region_test_completion_delay
+#endif
 
 void *alignedAlloc(size_t align, size_t bytes, const char *what) {
   void *p = nullptr;
@@ -104,6 +107,15 @@ void qdCount(int created, int processed) {
   CmiRegionQdFn fn = g_qdHook.load(std::memory_order_acquire);
   if (fn != nullptr) fn(created, processed);
 }
+
+#if CMI_REGION_CHECKS
+void testCompletionDelay() {
+  if (g_completionDelayUs <= 0) return;
+  double end = CmiWallTimer() + g_completionDelayUs * 1e-6;
+  while (CmiWallTimer() < end) {
+  }
+}
+#endif
 
 void postDone(CmiDoneFn fn, void *arg) {
   if (fn == nullptr) return;
@@ -691,6 +703,12 @@ void CmiRegionNodeInit(char **argv) {
                                 "say how a CmiPut to another process travels, "
                                 "the first time each way is used");
   g_signalAm = comm_backend::registerAmHandler(signalAmHandler);
+#if CMI_REGION_CHECKS
+  CmiGetArgIntDesc(argv, "+region_test_completion_delay", &g_completionDelayUs,
+                   "error-checking builds, for tests: microseconds a transfer "
+                   "to another process waits in its completion before it is "
+                   "counted, which widens the window a detach can race");
+#endif
 }
 
 void CmiRegionPeInit(void) {

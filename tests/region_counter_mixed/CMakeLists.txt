@@ -16,6 +16,25 @@ foreach(_case ${_cases})
     PASS_REGULAR_EXPRESSION "${_case} PASS" TIMEOUT 120)
 endforeach()
 
+# Attach, transfer and detach cycles with the transfers in flight at the
+# detach, two processes of four PEs: the notice that waits for the last
+# completion. Error-checking builds widen the race with a delay in each
+# completion; production builds run without one.
+if(RECONVERSE_REGION_CHECKS)
+  set(_delay +region_test_completion_delay 50 rounds=2000)
+else()
+  set(_delay rounds=1000)
+endif()
+add_test(NAME region_counter_mixed_detach_stress_2proc
+  COMMAND ${RECONVERSE_TEST_LAUNCHER} -n 2 $<TARGET_FILE:region_counter_mixed>
+          detach_stress +pe 8 ${_delay})
+add_test(NAME region_counter_mixed_detach_stress_1proc
+  COMMAND ${RECONVERSE_TEST_LAUNCHER} -n 1 $<TARGET_FILE:region_counter_mixed>
+          detach_stress +pe 4 rounds=500)
+set_tests_properties(region_counter_mixed_detach_stress_2proc
+  region_counter_mixed_detach_stress_1proc PROPERTIES
+  PASS_REGULAR_EXPRESSION "detach_stress PASS" TIMEOUT 120)
+
 # The ways data travels between processes, on the case that uses them all.
 # Every put a message: no one-sided support.
 add_test(NAME region_counter_mixed_nordma

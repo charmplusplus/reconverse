@@ -274,13 +274,20 @@ void sendDetachRequest(int toNode, const AttachEntry &e) {
 
 // The completion that takes the count to zero, with the notice waiting, is
 // the only one that sees kNoticePending | 1: it hands the notice to the PE
-// that owes it, and touches the registration no more.
+// that owes it. It reads that PE and the message only after its fetch_sub,
+// and only then: oweNotice sets them before its fetch_or, and the fetch_sub
+// that reads the bit acquires what the fetch_or released. The registration
+// is still allocated then, since its notice has not been sent and only
+// noticeHandler, which this push runs, frees it. A completion that sees any
+// other value no longer touches the registration: a later completion, or
+// the detach itself, may free it at any time after the fetch_sub.
 void operationDone(CmiAttachRec *rec) {
-  int rank = rec->noticeRank;
-  void *msg = rec->noticeMsg;
+#if CMI_REGION_CHECKS
+  testCompletionDelay();
+#endif
   if (rec->outstanding.fetch_sub(1, std::memory_order_acq_rel) ==
       (kNoticePending | 1))
-    CmiPushPE(rank, msg);
+    CmiPushPE(rec->noticeRank, rec->noticeMsg);
 }
 
 void attachNodeInit() {

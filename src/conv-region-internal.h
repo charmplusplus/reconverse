@@ -163,6 +163,10 @@ int detachRequestHandlerIdx();
 
 void postDone(CmiDoneFn fn, void *arg);
 void qdCount(int created, int processed);
+#if CMI_REGION_CHECKS
+// +region_test_completion_delay: spin in operationDone, for tests
+void testCompletionDelay();
+#endif
 
 // Owner side of the attach protocol (conv-region.cpp): a registration or
 // notice, with its counts, for one of this PE's objects; false if the
