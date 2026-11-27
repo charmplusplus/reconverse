@@ -42,6 +42,11 @@
     race       early contributions from the other PEs racing the owner's
                re-arm: race (automatic), race_explicit, race_handler;
                production builds
+    race_data  data under the same race: the other PEs put 4 KiB each
+               round into two buffers by parity (an origin puts round r once
+               round r-2's action has run), racing the owner's re-arm
+               (race_data: automatic, race_data_explicit); the action checks
+               every byte of its round; production builds
     attach     the other PEs attach and detach the same targets in a loop
                while the owner destroys them (attach_all: with
                CMI_DESTROY_DETACH_ALL halfway)
@@ -1353,6 +1358,72 @@ void startHandler() {
 }
 } // namespace race
 
+// ------------------------------------------------------------ race_data
+// Puts of data from PEs 1..P-1 racing the owner's re-arm on PE 0, with two
+// buffers by parity (design 4.9, pattern 2): round r lands in buffer r % 2,
+// and an origin puts round r only once every contribution of the rounds
+// before has been made and round r-2's action has run, so its buffer is
+// free. Early contributions are part of the race, so production builds.
+namespace raceData {
+const int kR = 5000, kBytes = 4096;
+bool autoMode = true;
+std::atomic<long> total{0}, handled{0};
+CmiRegion reg;
+CmiCounter c;
+unsigned char *mem;
+int N;
+unsigned char *piece(int parity, int origin) {
+  return mem + ((size_t)parity * N + (origin - 1)) * kBytes;
+}
+void onRound(void *, CmiCounter cc) {
+  long h = handled.load() + 1;
+  for (int o = 1; o <= N; o++)
+    expect(piece((int)(h % 2), o), (int)h, o, 0, kBytes,
+           "a put racing the re-arm");
+  if (!autoMode && h < kR) CmiCounterRearm(cc, N); // after the last read
+  handled.store(h, std::memory_order_release);
+  if (h == kR) pass("every byte of every round, with puts racing the re-arm");
+}
+void onCtl(Ctl *m) {
+  if (m->op != OP_GO) return;
+  CmiAttachment a[2] = {CmiAttachTarget(&m->t), CmiAttachTarget(&m->t2)};
+  int o = CmiMyPe();
+  unsigned char *b = buf(kBytes); // free again when CmiPut returns
+  for (long r = 1; r <= kR; r++) {
+    while (total.load(std::memory_order_acquire) < (r - 1) * N ||
+           handled.load(std::memory_order_acquire) < r - 2)
+      std::this_thread::yield();
+    fill(b, (int)r, o, 0, kBytes);
+    ok(CmiPut(a[r % 2], 0, b, kBytes, nullptr, nullptr, nullptr), "CmiPut");
+    total.fetch_add(1, std::memory_order_acq_rel);
+  }
+  // the attachments stay: the program exits from PE 0
+}
+void start() {
+  g_onCtl = onCtl;
+  N = npes() - 1;
+  if (N < 1) fail("needs two PEs or more");
+  mem = (unsigned char *)CmiRegionAlloc((size_t)2 * N * kBytes, CMI_MEM_HOST,
+                                        0, 0, &reg);
+  c = CmiCounterCreate(N, CmiCounterActionFn(onRound, nullptr),
+                       autoMode ? CMI_COUNTER_AUTO_REARM : 0);
+  for (int par = 0; par < 2; par++)
+    for (int o = 1; o <= N; o++)
+      CmiRegionAddPiece(reg, ((size_t)par * N + (o - 1)) * kBytes, kBytes,
+                        nullptr, 0);
+  for (int o = 1; o <= N; o++) {
+    Ctl *m = newCtl(OP_GO);
+    m->t = CmiTargetMake(reg, o - 1, c);     // parity 0
+    m->t2 = CmiTargetMake(reg, N + o - 1, c); // parity 1
+    send(o, m);
+  }
+}
+void startExplicit() {
+  autoMode = false;
+  start();
+}
+} // namespace raceData
+
 // --------------------------------------------------------------- attach
 // PEs 1..P-1 attach and detach the same targets, one by one and in
 // batches, while the owner destroys them: once they finish (attach), or
@@ -1730,6 +1801,8 @@ static const Case kCases[] = {
     {"queued", queued::start},      {"queued_early", queued::startEarly},
     {"race", race::start},          {"race_explicit", race::startExplicit},
     {"race_handler", race::startHandler},
+    {"race_data", raceData::start},
+    {"race_data_explicit", raceData::startExplicit},
     {"attach", attachm::start},     {"attach_all", attachm::startAll},
     {"auto_handler", autoHandler::start},
     {"destroy_wait", destroyWait::start},

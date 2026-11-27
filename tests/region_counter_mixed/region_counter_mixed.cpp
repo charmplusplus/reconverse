@@ -3,7 +3,9 @@
   PE 0 owns the regions and counters, and the origins are PE 0 itself,
   the other PEs of its process and the PEs of the other processes. Run it
   with one process (no network) or several. The argument names the case;
-  it prints "<case> PASS" or aborts.
+  it prints "<case> PASS" or aborts. owner=last makes the last PE the owner
+  (with +lci_ndevices 2, a PE on the second device) in mixed, nocounter
+  and get (which every PE owns a region in, and the owner coordinates).
 
     mixed     a piece per PE and one counter: every PE puts into its piece
               every round, at sizes from 1 byte to 64 KiB; every byte is
@@ -66,6 +68,9 @@
 
 static const char *g_mode = "";
 static int g_rounds = 1000;
+static bool g_ownerLast = false; // owner=last
+// the PE that owns the case's objects and coordinates it
+static int owner() { return g_ownerLast ? CmiNumPes() - 1 : 0; }
 static const int kSizes[] = {1, 8, 64, 65, 256, 4096, 8200, 65536};
 static const int kNumSizes = sizeof(kSizes) / sizeof(kSizes[0]);
 static const int kPiece = 65536;
@@ -184,7 +189,7 @@ static void ack0(int tag, int round = 0, const CmiTarget *t = nullptr,
   m->round = round;
   m->slot = slot;
   if (t) m->t = *t;
-  send(0, m);
+  send(owner(), m);
 }
 
 static CmiAttachment &att(int slot) {
@@ -253,6 +258,8 @@ CmiRegion r;
 CmiCounter c;
 std::vector<CmiTarget> t;
 int round, acks, dones;
+long ipcSent;         // messages the origins sent through the IPC pool
+char passWhat[160];
 // threshold: puts of exactly CmiRegionPutMessageMaxBytes() bytes and of one
 // byte more, in turn; each process computes the same sizes
 bool thresholdMode = false;
@@ -267,10 +274,12 @@ void sendRound(int rr) {
 }
 void allDone(void *) {
   if (++dones < 2) return;
-  if (thresholdMode)
-    pass("puts of the message limit and one byte more, in every locality");
-  else
-    pass("same PE, same process and other processes in every round");
+  snprintf(passWhat, sizeof(passWhat), "%s; %ld messages through the IPC pool",
+           thresholdMode
+               ? "puts of the message limit and one byte more, in every locality"
+               : "same PE, same process and other processes in every round",
+           ipcSent);
+  pass(passWhat);
 }
 void onRound(void *, CmiCounter) {
   for (int o = 0; o < npes(); o++)
@@ -308,10 +317,14 @@ void onCtl(Ctl *m) {
     att(m->slot) = nullptr;
     CmiCounterDestroy(p->local, 0, nullptr, nullptr);
     p->local = nullptr;
-    ack0(OP_END);
+    Ctl *a = newCtl(OP_ACK);
+    a->tag = OP_END;
+    a->arg = (int)CmiIpcMessagesSent(); // through the shared-memory pool
+    send(owner(), a);
   }
 }
 void onAck(Ctl *m) {
+  if (m->tag == OP_END) ipcSent += m->arg;
   if (m->tag == OP_END && ++acks == npes()) {
     CmiRegionDestroy(r, 0, allDone, nullptr);
     CmiCounterDestroy(c, 0, allDone, nullptr);
@@ -936,7 +949,7 @@ CmiStartFn mymain(int argc, char **argv) {
   CpvInitialize(PeData *, pd);
   CpvAccess(pd) = new PeData();
   CmiNodeBarrier();
-  if (CmiMyPe() == 0) g_start();
+  if (CmiMyPe() == owner()) g_start();
   return 0;
 }
 
@@ -966,6 +979,7 @@ static void (*g_hooks)() = nullptr;
 int main(int argc, char **argv) {
   for (int i = 1; i < argc; i++) {
     if (strncmp(argv[i], "rounds=", 7) == 0) g_rounds = atoi(argv[i] + 7);
+    if (strcmp(argv[i], "owner=last") == 0) g_ownerLast = true;
     for (const Case &c : kCases)
       if (g_start == nullptr && strcmp(argv[i], c.name) == 0) {
         g_mode = c.name;

@@ -15,7 +15,8 @@ endforeach()
 set(_cases4 attach attach_all)
 if(NOT RECONVERSE_REGION_CHECKS)
   # early contributions are errors where the checks are on (design 4.2)
-  list(APPEND _cases4 race race_explicit race_handler queued_early early)
+  list(APPEND _cases4 race race_explicit race_handler race_data
+       race_data_explicit queued_early early)
 endif()
 foreach(_case ${_cases4})
   add_test(NAME region_counter_local_${_case}_pe4

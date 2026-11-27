@@ -55,18 +55,51 @@ add_test(NAME region_counter_mixed_nordma
           mixed +pe 4 +nordma +region_verbose)
 set_tests_properties(region_counter_mixed_nordma PROPERTIES TIMEOUT 120
   PASS_REGULAR_EXPRESSION "in one message with its signal.*mixed PASS")
+# The get fallback (a request and a reply) and puts without a counter in
+# messages: no one-sided support.
+add_test(NAME region_counter_mixed_get_nordma
+  COMMAND ${RECONVERSE_TEST_LAUNCHER} -n 2 $<TARGET_FILE:region_counter_mixed>
+          get +pe 4 +nordma)
+add_test(NAME region_counter_mixed_nocounter_nordma
+  COMMAND ${RECONVERSE_TEST_LAUNCHER} -n 2 $<TARGET_FILE:region_counter_mixed>
+          nocounter +pe 4 +nordma)
+set_tests_properties(region_counter_mixed_get_nordma PROPERTIES TIMEOUT 120
+  PASS_REGULAR_EXPRESSION "get PASS")
+set_tests_properties(region_counter_mixed_nocounter_nordma PROPERTIES
+  TIMEOUT 120 PASS_REGULAR_EXPRESSION "nocounter PASS")
 # The other processes through the shared-memory pool: messages there, puts
-# still over the network.
+# still over the network. The origins report how many messages they sent
+# through the pool, which must not be none.
 add_test(NAME region_counter_mixed_ipc
   COMMAND ${RECONVERSE_TEST_LAUNCHER} -n 2 $<TARGET_FILE:region_counter_mixed>
           mixed +pe 4 +ipc)
 set_tests_properties(region_counter_mixed_ipc PROPERTIES TIMEOUT 120
-  PASS_REGULAR_EXPRESSION "mixed PASS")
+  PASS_REGULAR_EXPRESSION
+  "mixed PASS: .*; [1-9][0-9]* messages through the IPC pool")
 if(RECONVERSE_ENABLE_COMM_LCI2)
-  # Puts land on the device their region was registered on.
+  # Two devices, ranks 0-1 of each process on device 0 and ranks 2-3 on
+  # device 1: a one-sided transfer goes on the device its region was
+  # registered on (#203). mixed with the owner on PE 0 (device 0), then
+  # mixed and nocounter with the owner on the last PE (device 1), and get,
+  # where every PE owns a region.
   add_test(NAME region_counter_mixed_2dev
     COMMAND ${RECONVERSE_TEST_LAUNCHER} -n 2 $<TARGET_FILE:region_counter_mixed>
             mixed +pe 8 +lci_ndevices 2 rounds=400)
+  foreach(_case mixed nocounter get)
+    add_test(NAME region_counter_mixed_2dev_${_case}_last
+      COMMAND ${RECONVERSE_TEST_LAUNCHER} -n 2
+              $<TARGET_FILE:region_counter_mixed> ${_case} +pe 8
+              +lci_ndevices 2 owner=last rounds=400)
+    set_tests_properties(region_counter_mixed_2dev_${_case}_last PROPERTIES
+      TIMEOUT 120 PASS_REGULAR_EXPRESSION "${_case} PASS")
+  endforeach()
+  # Puts without a counter in messages where the backend has no put with
+  # signal.
+  add_test(NAME region_counter_mixed_nocounter_nosignal
+    COMMAND ${RECONVERSE_TEST_LAUNCHER} -n 2 $<TARGET_FILE:region_counter_mixed>
+            nocounter +pe 4 +lci_no_put_signal)
+  set_tests_properties(region_counter_mixed_nocounter_nosignal PROPERTIES
+    TIMEOUT 120 PASS_REGULAR_EXPRESSION "nocounter PASS")
   # The backend without put with signal: every put a message, gets one-sided.
   add_test(NAME region_counter_mixed_nosignal
     COMMAND ${RECONVERSE_TEST_LAUNCHER} -n 2 $<TARGET_FILE:region_counter_mixed>
