@@ -500,35 +500,44 @@ CommBackendLCI::PostResult CommBackendLCI::postOp(const PendingOp &op) {
              : PostResult::retry;
 }
 
-// Hands the operation to LCI, or queues it: at once if its rank has a queue,
-// else after m_postTries attempts (one inside a completion callback) with
-// progress in between. An attempt that only lost the device's post lock to
+// Hands the operation to LCI, or queues it: at once if its rank has a queue
+// (then polling up to m_postTries times while it has), else after m_postTries
+// attempts (one inside a completion callback) with progress in between. An attempt that only lost the device's post lock to
 // another thread is repeated up to kLockTries times without counting. Never
 // waits for LCI to take the operation.
 void CommBackendLCI::submit(const PendingOp &op) {
   const int kLockTries = 1000;
-  if (m_nPending.load(std::memory_order_relaxed) == 0 ||
-      m_pendingOfRank[op.rank].load(std::memory_order_relaxed) == 0) {
-    bool mayProgress = !detail::g_in_progress_callback;
-    // An AM above m_maxEager polls only between attempts; the others, after
-    // every post.
-    bool pollAlways = op.kind != PendingOp::AM || op.size <= m_maxEager;
-    int tries = 0, lockTries = 0;
-    while (true) {
-      PostResult r = postOp(op);
-      if (mayProgress && (pollAlways || r == PostResult::retry ||
-                          r == PostResult::locked))
+  bool mayProgress = !detail::g_in_progress_callback;
+  // An AM above m_maxEager polls only between attempts; the others, after
+  // every post.
+  bool pollAlways = op.kind != PendingOp::AM || op.size <= m_maxEager;
+  if (m_nPending.load(std::memory_order_relaxed) != 0 &&
+      m_pendingOfRank[op.rank].load(std::memory_order_relaxed) != 0) {
+    enqueue(op);
+    // Give a destination that is receiving the chance to take what is queued
+    // before the caller allocates its next message.
+    if (mayProgress)
+      for (int i = 0; i < m_postTries &&
+                      m_pendingOfRank[op.rank].load(std::memory_order_relaxed) != 0;
+           i++)
         progressForPost(op.dev);
-      if (r == PostResult::posted) return;
-      if (r == PostResult::done) {
-        op.localComp({op.local_buf, op.size, op.user_context});
-        return;
-      }
-      if (r == PostResult::capped || !mayProgress) break;
-      if (r == PostResult::locked ? ++lockTries >= kLockTries
-                                  : ++tries >= m_postTries)
-        break;
+    return;
+  }
+  int tries = 0, lockTries = 0;
+  while (true) {
+    PostResult r = postOp(op);
+    if (mayProgress && (pollAlways || r == PostResult::retry ||
+                        r == PostResult::locked))
+      progressForPost(op.dev);
+    if (r == PostResult::posted) return;
+    if (r == PostResult::done) {
+      op.localComp({op.local_buf, op.size, op.user_context});
+      return;
     }
+    if (r == PostResult::capped || !mayProgress) break;
+    if (r == PostResult::locked ? ++lockTries >= kLockTries
+                                : ++tries >= m_postTries)
+      break;
   }
   enqueue(op);
 }
