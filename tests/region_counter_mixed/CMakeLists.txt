@@ -162,10 +162,13 @@ if(RECONVERSE_ENABLE_COMM_LCW)
 endif()
 
 # Readiness errors that only the owner's process can see (design 11): the
-# CTest entries match the abort, since the status is a signal.
+# CTest entries match the abort, since the status is a signal. The launcher
+# may be a CMake list (CI: "mpirun;--oversubscribe"); in a shell string its
+# elements are joined with spaces.
+list(JOIN RECONVERSE_TEST_LAUNCHER " " _region_launcher)
 function(region_counter_early_test name pattern)
   add_test(NAME region_counter_early_${name}
-    COMMAND sh -c "${RECONVERSE_TEST_LAUNCHER} -n 2 $<TARGET_FILE:region_counter_mixed> ${name} +pe 2 2>&1; true")
+    COMMAND sh -c "${_region_launcher} -n 2 $<TARGET_FILE:region_counter_mixed> ${name} +pe 2 2>&1; true")
   set_tests_properties(region_counter_early_${name} PROPERTIES
     PASS_REGULAR_EXPRESSION "${pattern}"
     FAIL_REGULAR_EXPRESSION "region_counter_mixed [a-z_]+ FAIL" TIMEOUT 60)
