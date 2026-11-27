@@ -25,11 +25,12 @@
   or counter was destroyed (within the owner's process; from another
   process, the owner catches a transfer that names a destroyed counter or
   region where it lands, in most cases but not all), on a re-arm before the
-  round's action has started, and on an owner's call made on another PE. Builds with error checking (the CMake option
-  RECONVERSE_ERROR_CHECKING, on by default where CMK_OPTIMIZE is 0) also
-  abort on a contribution that arrives after its round fired and before the
-  re-arm, and, for CMI_COUNTER_CHECK_ROUNDS counters, on one counted in
-  place of another round's. Such an abort means the program's readiness
+  round's action has started, and on an owner's call made on another PE.
+  Builds with error checking (the CMake option RECONVERSE_ERROR_CHECKING, on
+  by default where CMK_OPTIMIZE is 0) also abort on a contribution that
+  arrives after its round fired and before the re-arm, and, for
+  CMI_COUNTER_CHECK_ROUNDS counters, on one counted in place of another
+  round's. Such an abort means the program's readiness
   logic is wrong there; a message send is the safe choice.
 
   A round, with one piece per origin and one counter (nOrigins, consume,
@@ -40,13 +41,16 @@
     static CmiCounter ctr;
     static void onRound(void *arg, CmiCounter c) {
       consume(arg);                   // the last read of this round's data
-      if (lastRound()) {              // origins detach after their last put
+      if (lastRound()) {
+        // every origin's last put has landed; origins detach on their own
         CmiRegionDestroy(reg, 0, NULL, NULL);  // memory freed when complete
         CmiCounterDestroy(ctr, 0, NULL, NULL);
       } else {
-        CmiCounterRearm(c, nOrigins); // after the last read, before this
-        startNextStep();              // PE sends anything that lets an
-      }                               // origin put the next round
+        // re-arm after the last read of this round, and before this PE
+        // sends anything that lets an origin put the next round
+        CmiCounterRearm(c, nOrigins);
+        startNextStep();
+      }
     }
     void ownerSetup(size_t bytes) {
       void *mem = CmiRegionAlloc(nOrigins * bytes, CMI_MEM_HOST, 0, 0, &reg);
