@@ -174,12 +174,6 @@ void attachHandler(void *vmsg) {
   CmiFree(m);
 }
 
-// A registration owes its notice (it is out of the table): send it now if no
-// network operation through it is in flight, else leave it to the last one
-// to complete (operationDone). Under the table lock; returns true and fills
-// p when the notice is to be sent now.
-bool oweNotice(CmiAttachRec *rec, Pending &p);
-
 // The message operationDone queues on the PE that owes a notice.
 struct NoticeMsg {
   char core[CmiMsgHeaderSizeBytes];
@@ -188,6 +182,10 @@ struct NoticeMsg {
 
 CpvStaticDeclare(int, regionNoticeHandlerIdx);
 
+// A registration owes its notice (it is out of the table): send it now if no
+// transfer through it is in flight, else leave it to the last one to
+// complete (operationDone). Under the table lock; returns true and fills p
+// when the notice is to be sent now.
 bool oweNotice(CmiAttachRec *rec, Pending &p) {
   if (rec->noticeMsg == nullptr) {
     auto *m = static_cast<NoticeMsg *>(CmiAlloc(sizeof(NoticeMsg)));

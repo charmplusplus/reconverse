@@ -55,8 +55,8 @@ struct alignas(CMI_CACHE_LINE_SIZE) CounterLine {
   std::atomic<uint32_t> generation;  // incremented when a destroy completes
   std::atomic<uint32_t> armedRounds; // rounds armed so far (round check)
   std::atomic<uint32_t> flags;       // LineFlags
-  int32_t ownerRank;
-  uint32_t index;
+  int32_t ownerRank; // set when the chunk is allocated, never changed
+  uint32_t index;    // likewise
   std::atomic<void *> fireMsg; // the counter's message; null for no action
 };
 static_assert(std::atomic<int32_t>::is_always_lock_free,
@@ -276,8 +276,9 @@ constexpr uint32_t kAttachmentDetached = 0x44544443u; // "CDTD"
 // detaches have passed.
 constexpr size_t kDetachedHandlesKept = 4096;
 
-// One CmiAttachTarget's handle.
-struct CmiAttachmentRec {
+// One CmiAttachTarget's handle; a cache line of its own (or more), since
+// handles are recycled across PEs and written on every contribution.
+struct alignas(CMI_CACHE_LINE_SIZE) CmiAttachmentRec {
   std::atomic<uint32_t> magic; // read by any PE that is handed the handle
   CmiTarget target;
   CmiAttachRec *rec;

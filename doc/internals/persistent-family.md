@@ -59,7 +59,7 @@ contribution reads or writes:
 | `generation` | incremented when the counter's destroy completes |
 | `armedRounds` | rounds armed so far (the round check) |
 | `flags` | `LIVE` while a counter owns the line; `CHECK_ROUNDS` |
-| `ownerRank`, `index` | where the counter's message goes, and its number |
+| `ownerRank`, `index` | where the counter's message goes, and its number; set when the chunk is allocated, never changed |
 | `fireMsg` | the counter's message; null for a counter with no action |
 
 Indices are reused least recently freed first (a FIFO of freed indices), and a
@@ -71,7 +71,10 @@ A contribution of weight k (1 for a put or a signal) is `contribute()`:
 
 1. read `fireMsg`;
 2. `old = word.fetch_sub(k, acq_rel)`;
-3. if `old == k`, it completed the round: `CmiPushPE(ownerRank, fireMsg)`.
+3. if `old > 0` and `old <= k`, it took the word from above zero to zero or
+   below and completed the round: `CmiPushPE(ownerRank, fireMsg)`. (Every
+   contribution has k = 1 today; a batch of weight k > 1 may complete the
+   round and start the next.)
 
 The push is the whole of firing. It goes to the owner PE's thread queue,
 which any thread may push to, and the scheduler takes it from there; an

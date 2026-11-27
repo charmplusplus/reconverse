@@ -135,7 +135,8 @@ namespace {
 
 // The line of a new counter: chunks are allocated on first use by the owner
 // PE, the only writer of its chunk table, and published with a release store
-// for the threads that look a line up.
+// for the threads that look a line up. A line's owner rank and index are set
+// here, before the chunk is published, and never change.
 CounterLine *allocLine(PeState *ps, uint32_t index) {
   std::atomic<CounterLine *> &slot =
       g_slices[ps->rank].chunks[index / g_linesPerChunk];
@@ -144,7 +145,12 @@ CounterLine *allocLine(PeState *ps, uint32_t index) {
     size_t page = std::max<size_t>(CmiGetPageSize(), CMI_CACHE_LINE_SIZE);
     chunk = static_cast<CounterLine *>(alignedAlloc(
         page, g_linesPerChunk * sizeof(CounterLine), "CmiCounterCreate"));
-    for (uint32_t i = 0; i < g_linesPerChunk; i++) new (&chunk[i]) CounterLine();
+    uint32_t first = index / g_linesPerChunk * g_linesPerChunk;
+    for (uint32_t i = 0; i < g_linesPerChunk; i++) {
+      new (&chunk[i]) CounterLine();
+      chunk[i].ownerRank = ps->rank;
+      chunk[i].index = first + i;
+    }
     slot.store(chunk, std::memory_order_release);
   }
   return chunk + index % g_linesPerChunk;
@@ -206,7 +212,9 @@ inline void contribute(CounterLine *L, int32_t k, const char *call,
   (void)call;
   (void)checked;
 #endif
-  if (old == k && fire != nullptr) CmiPushPE(L->ownerRank, fire);
+  // the word went from above zero to zero or below: this contribution
+  // completed the round (with k > 1 it may also start the next)
+  if (old > 0 && old <= k && fire != nullptr) CmiPushPE(L->ownerRank, fire);
 }
 
 // A local (source-completion) counter's contribution.
@@ -846,8 +854,6 @@ CmiCounter CmiCounterCreate(int32_t n, CmiCounterAction action, int flags) {
   }
   L->word.store(n, std::memory_order_relaxed);
   L->armedRounds.store(1, std::memory_order_relaxed);
-  L->ownerRank = ps->rank;
-  L->index = index;
   L->fireMsg.store(fire, std::memory_order_relaxed);
   L->flags.store(kLineLive |
                      ((flags & CMI_COUNTER_CHECK_ROUNDS) ? kLineCheckRounds : 0),
