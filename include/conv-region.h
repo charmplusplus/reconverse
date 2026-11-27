@@ -285,7 +285,17 @@ void CmiCounterDestroy(CmiCounter c, int flags, CmiDoneFn done, void *arg);
 
 /* Targets (owner PE): piece `piece` of r (or CMI_PIECE_ALL) with counter c.
    r may be NULL (a counter alone, for CmiSignal); c may be NULL (puts are not
-   counted). r and c must belong to the calling PE. */
+   counted). r and c must belong to the calling PE.
+   A put without a counter tells no one that it has landed. From another
+   process, the owner learns it only from quiescence detection (Charm++),
+   which counts such puts until they land, or not at all: use them for data
+   whose age does not matter, or in a region that lives until the end of
+   the run. A message from the origin saying it has put is no sign, since it
+   can arrive before the data; nor is the put's local completion, which
+   means only that src may be reused. Within the owner's process the data
+   is in place when CmiPut returns. When the owner must know, give the
+   target a counter: one with no action costs the same, one atomic
+   decrement where the put lands, and CmiCounterValue shows it. */
 CmiTarget CmiTargetMake(CmiRegion r, int piece, CmiCounter c);
 
 /* Origins (any PE). An attachment is one origin's handle on a target; the

@@ -433,6 +433,13 @@ Rules that the example follows:
 - **Check the result** of `CmiPut`, `CmiGet`, `CmiSignal` and
   `CmiAttachTargets` (they are declared warn-unused-result): an error code
   means nothing was transferred or counted.
+- **Puts without a counter** tell no one that they have landed. From
+  another process, only quiescence detection (Charm++) shows it; a message
+  from the origin can arrive before the data, and a put's local completion
+  means only that `src` may be reused. Use them for data whose age does not
+  matter or in regions that live until the end of the run; otherwise give
+  the target a counter (one with no action costs the same, and
+  `CmiCounterValue` shows the count).
 - **An attachment may be shared** by the PEs of its process, and used by
   several of them at once.
 
