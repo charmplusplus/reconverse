@@ -669,6 +669,10 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
   if (sizeArgError != nullptr) {
     if (Cmi_mynode == 0)
       fprintf(stderr, "Error: %s\n", sizeArgError);
+    // This is the thread that called ConverseInit; no PE thread exists yet.
+    CmiExitHookFn hook = exitHook.load();
+    if (hook != nullptr)
+      hook(1);
     exit(1);
   }
 

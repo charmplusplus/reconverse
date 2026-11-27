@@ -940,8 +940,10 @@ typedef void (*CmiAbortHookFn)(int code, const char *msg);
 void CmiSetAbortHook(CmiAbortHookFn hook);
 /* A function ConverseExit calls once per process, on the thread of rank 0
    (the thread that called ConverseInit), after every PE of the process has
-   stopped and the node is torn down, immediately before exit(exitcode). Not
-   called when ConverseExit returns (CmiInteropReturnOnExit) or on an abort.
+   stopped and the node is torn down, immediately before exit(exitcode).
+   ConverseInit also calls it, with code 1, before it exits on an invalid
+   +pe, +ppn or +p argument. Not called when ConverseExit returns
+   (CmiInteropReturnOnExit) or on an abort.
    NULL removes it. */
 typedef void (*CmiExitHookFn)(int exitcode);
 void CmiSetExitHook(CmiExitHookFn hook);
