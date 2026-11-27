@@ -30,6 +30,13 @@
               in flight and its notice waits for its completion, which runs
               on another PE, one that polls; every other cycle the next PE
               of the process does the detach
+    qd_remote  an origin in another process signals and puts 4 times each
+              into a counter with no action: its process counts 8 created
+              and none processed before they land, and the owner's process
+              counts them processed where they land
+  Every case that passes first checks quiescence detection's counts: each
+  process installs a QD hook, and the owner adds up created and processed
+  over the processes, which must balance once the case is done.
   These must abort (the CTest entry matches the message):
     count_remote  a remote origin's second contribution before the re-arm
                   (error-checking builds)
@@ -56,13 +63,14 @@ static const int kNumSizes = sizeof(kSizes) / sizeof(kSizes[0]);
 static const int kPiece = 65536;
 
 enum Op { OP_ATTACH, OP_DETACH, OP_SIGNAL, OP_ACK, OP_GO, OP_SETUP, OP_END,
-          OP_POLL, OP_STEP, OP_HANDOFF };
+          OP_POLL, OP_STEP, OP_HANDOFF, OP_QD };
 
 struct Ctl {
   char core[CmiMsgHeaderSizeBytes];
   int op, slot, round, ack, from, tag, arg;
   CmiTarget t, t2;
   CmiAttachment h[2]; // OP_HANDOFF: attachments for this PE to detach
+  long long created, processed; // OP_QD's answer: this process's counts
 };
 
 CpvDeclare(int, ctlIdx);
@@ -88,9 +96,35 @@ static void fail(const char *fmt, ...) {
   CmiAbort("region_counter_mixed %s FAIL on PE %d: %s\n", g_mode, CmiMyPe(), s);
 }
 
+// QD's counts, per process (the hook is process-wide)
+static std::atomic<long long> g_qdCreated{0}, g_qdProcessed{0};
+static void qdHook(int created, int processed) {
+  g_qdCreated += created;
+  g_qdProcessed += processed;
+}
+static const char *g_passWhat = nullptr;
+static int g_qdAnswers = 0;
+static long long g_qdSumCreated = 0, g_qdSumProcessed = 0;
+
+static void send(int pe, struct Ctl *m);
+static struct Ctl *newCtl(int op);
+
+// The case is done: ask every process for its QD counts, then pass.
 static void pass(const char *what) {
-  CmiPrintf("region_counter_mixed %s PASS: %d processes, %d PEs; %s\n", g_mode,
-            CmiNumNodes(), CmiNumPes(), what);
+  g_passWhat = what;
+  for (int n = 0; n < CmiNumNodes(); n++) send(CmiNodeFirst(n), newCtl(OP_QD));
+}
+
+static void qdAnswer(Ctl *m) {
+  g_qdSumCreated += m->created;
+  g_qdSumProcessed += m->processed;
+  if (++g_qdAnswers < CmiNumNodes()) return;
+  if (g_qdSumCreated != g_qdSumProcessed)
+    fail("QD: created %lld, processed %lld over %d processes", g_qdSumCreated,
+         g_qdSumProcessed, CmiNumNodes());
+  CmiPrintf("region_counter_mixed %s PASS: %d processes, %d PEs; %s; QD "
+            "balanced at %lld\n", g_mode, CmiNumNodes(), CmiNumPes(),
+            g_passWhat, g_qdSumCreated);
   CmiExit(0);
 }
 
@@ -184,8 +218,17 @@ static void ctlHandler(void *vmsg) {
     if (CmiSignal(attOf(m)) != CMI_REGION_OK) fail("CmiSignal");
     break;
   case OP_ACK:
-    g_onAck(m);
+    if (m->tag == OP_QD) qdAnswer(m);
+    else g_onAck(m);
     break;
+  case OP_QD: {
+    Ctl *r = newCtl(OP_ACK);
+    r->tag = OP_QD;
+    r->created = g_qdCreated.load();
+    r->processed = g_qdProcessed.load();
+    send(m->from, r);
+    break;
+  }
   default:
     g_onCtl(m);
     CmiFree(m);
@@ -653,6 +696,73 @@ void start() {
 }
 } // namespace dstress
 
+// ------------------------------------------------------------- qd_remote
+namespace qdr {
+const int kEach = 4, kBytes = 64;
+unsigned char mem[kEach * kBytes];
+CmiRegion r;
+CmiCounter c;
+int dones;
+int originPe() { return CmiNumNodes() > 1 ? CmiNodeFirst(1) : npes() - 1; }
+void done(void *) {
+  if (++dones == 2) pass("contributions to a counter with no action");
+}
+void onCtl(Ctl *m) {
+  if (m->op == OP_GO) {
+    CmiAttachment a = attOf(m);
+    // sources that stay untouched: a put with no local counter may read its
+    // source until its local completion
+    unsigned char *b = buf((size_t)kEach * kBytes);
+    for (int i = 0; i < kEach; i++) {
+      fill(b + (size_t)i * kBytes, 0, i, 0, kBytes);
+      int rc = CmiSignal(a);
+      if (rc == CMI_REGION_OK)
+        rc = CmiPut(a, (size_t)i * kBytes, b + (size_t)i * kBytes, kBytes,
+                    nullptr, nullptr, nullptr);
+      if (rc != CMI_REGION_OK) fail("returned %d", rc);
+    }
+    // issued, and counted created here; processed only where they land, in
+    // the owner's process (in one process, not counted at all)
+    long long cr = g_qdCreated.load(), pr = g_qdProcessed.load();
+    long long want = CmiNumNodes() > 1 ? 2 * kEach : 0;
+    if (cr != want || pr != 0)
+      fail("after issuing: created %lld, processed %lld in this process, "
+           "expected %lld and 0", cr, pr, want);
+    ack0(OP_GO);
+  } else if (m->op == OP_END) {
+    CmiDetachTarget(att(0));
+    att(0) = nullptr;
+    ack0(OP_END);
+  } else if (m->op == OP_POLL) {
+    if (CmiCounterValue(c) > 0) {
+      sendOp(CmiMyPe(), OP_POLL, 0, nullptr, 0);
+      return;
+    }
+    for (int i = 0; i < kEach; i++)
+      expect(mem + (size_t)i * kBytes, 0, i, 0, kBytes, "a put");
+    sendOp(originPe(), OP_END, 0, nullptr, 0);
+  }
+}
+void onAck(Ctl *m) {
+  if (m->tag == OP_GO) {
+    sendOp(CmiMyPe(), OP_POLL, 0, nullptr, 0);
+  } else if (m->tag == OP_END) {
+    CmiRegionDestroy(r, 0, done, nullptr);
+    CmiCounterDestroy(c, 0, done, nullptr);
+  }
+}
+void hooks() {
+  g_onAck = onAck;
+  g_onCtl = onCtl;
+}
+void start() {
+  r = CmiRegionCreate(mem, sizeof(mem), CMI_MEM_HOST, 0, 0);
+  c = CmiCounterCreate(2 * kEach, CmiCounterActionNone(), 0);
+  CmiTarget t = CmiTargetMake(r, CMI_PIECE_ALL, c);
+  sendOp(originPe(), OP_GO, 0, &t, 0);
+}
+} // namespace qdr
+
 // ---------------------------------------------------------------- aborts
 namespace aborts {
 CmiCounter c;
@@ -749,6 +859,8 @@ CmiStartFn mymain(int argc, char **argv) {
   // Bind this PE per +setcpuaffinity/+pemap (every PE takes part);
   // ConverseInit does not.
   CmiInitCPUAffinity(argv);
+  // process-wide, before this PE polls for the first contribution
+  CmiRegionSetQdHook(qdHook);
   CpvInitialize(int, ctlIdx);
   CpvAccess(ctlIdx) = CmiRegisterHandler(ctlHandler);
   CpvInitialize(PeData *, pd);
@@ -773,6 +885,7 @@ static const Case kCases[] = {
     {"nocounter", nocount::hooks, nocount::start},
     {"reuse", reuse::hooks, reuse::start},
     {"detach_stress", dstress::hooks, dstress::start},
+    {"qd_remote", qdr::hooks, qdr::start},
     {"count_remote", aborts::countHooks, aborts::countRemote},
     {"stale_remote", aborts::staleHooks, aborts::staleRemote},
     {"detach_all_remote", aborts::detachAllHooks, aborts::detachAllRemote},

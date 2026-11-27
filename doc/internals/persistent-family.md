@@ -358,10 +358,13 @@ Reconverse has no QD of its own; Charm++ installs a function with
 `CmiRegionSetQdHook`. It is called on the PE thread where the event happens:
 created(1) when a put or signal into a counter with an action is issued (and
 once more for a `local` counter with an action), processed(N) when a round's
-action starts, and the unconsumed contributions at a destroy. A put without a
-counter to another process counts created when issued and processed where it
-lands (the polling PE, or the owner PE for a message); a get to another
-process, created when issued and processed at its completion. Within a
-process, a contribution into a counter with no action is not counted, nor is
-a put without a counter or a get, whose data is in place when the call
-returns.
+action starts, and the unconsumed contributions at a destroy. A contribution
+to another process that no round processes, a put without a counter or one
+into a counter with no action, counts created when issued and processed
+where it lands (the polling PE, or the owner PE for a message); a get to
+another process, created when issued and processed at its completion. Within
+a process, a contribution into a counter with no action is not counted, nor
+is a put without a counter or a get, whose data is in place when the call
+returns. The hook is called from the scheduler and from completion
+callbacks at poll time, on any PE of the process; it must be installed
+before the first contribution, or created and processed never balance.

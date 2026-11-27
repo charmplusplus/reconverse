@@ -35,6 +35,19 @@ set_tests_properties(region_counter_mixed_detach_stress_2proc
   region_counter_mixed_detach_stress_1proc PROPERTIES
   PASS_REGULAR_EXPRESSION "detach_stress PASS" TIMEOUT 120)
 
+# QD counts a contribution to another process's counter with no action as
+# created at issue and processed where it lands: through a put with signal
+# (or a message where there is none) and a CmiSignal, then all as messages.
+add_test(NAME region_counter_mixed_qd_remote_2proc
+  COMMAND ${RECONVERSE_TEST_LAUNCHER} -n 2 $<TARGET_FILE:region_counter_mixed>
+          qd_remote +pe 2)
+add_test(NAME region_counter_mixed_qd_remote_nordma
+  COMMAND ${RECONVERSE_TEST_LAUNCHER} -n 2 $<TARGET_FILE:region_counter_mixed>
+          qd_remote +pe 2 +nordma)
+set_tests_properties(region_counter_mixed_qd_remote_2proc
+  region_counter_mixed_qd_remote_nordma PROPERTIES
+  PASS_REGULAR_EXPRESSION "qd_remote PASS.*QD balanced at 8" TIMEOUT 60)
+
 # The ways data travels between processes, on the case that uses them all.
 # Every put a message: no one-sided support.
 add_test(NAME region_counter_mixed_nordma

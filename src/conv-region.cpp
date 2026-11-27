@@ -504,9 +504,18 @@ CounterLine *arrivedLine(int rank, uint32_t index, const uint32_t *gen,
   return L;
 }
 
+// A contribution from another process has landed. QD counted it as created
+// at issue (design 4.8); a counter with an action processes it with its
+// round, and one with no action has no round, so it is processed here.
+void contributeArrived(CounterLine *L, const char *call) {
+  bool hasAction = L->fireMsg.load(std::memory_order_relaxed) != nullptr;
+  contribute(L, 1, call);
+  if (!hasAction) qdCount(0, 1);
+}
+
 // Put with signal, kind kSignalCounter: the data is in place.
 void counterSignalHandler(void *, int destRank, uint16_t signal, int, size_t) {
-  contribute(arrivedLine(destRank, signal, nullptr, "CmiPut"), 1, "CmiPut");
+  contributeArrived(arrivedLine(destRank, signal, nullptr, "CmiPut"), "CmiPut");
 }
 
 // Put with signal, kind kSignalRegion: a put without a counter landed.
@@ -529,8 +538,8 @@ struct SignalMsg {
 
 void signalAmHandler(comm_backend::Status status) {
   auto *m = static_cast<SignalMsg *>(const_cast<void *>(status.local_buf));
-  contribute(arrivedLine(m->rank, m->index, &m->gen, "CmiSignal"), 1,
-             "CmiSignal");
+  contributeArrived(arrivedLine(m->rank, m->index, &m->gen, "CmiSignal"),
+                    "CmiSignal");
   CmiFree(m);
 }
 
@@ -563,9 +572,9 @@ void putDataHandler(void *vmsg) {
   liveRegion(m->regionSlot, m->regionGen, m->fromPe, "CmiPut");
   memcpy((char *)(uintptr_t)m->pieceAddr + m->offset, m + 1, m->bytes);
   if (m->flags & kTargetHasCounter) {
-    contribute(arrivedLine(peState()->rank, m->counterIndex, &m->counterGen,
-                           "CmiPut"),
-               1, "CmiPut");
+    contributeArrived(arrivedLine(peState()->rank, m->counterIndex,
+                                  &m->counterGen, "CmiPut"),
+                      "CmiPut");
   } else {
     regionSlotOf(peState()->rank, m->regionSlot)
         ->landed.fetch_add(1, std::memory_order_release);
@@ -1127,12 +1136,13 @@ void liveRegionHere(const CmiTarget &t, const char *call) {
              t.ownerPe, kReadinessAdvice);
 }
 
-// QD (design 4.8): a contribution to a counter with an action is processed
-// with its round; a put without a counter, when it lands.
+// QD (design 4.8), created when issued: a contribution to a counter with an
+// action is processed with its round; one to another process, into a
+// counter with no action or a put without a counter, where it lands. Within
+// a process a contribution with no round to wait for has landed when the
+// call returns, and is not counted.
 void qdIssued(const CmiTarget &t, bool contributes, CmiCounter local) {
-  if (contributes && (t.flags & kTargetHasCounter
-                          ? (t.flags & kTargetQdCounted) != 0
-                          : !isLocal(t)))
+  if (contributes && (!isLocal(t) || (t.flags & kTargetQdCounted) != 0))
     qdCount(1, 0);
   if (local != nullptr && local->action.kind != CMI_ACTION_NONE) qdCount(1, 0);
 }
