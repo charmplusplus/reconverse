@@ -49,6 +49,26 @@ jobs:
             cmake --build build --target all
             ctest --test-dir build --extra-verbose --timeout 60
 
+      # Regions and counters without error checking: the tests of early
+      # contributions racing the re-arm, which error-checking builds abort
+      # on (design 4.2), and the refusals every build must make. Only the
+      # two region test programs are built.
+      - name: Region tests without error checking
+        shell: bash
+        run: |
+            cmake \
+                -Bbuild-regions \
+                -GNinja \
+                -DCMAKE_BUILD_TYPE=Debug \
+                -DRECONVERSE_ERROR_CHECKING=OFF \
+                -DRECONVERSE_AUTOFETCH_LCI2=ON \
+                -DRECONVERSE_TEST_LAUNCHER="mpirun;--oversubscribe" \
+                -DLCT_PMI_BACKEND_ENABLE_MPI=ON \
+                .
+            cmake --build build-regions --target region_counter_local region_counter_mixed
+            ctest --test-dir build-regions --extra-verbose --timeout 120 \
+                -R 'region_counter_local_(race|race_explicit|race_handler|race_data|race_data_explicit|queued_early|early|detach_all_put|detached|stale_region)_pe[0-9]|region_counter_early_(detach_all_remote|stale_remote)|region_counter_mixed_detach_stress_2proc'
+
       # The shared-memory IPC pool is built unconditionally and turned on at
       # run time with +ipc, so the tests above already cover it. This build
       # only checks that CMK_USE_SHMEM -- which Charm++'s buildcmake passes
