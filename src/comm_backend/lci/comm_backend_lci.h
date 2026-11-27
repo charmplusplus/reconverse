@@ -147,6 +147,9 @@ private:
   // them at exit
   size_t m_everQueued = 0, m_everQueuedBytes = 0, m_maxQueued = 0;
   bool m_sendStats = false;
+  double m_lastReport = 0;  // +lci_send_stats: time of the last periodic line
+  // One line about the queues; the caller holds m_pendingMutex.
+  void reportQueues(const char *when);
   PostResult postOp(const PendingOp &op);
   void submit(const PendingOp &op);
   void enqueue(const PendingOp &op);

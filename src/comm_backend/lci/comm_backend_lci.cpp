@@ -2,6 +2,7 @@
 #include "lci.hpp"
 #include "lct.h"
 #include "comm_backend/lci/comm_backend_lci.h"
+#include <csignal>
 #include <cstdlib>
 #include <memory>
 #include <string>
@@ -39,6 +40,14 @@ alignas(CMI_CACHE_LINE_SIZE) std::atomic<long> g_rdv_inflight{0};
 } // namespace detail
 
 std::vector<CompHandler> g_handlers;
+
+// Set by SIGUSR2; the next progress() of the process prints its send queues.
+static std::atomic<bool> g_report_requested{false};
+#ifndef _WIN32
+static void reportSignalHandler(int) {
+  g_report_requested.store(true, std::memory_order_relaxed);
+}
+#endif
 
 struct localCallbackArgs {
   CompHandler handler;
@@ -328,7 +337,20 @@ void CommBackendLCI::init(char **argv) {
                    "before it is queued and the PE goes on (default: 4)");
   if (m_postTries < 1) m_postTries = 1;
   m_sendStats = CmiGetArgFlagDesc(argv, "+lci_send_stats",
-      "at exit, each process that queued sends prints how many");
+      "each process that queued sends prints how many: at exit, and every 10 "
+      "seconds while any are queued");
+  m_lastReport = CmiWallTimer();
+#ifndef _WIN32
+  // SIGUSR2 asks for the queue line, unless the program uses the signal.
+  struct sigaction old;
+  if (sigaction(SIGUSR2, nullptr, &old) == 0 && old.sa_handler == SIG_DFL) {
+    struct sigaction sa {};
+    sa.sa_handler = reportSignalHandler;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = SA_RESTART;
+    sigaction(SIGUSR2, &sa, nullptr);
+  }
+#endif
   m_pendingOfRank.reset(new std::atomic<uint32_t>[lci::get_rank_n()]);
   for (int i = 0; i < lci::get_rank_n(); i++)
     m_pendingOfRank[i].store(0, std::memory_order_relaxed);
@@ -350,12 +372,10 @@ void CommBackendLCI::abortAll(int exit_code, const char *msg) {
 }
 
 void CommBackendLCI::exit() {
-  if (m_sendStats && m_everQueued != 0)
-    CmiPrintf("Reconverse> LCI sends, process %d: %zu operations (%zu bytes) "
-              "waited in a queue, at most %zu at a time; %zu still queued at "
-              "exit\n",
-              lci::get_rank_me(), m_everQueued, m_everQueuedBytes, m_maxQueued,
-              m_nPending.load(std::memory_order_relaxed));
+  if (m_sendStats && m_everQueued != 0) {
+    std::lock_guard<std::mutex> lock(m_pendingMutex);
+    reportQueues("at exit");
+  }
   // Operations still queued (ConverseExit's flushSends gave up, or they were
   // issued after it) are not delivered; give the messages' buffers back.
   for (auto &entry : m_pending)
@@ -574,6 +594,10 @@ void CommBackendLCI::postPending() {
   std::unique_lock<std::mutex> lock(m_pendingMutex, std::try_to_lock);
   if (!lock.owns_lock()) return;  // being posted, or appended to
   detail::g_in_post_pending = true;
+  if (m_sendStats && CmiWallTimer() - m_lastReport > 10.0) {
+    reportQueues("periodic");
+    m_lastReport = CmiWallTimer();
+  }
   std::vector<PendingOp> completed;
   int failed = 0;
   for (size_t n = m_pendingRanks.size(); n > 0 && failed < kFailedRanks; n--) {
@@ -601,6 +625,28 @@ void CommBackendLCI::postPending() {
   for (const PendingOp &op : completed)
     op.localComp({op.local_buf, op.size, op.user_context});
   detail::g_in_post_pending = false;
+}
+
+void CommBackendLCI::reportQueues(const char *when) {
+  std::string ranks;
+  int listed = 0;
+  for (const auto &entry : m_pending) {
+    if (listed++ == 16) {
+      ranks += " ...";
+      break;
+    }
+    ranks += " " + std::to_string(entry.first) + "(" +
+             std::to_string(entry.second.size()) + ")";
+  }
+  CmiError("Reconverse> LCI sends, process %d, %s: %zu operations (%zu bytes) "
+           "queued now, for %zu destination processes [process(operations):%s]; "
+           "since start %zu operations (%zu bytes) waited in a queue, at most "
+           "%zu at a time; %ld rendezvous sends in flight (limit %ld)\n",
+           lci::get_rank_me(), when,
+           m_nPending.load(std::memory_order_relaxed),
+           m_pendingBytes.load(std::memory_order_relaxed), m_pending.size(),
+           ranks.c_str(), m_everQueued, m_everQueuedBytes, m_maxQueued,
+           detail::g_rdv_inflight.load(std::memory_order_relaxed), m_rdvMax);
 }
 
 size_t CommBackendLCI::pendingSends(size_t *bytes) {
@@ -723,6 +769,12 @@ bool CommBackendLCI::progress(void) {
   if (m_nPending.load(std::memory_order_relaxed) != 0 &&
       !detail::g_in_progress_callback && !detail::g_in_post_pending)
     postPending();
+  if (g_report_requested.load(std::memory_order_relaxed) &&
+      !detail::g_in_progress_callback && !detail::g_in_post_pending &&
+      g_report_requested.exchange(false)) {
+    std::lock_guard<std::mutex> lock(m_pendingMutex);
+    reportQueues("on SIGUSR2");
+  }
   return did_progress;
 }
 
