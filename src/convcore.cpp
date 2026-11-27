@@ -176,6 +176,7 @@ int _Cmi_numnodes_global;
 int Cmi_nodestartGlobal;
 int backend_poll_freq;
 int thread_queue_max; // +thread_queue_max: old scheduler, consecutive thread-queue messages before the priority queue gets a turn
+bool thread_queue_per_producer; // +thread_queue_per_producer: PE thread queues keep one sub-queue per producer (moodycamel)
 int node_queue_max; // +node_queue_max: consecutive node-queue messages before the PE's own work gets a turn (both schedulers)
 int backend_poll_thread;
 
@@ -763,6 +764,8 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
   CmiGetArgIntDesc(argv, "+thread_queue_max", &thread_queue_max,
                    "old scheduler: after N consecutive thread-queue messages, run one from the priority queue");
   if (thread_queue_max < 1) thread_queue_max = 1;
+  thread_queue_per_producer = CmiGetArgFlagDesc(argv, "+thread_queue_per_producer",
+      "PE thread queues keep one sub-queue per producer (moodycamel) instead of one shared FIFO");
   node_queue_max = 16;
   CmiGetArgIntDesc(argv, "+node_queue_max", &node_queue_max,
                    "after N consecutive node-queue messages, run one of the PE's own");
@@ -777,6 +780,9 @@ void ConverseInit(int argc, char **argv, CmiStartFn fn, int usched,
   if (Cmi_mynode == 0 && CmiSchedulerIsOld())
     printf("Reconverse> Using the original scheduler (+old-scheduler); queue "
            "registration is disabled\n");
+  if (Cmi_mynode == 0 && thread_queue_per_producer)
+    printf("Reconverse> PE thread queues keep one sub-queue per producer "
+           "(+thread_queue_per_producer)\n");
   if (Cmi_mynode == 0 && CmiSchedulerIsRandomized()) {
     printf("Reconverse> Randomized message queue (+randomized_msgq, seed "
            "%llu): priorities, FIFO order and [expedited] are not "
@@ -853,11 +859,17 @@ void CmiInitState(int rank) {
   CmiSetIdleTime(0.0);
 
   // allocate global entries
+#ifdef ATOMIC_QUEUE_ENABLED
+  ConverseQueue<void *> *queue = new ConverseQueue<void *>(thread_queue_per_producer);
+  ConverseQueue<void *> *urgentQueue = new ConverseQueue<void *>(thread_queue_per_producer);
+#else
   ConverseQueue<void *> *queue = new ConverseQueue<void *>();
+  ConverseQueue<void *> *urgentQueue = new ConverseQueue<void *>();
+#endif
   std::vector<CmiHandlerInfo> *handlerTable = new std::vector<CmiHandlerInfo>();
 
   Cmi_queues[Cmi_myrank] = queue;
-  Cmi_urgentQueues[Cmi_myrank] = new ConverseQueue<void *>();
+  Cmi_urgentQueues[Cmi_myrank] = urgentQueue;
   CmiHandlerTable[Cmi_myrank] = handlerTable;
 
   // random

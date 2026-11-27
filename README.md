@@ -114,6 +114,7 @@ set `LCT_PMI_BACKEND=local`.
 ### Runtime Options
 - **`+pe <num>`**: specify the total number of PEs across all processes.
 - **`+thread_queue_max <num>`**: with `+old-scheduler`, after this many consecutive messages taken from the PE's thread queue (the queue other PEs and the network push into), one message from the PE's priority queue runs if there is one, so a stream from outside cannot starve the PE's own queued work (default 16).
+- **`+thread_queue_per_producer`**: give each PE's thread queue, and its urgent queue, one sub-queue per producer (moodycamel's `ConcurrentQueue`, the queue before #271) instead of the default single FIFO that every producer shares. Taking a message then walks every PE that has ever pushed to this one, so delivery slows down as the PEs per process grow, while the default queue costs the same with any number of producers. Kept for comparison, and for many-to-one traffic from producers in different NUMA domains: with 8 PEs per process spread one per NUMA domain on a Delta node, it delivered 1.3x faster than the default. With more PEs than cores (a laptop, a CI runner, `+pe` above the core count), a producer descheduled between taking its slot in the default queue and storing its message holds back every later message to that PE until it runs again, where with sub-queues only its own messages wait. On a 128-core Delta node with 256 unpinned PEs the default queue was still the faster one: `thread_queue_order` took 0.7–1.1 s against 5.2–7.3 s, and ping-pong latency varied up to tenfold from run to run with both.
 - **`+node_queue_max <num>`**: the default scheduler runs node-level messages (the node queue, and node priority queue messages whose priority is at least as high as the PE's own next message) ahead of the PE's own queued work, and `+old-scheduler` runs the node queue ahead of it and takes the node priority queue whenever its lock is free; after this many node-level messages in a row, one of the PE's own messages runs if there is one, so a stream of node messages cannot starve it (default 16).
 - **`+backend <lci|lcw>`**: select the communication backend at runtime. If not specified, Reconverse will use the first available backend in the order of LCI, LCW.
 - **`+ipc`** / **`+noipc`**: send messages between processes that share a host through shared memory instead of the communication backend. Off by default; see [Shared-memory IPC](#shared-memory-ipc-ipc).
@@ -369,11 +370,11 @@ The mode is a separate scheduler loop chosen once when `CsdScheduler()` or
 `CsdSchedulePoll()` is entered; the default loop is unchanged and costs
 nothing extra when the flag is absent.
 
-With the flag, the loop itself gets slow at many PEs per process. Each
-iteration sizes the thread queue and checks it for emptiness before every
-take, and both walk every producer that has pushed to it (#271), so at
-64 PEs per process a backlog of N messages costs on the order of N µs per
-iteration. That is expected in this mode; it goes away when #271 is fixed.
+Together with `+thread_queue_per_producer`, the loop gets slow at many PEs
+per process: each take from the thread queue walks every producer that has
+pushed to it (#271), so at 64 PEs per process a backlog of N messages costs
+on the order of N µs per iteration. The default thread queue takes each
+message at the same cost with any number of producers.
 
 ## Aborts and stack traces
 

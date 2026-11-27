@@ -43,10 +43,10 @@ inline void *CmiTakeUrgentQueue() { return CmiTakeUrgent(CmiGetUrgentQueue(CmiMy
 // converse-level thread queue
 inline void *CmiTakeThreadQueue() {
   ConverseQueue<void *> *queue = CmiGetQueue(CmiMyRank());
-  // pop() checks the queue's count itself, so an empty queue costs one load.
-  // It can come back empty even when the count was positive, when a
-  // producer's count increment ran ahead of its enqueue; the message is then
-  // taken on a later call.
+  // An empty queue costs pop() one load (ThreadQueue in queue.h). A message
+  // whose producer has taken its ticket but not yet stored it, and with
+  // +thread_queue_per_producer one whose count increment ran ahead of its
+  // enqueue, is taken on a later call.
   auto r = queue->pop();
   return r ? *r : nullptr;
 }

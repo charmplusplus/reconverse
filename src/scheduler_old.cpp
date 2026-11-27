@@ -98,9 +98,9 @@ void CsdSchedulerOld() {
       nq_streak = 0; // the PE's own queues get this iteration
       void *msg = nullptr;
       if (tq_streak < thread_queue_max || QueueEmpty(CpvAccess(CsdSchedQueue))) {
-        // the count said non-empty; pop() can still come back empty when a
-        // producer's count increment ran ahead of its enqueue, in which case
-        // the message is seen on the next iteration
+        // with +thread_queue_per_producer, pop() can come back empty after
+        // empty() said otherwise, when a producer's count increment ran ahead
+        // of its enqueue; the message is then seen on the next iteration
         auto result = queue->pop();
         if (result) { tq_streak++; msg = result.value(); }
       } else {
@@ -340,9 +340,9 @@ void CsdSchedulePollOld() {
       nq_streak = 0; // the PE's own queues get this iteration
       void *msg = nullptr;
       if (tq_streak < thread_queue_max || QueueEmpty(CpvAccess(CsdSchedQueue))) {
-        // the count said non-empty; pop() can still come back empty when a
-        // producer's count increment ran ahead of its enqueue, in which case
-        // the message is seen on the next iteration
+        // with +thread_queue_per_producer, pop() can come back empty after
+        // empty() said otherwise, when a producer's count increment ran ahead
+        // of its enqueue; the message is then seen on the next iteration
         auto result = queue->pop();
         if (result) { tq_streak++; msg = result.value(); }
       } else {
