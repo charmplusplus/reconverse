@@ -211,6 +211,11 @@ static unsigned char *buf(size_t n) {
   return b.data();
 }
 
+// CmiPut, CmiGet and CmiSignal return a code that must be checked
+static void ok(int rc, const char *what) {
+  if (rc != CMI_REGION_OK) fail("%s returned %d", what, rc);
+}
+
 static std::atomic<int> g_detached{0}; // CmiDetachTarget calls by OP_DETACH
 
 // What each case does with the messages its origins and PE 0 receive.
@@ -1256,21 +1261,21 @@ void newAction(void *, CmiCounter c) {
                         CMI_COUNTER_AUTO_REARM);
   CmiTarget t = CmiTargetMake(nullptr, 0, ca);
   aa = CmiAttachTarget(&t);
-  CmiSignal(aa);                // round 1 fires
-  if (earlyRound) CmiSignal(aa); // round 2, before the handler
+  ok(CmiSignal(aa), "CmiSignal");                // round 1 fires
+  if (earlyRound) ok(CmiSignal(aa), "CmiSignal"); // round 2, before the handler
   CmiCounterDestroy(c, 0, nullptr, nullptr);
 }
 void start() {
   CmiCounter c = CmiCounterCreate(1, CmiCounterActionFn(oldAction, nullptr), 0);
   CmiTarget t = CmiTargetMake(nullptr, 0, c);
   CmiAttachment a = CmiAttachTarget(&t);
-  CmiSignal(a); // fires: the message is queued
+  ok(CmiSignal(a), "CmiSignal"); // fires: the message is queued
   CmiDetachTarget(a);
   CmiCounterDestroy(c, 0, nullptr, nullptr);
   c2 = CmiCounterCreate(1, CmiCounterActionFn(newAction, nullptr), 0);
   CmiTarget t2 = CmiTargetMake(nullptr, 0, c2);
   CmiAttachment a2 = CmiAttachTarget(&t2);
-  CmiSignal(a2);
+  ok(CmiSignal(a2), "CmiSignal");
   CmiDetachTarget(a2);
 }
 void startEarly() {
@@ -1378,7 +1383,7 @@ void onCtl(Ctl *m) {
       CmiAttachment a = CmiAttachTarget(&m->t);
       CmiAttachment b = CmiAttachTarget(&m->t2);
       CmiAttachment v[3];
-      CmiAttachTargets(ts, 3, v);
+      if (CmiAttachTargets(ts, 3, v) != 3) fail("CmiAttachTargets");
       if (i & 1) {
         CmiDetachTarget(a);
         CmiDetachTargets(v, 3);
@@ -1479,7 +1484,7 @@ void rearmEarly() {
   c = CmiCounterCreate(1, CmiCounterActionFn(never, nullptr), 0);
   CmiTarget t = CmiTargetMake(nullptr, 0, c);
   a = CmiAttachTarget(&t);
-  CmiSignal(a);             // the round fires; its action is queued
+  ok(CmiSignal(a), "CmiSignal"); // the round fires; its action is queued
   CmiCounterRearm(c, 1);    // too early
   fail("the early re-arm was not refused");
 }
@@ -1488,8 +1493,8 @@ void roundSkip() {
                        CMI_COUNTER_CHECK_ROUNDS);
   CmiTarget t = CmiTargetMake(nullptr, 0, c);
   a = CmiAttachTarget(&t);
-  CmiSignal(a);
-  CmiSignal(a); // this attachment's second contribution in round 1
+  ok(CmiSignal(a), "CmiSignal");
+  ok(CmiSignal(a), "CmiSignal"); // this attachment's second in round 1
   fail("the second contribution in one round was not refused");
 }
 // The owner has not yet handled the registration, so the destroy completes
@@ -1500,8 +1505,8 @@ void stale() {
   CmiTarget t = CmiTargetMake(nullptr, 0, c);
   a = CmiAttachTarget(&t);
   CmiCounterDestroy(c, 0, nullptr, nullptr);
-  CmiSignal(a);
-  fail("a signal through a destroyed counter's target was not refused");
+  int rc = CmiSignal(a);
+  fail("a signal through a destroyed counter's target returned %d", rc);
 }
 // The same for a region, through a target with no counter: the slot's
 // generation refuses the put before it writes into freed memory.
@@ -1541,8 +1546,8 @@ void allocNull() {
 // process before the done callback (the urgent queue first), and every
 // build refuses the attachment itself.
 void detachedDone(void *) {
-  CmiSignal(a);
-  fail("a signal through an attachment its owner ended was not refused");
+  int rc = CmiSignal(a);
+  fail("a signal through an attachment its owner ended returned %d", rc);
 }
 void detached() {
   c = CmiCounterCreate(5, CmiCounterActionFn(never, nullptr), 0);
@@ -1556,8 +1561,8 @@ CmiTarget lateTarget;
 void lateOnCtl(Ctl *m) {
   if (m->op != OP_STEP) return;
   unsigned char b[8] = {0};
-  CmiPut(a, 0, b, sizeof(b), nullptr, nullptr, nullptr);
-  fail("a put through an attachment to a destroyed region was not refused");
+  int rc = CmiPut(a, 0, b, sizeof(b), nullptr, nullptr, nullptr);
+  fail("a put through an attachment to a destroyed region returned %d", rc);
 }
 void lateAttach() {
   g_onCtl = lateOnCtl;

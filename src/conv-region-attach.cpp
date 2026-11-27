@@ -362,7 +362,7 @@ int CmiAttachTargets(const CmiTarget *t, int n, CmiAttachment *out) {
 
 CmiAttachment CmiAttachTarget(const CmiTarget *t) {
   CmiAttachment a = nullptr;
-  CmiAttachTargets(t, 1, &a);
+  if (CmiAttachTargets(t, 1, &a) != 1) CmiAbort("CmiAttachTarget: failed\n");
   return a;
 }
 

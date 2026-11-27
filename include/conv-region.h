@@ -30,6 +30,15 @@
 extern "C" {
 #endif
 
+/* CmiPut, CmiGet, CmiSignal and CmiAttachTargets return a value that must
+   be checked: an error code means nothing was transferred or counted, and
+   the owner would wait for that contribution forever. */
+#if defined(__GNUC__) || defined(__clang__)
+#define CMI_REGION_CHECK_RESULT __attribute__((warn_unused_result))
+#else
+#define CMI_REGION_CHECK_RESULT
+#endif
+
 typedef enum { CMI_MEM_HOST = 0, CMI_MEM_DEVICE = 1 } CmiMemKind;
 
 typedef struct CmiRegionRec *CmiRegion;
@@ -176,7 +185,8 @@ CmiTarget CmiTargetMake(CmiRegion r, int piece, CmiCounter c);
 CmiAttachment CmiAttachTarget(const CmiTarget *t);
 void CmiDetachTarget(CmiAttachment a);
 /* The batch forms send one message per owner process; returns n. */
-int CmiAttachTargets(const CmiTarget *t, int n, CmiAttachment *out);
+CMI_REGION_CHECK_RESULT int CmiAttachTargets(const CmiTarget *t, int n,
+                                             CmiAttachment *out);
 void CmiDetachTargets(CmiAttachment *a, int n);
 
 /* Writes bytes from src at offset within the target's piece, and decrements
@@ -185,14 +195,18 @@ void CmiDetachTargets(CmiAttachment *a, int n);
    before the local counter's re-arm is not an error (error-checking builds
    do not check it), and counts toward its next round. srcLayout and stream
    must be NULL. */
-int CmiPut(CmiAttachment t, size_t offset, const void *src, size_t bytes,
-           const CmiLayout *srcLayout, CmiCounter local, void *stream);
+CMI_REGION_CHECK_RESULT int CmiPut(CmiAttachment t, size_t offset,
+                                   const void *src, size_t bytes,
+                                   const CmiLayout *srcLayout, CmiCounter local,
+                                   void *stream);
 /* Reads bytes at offset within the target's piece into dst; decrements local
    once they are in place. The target's counter is not touched. */
-int CmiGet(void *dst, size_t bytes, const CmiLayout *dstLayout,
-           CmiAttachment t, size_t offset, CmiCounter local, void *stream);
+CMI_REGION_CHECK_RESULT int CmiGet(void *dst, size_t bytes,
+                                   const CmiLayout *dstLayout, CmiAttachment t,
+                                   size_t offset, CmiCounter local,
+                                   void *stream);
 /* A contribution with no data: decrements the target's counter. */
-int CmiSignal(CmiAttachment t);
+CMI_REGION_CHECK_RESULT int CmiSignal(CmiAttachment t);
 
 /* Between processes, a CmiPut of at most this many bytes travels as one
    message carrying the data and the signal, a larger one as a put with

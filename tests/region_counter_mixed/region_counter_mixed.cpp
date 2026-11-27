@@ -836,9 +836,11 @@ void quiet(void *, CmiCounter) {}
 void countOnCtl(Ctl *m) {
   if (m->op != OP_GO) return;
   CmiAttachment a = attOf(m);
-  unsigned char b[64] = {0};
-  CmiPut(a, 0, b, sizeof(b), nullptr, nullptr, nullptr);
-  CmiPut(a, 0, b, sizeof(b), nullptr, nullptr, nullptr); // before the re-arm
+  unsigned char *b = buf(64);
+  int rc = CmiPut(a, 0, b, 64, nullptr, nullptr, nullptr);
+  if (rc == CMI_REGION_OK)
+    rc = CmiPut(a, 0, b, 64, nullptr, nullptr, nullptr); // before the re-arm
+  if (rc != CMI_REGION_OK) fail("CmiPut returned %d", rc);
 }
 void countHooks() { g_onCtl = countOnCtl; }
 void countRemote() {
@@ -852,7 +854,8 @@ void staleOnCtl(Ctl *m) {
     attOf(m);
     ack0(OP_SETUP);
   } else if (m->op == OP_GO) {
-    CmiSignal(att(0)); // through the destroyed counter's target
+    // through the destroyed counter's target
+    if (CmiSignal(att(0)) != CMI_REGION_OK) fail("CmiSignal");
   }
 }
 void staleDone(void *) {
