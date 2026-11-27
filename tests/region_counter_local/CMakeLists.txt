@@ -24,6 +24,17 @@ foreach(_case ${_cases4})
     PASS_REGULAR_EXPRESSION "${_case} PASS" TIMEOUT 60)
 endforeach()
 
+# A destroy called on an application message (CmiRegionDestroy's rule):
+# reports how often the destroy completed before the origin's registration
+# was handled, which is allowed; it documents the behaviour.
+add_test(NAME region_counter_local_destroy_order_pe4
+         COMMAND region_counter_local destroy_order +pe 4)
+add_test(NAME region_counter_local_destroy_order_randomized_pe4
+         COMMAND region_counter_local destroy_order +pe 4 +randomized_msgq)
+set_tests_properties(region_counter_local_destroy_order_pe4
+  region_counter_local_destroy_order_randomized_pe4 PROPERTIES
+  PASS_REGULAR_EXPRESSION "destroy_order PASS" TIMEOUT 60)
+
 # A destroy that waits says what for, once, after +region_destroy_report_s.
 foreach(_pes 1 4)
   add_test(NAME region_counter_local_destroy_wait_pe${_pes}

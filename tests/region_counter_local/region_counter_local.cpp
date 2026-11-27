@@ -46,6 +46,15 @@
                while the owner destroys them (attach_all: with
                CMI_DESTROY_DETACH_ALL halfway)
     auto_handler  a handler action with CMI_COUNTER_AUTO_REARM
+    destroy_order  documents a limit of the destroy (CmiRegionDestroy): the
+               owner destroys a region as soon as an origin's application
+               message arrives, while the origin is still attached. When
+               that message is handled before the origin's registration,
+               the destroy completes without waiting for the origin. The
+               default scheduler looks at the urgent queue first, but a
+               registration and a message pushed between its two looks are
+               taken in the other order; +randomized_msgq makes it common.
+               The case counts how often it happened, and passes either way
     destroy_wait  a region's destroy waits for an origin that detaches only
                after a while; with +region_destroy_report_s 0.2 the destroy
                says what it waits for first
@@ -1450,6 +1459,63 @@ void start() {
 }
 } // namespace autoHandler
 
+// ---------------------------------------------------------- destroy_order
+namespace destroyOrder {
+const int kIters = 50;
+CmiRegion r;
+int origin, iter, early;
+bool detachSent, doneRan, acked;
+void start();
+void maybeNext() {
+  if (!doneRan || !acked) return;
+  if (++iter < kIters) {
+    start();
+    return;
+  }
+  char what[160];
+  snprintf(what, sizeof(what),
+           "in %d of %d rounds the destroy completed before the origin's "
+           "registration arrived", early, kIters);
+  pass(what);
+}
+void done(void *) {
+  if (!detachSent) early++; // completed while the origin was attached
+  doneRan = true;
+  maybeNext();
+}
+void sendDetach(void *, double) {
+  detachSent = true;
+  sendOp(origin, OP_DETACH, 0, nullptr, 1);
+}
+void onCtl(Ctl *m) {
+  if (m->op != OP_GO) return;
+  CmiAttachment a = attOf(m);
+  unsigned char *b = buf(8);
+  memset(b, 1, 8);
+  int rc = CmiPut(a, 0, b, 8, nullptr, nullptr, nullptr);
+  if (rc != CMI_REGION_OK) fail("CmiPut returned %d", rc);
+  ack0(OP_GO); // "done", a message of the application
+}
+void onAck(Ctl *m) {
+  if (m->tag == OP_GO) {
+    CmiRegionDestroy(r, 0, done, nullptr);
+    CcdCallFnAfter(sendDetach, nullptr, 5.0);
+  } else if (m->tag == OP_DETACH) {
+    acked = true;
+    maybeNext();
+  }
+}
+void start() {
+  g_onCtl = onCtl;
+  g_onAck = onAck;
+  origin = npes() - 1;
+  detachSent = doneRan = acked = false;
+  CmiRegionAlloc(64, CMI_MEM_HOST, 0, 0, &r);
+  CmiTarget t = CmiTargetMake(r, CMI_PIECE_ALL, nullptr);
+  sendOp(origin, OP_GO, 0, &t, 0);
+}
+} // namespace destroyOrder
+
 // ----------------------------------------------------------- destroy_wait
 namespace destroyWait {
 CmiRegion r;
@@ -1667,6 +1733,7 @@ static const Case kCases[] = {
     {"attach", attachm::start},     {"attach_all", attachm::startAll},
     {"auto_handler", autoHandler::start},
     {"destroy_wait", destroyWait::start},
+    {"destroy_order", destroyOrder::start},
     {"rearm_early", aborts::rearmEarly},
     {"round_skip", aborts::roundSkip},
     {"stale", aborts::stale},       {"detached", aborts::detached},

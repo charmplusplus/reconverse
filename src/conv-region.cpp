@@ -1351,9 +1351,9 @@ void putRemote(CmiAttachmentRec *a, CmiAttachRec *rec, size_t offset,
 
 } // namespace
 
-int CmiPut(CmiAttachment t, size_t offset, const void *src, size_t bytes,
+int CmiPut(CmiAttachment a, size_t offset, const void *src, size_t bytes,
            const CmiLayout *srcLayout, CmiCounter local, void *stream) {
-  CmiAttachmentRec *a = checkHandle(t, "CmiPut");
+  checkHandle(a, "CmiPut");
   const CmiTarget &tg = a->target;
   if (!(tg.flags & kTargetHasRegion)) return CMI_REGION_ENOREGION;
   if (srcLayout != nullptr || stream != nullptr) return CMI_REGION_EUNSUPPORTED;
@@ -1378,8 +1378,8 @@ int CmiPut(CmiAttachment t, size_t offset, const void *src, size_t bytes,
 }
 
 int CmiGet(void *dst, size_t bytes, const CmiLayout *dstLayout,
-           CmiAttachment t, size_t offset, CmiCounter local, void *stream) {
-  CmiAttachmentRec *a = checkHandle(t, "CmiGet");
+           CmiAttachment a, size_t offset, CmiCounter local, void *stream) {
+  checkHandle(a, "CmiGet");
   const CmiTarget &tg = a->target;
   if (!(tg.flags & kTargetHasRegion)) return CMI_REGION_ENOREGION;
   if (dstLayout != nullptr || stream != nullptr) return CMI_REGION_EUNSUPPORTED;
@@ -1429,8 +1429,8 @@ int CmiGet(void *dst, size_t bytes, const CmiLayout *dstLayout,
   return CMI_REGION_OK;
 }
 
-int CmiSignal(CmiAttachment t) {
-  CmiAttachmentRec *a = checkHandle(t, "CmiSignal");
+int CmiSignal(CmiAttachment a) {
+  checkHandle(a, "CmiSignal");
   const CmiTarget &tg = a->target;
   if (!(tg.flags & kTargetHasCounter)) return CMI_REGION_ENOCOUNTER;
   if (!isLocal(tg)) {

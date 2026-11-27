@@ -38,6 +38,10 @@
               into a counter with no action: its process counts 8 created
               and none processed before they land, and the owner's process
               counts them processed where they land
+  nocounter and reuse destroy on the origins' acknowledgements, which is
+  safe only if each origin's registration, sent before its first put, has
+  arrived by then (CmiRegionDestroy's rule): they test the destroy's
+  accounting, not that rule.
   Every case that passes first checks quiescence detection's counts: each
   process installs a QD hook, and the owner adds up created and processed
   over the processes, which must balance once the case is done.

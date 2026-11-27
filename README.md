@@ -346,22 +346,100 @@ contribution that completes the round queues the action on the owner PE,
 which re-arms the counter (`CmiCounterRearm`) once it has finished with the
 data. `CmiSignal` is a contribution with no data, `CmiGet` reads a piece, and
 `CmiPut` can decrement a counter of the origin's own when its source may be
-reused. The owner must be ready for each round's data: an origin puts only
-when the program's logic says the owner no longer needs the piece's previous
-contents.
+reused.
 
 Implemented so far: contiguous host memory, with origins on the owner's PE, on
 other PEs of its process, and in other processes, which are reached through
 the network (a put with signal, or a message where the network has none) even
-on the same host. The header documents each call; the design is in
-[doc/internals/persistent-family.md](doc/internals/persistent-family.md).
+on the same host. The header documents each call; the implementation is
+described in
+[doc/internals/persistent-family.md](doc/internals/persistent-family.md), and
+the design in charm's `doc/persistent-family-design.md`.
 
-The CMake option **`RECONVERSE_ERROR_CHECKING`** (`AUTO`, the default, is on
-in builds where `CMK_OPTIMIZE` is 0, decided again at every configure; `ON` or
-`OFF` overrides it) adds the checks that cost something on every
-contribution: a contribution that arrives after its round fired and before
-the re-arm, and, for counters created with `CMI_COUNTER_CHECK_ROUNDS`, one
-that would count in place of another round's.
+**A round protocol.** The owner, on its PE:
+
+```c
+static CmiRegion reg;
+static CmiCounter ctr;
+static int nOrigins, step, lastStep;
+
+static void onRound(void *mem, CmiCounter c) {
+  consume(mem);                     /* the last read of this round's data */
+  if (++step == lastStep) {         /* every origin detaches after its last put */
+    CmiRegionDestroy(reg, 0, NULL, NULL);  /* frees mem once complete */
+    CmiCounterDestroy(ctr, 0, NULL, NULL);
+    return;
+  }
+  CmiCounterRearm(c, nOrigins);     /* after the last read, and before */
+  startNextStep();                  /* anything that lets an origin put again */
+}
+
+void ownerSetup(size_t bytes) {
+  void *mem = CmiRegionAlloc(nOrigins * bytes, CMI_MEM_HOST, 0, 0, &reg);
+  ctr = CmiCounterCreate(nOrigins, CmiCounterActionFn(onRound, mem), 0);
+  for (int o = 0; o < nOrigins; o++) {
+    int piece = CmiRegionAddPiece(reg, o * bytes, bytes, NULL, 0);
+    CmiTarget t = CmiTargetMake(reg, piece, ctr);
+    sendTarget(o, &t);              /* copy it into any message */
+  }
+}
+```
+
+An origin, on any PE, once its target has arrived:
+
+```c
+CmiAttachment a = CmiAttachTarget(&t);
+/* srcFree: a counter of this PE, e.g. N = 1 with CMI_COUNTER_AUTO_REARM,
+   whose action runs once src may be overwritten */
+for (each step) {
+  wait until the program's logic says the owner has finished with the
+  previous step's data;
+  if (CmiPut(a, 0, src, bytes, NULL, srcFree, NULL) != CMI_REGION_OK)
+    CmiAbort("CmiPut failed\n");
+}
+CmiDetachTarget(a);                 /* after the last put */
+```
+
+Rules that the example follows:
+
+- **Readiness is the application's.** A put lands when it arrives, whatever
+  the owner is doing. An origin puts round r+1 only when the program's logic
+  says the owner has finished with round r's data: a reduction between
+  steps that the owner joins after its last read, two buffers by parity, or
+  a credit counter the owner signals (design 4.9).
+- **Re-arm after the last read**, in the action or later, and before the
+  owner sends anything that lets an origin put the next round. A
+  contribution that arrives before the re-arm is counted correctly, but an
+  error-checking build aborts on it. `CMI_COUNTER_AUTO_REARM` re-arms just
+  before the action runs; use it only when the action is the last use of
+  the data and no origin can put the next round before the action has run,
+  since nothing checks it.
+- **Source reuse.** With a local counter, `src` may be overwritten once it
+  fires. Without one, `src` is free when `CmiPut` returns only within the
+  owner's process and for a put that travels as a message; a put with
+  signal reads it until its local completion.
+- **Teardown.** Origins detach after their last put; transfers still in
+  flight are allowed, and the detach waits for them. The owner destroys
+  after the counter has fired a round that every origin's puts counted
+  toward. A destroy called on an application message alone can complete
+  before an origin's registration arrives (messages are not ordered), so
+  puts without a counter, or a counter destroyed before its last round
+  fired, are not safe that way. A counter given as `local` must outlive the
+  transfers that decrement it.
+- **Check the result** of `CmiPut`, `CmiGet`, `CmiSignal` and
+  `CmiAttachTargets` (they are declared warn-unused-result): an error code
+  means nothing was transferred or counted.
+- **One PE at a time per attachment**; hand it to another PE in a message.
+
+Every build aborts on a put, get or signal through a detached attachment or
+one whose owner ended it, on an in-process put or get through a target whose
+region or counter was destroyed, and on a re-arm before the round's action
+has started. The CMake option **`RECONVERSE_ERROR_CHECKING`** (`AUTO`, the
+default, is on in builds where `CMK_OPTIMIZE` is 0, decided again at every
+configure; `ON` or `OFF` overrides it) adds the checks that cost something on
+every contribution: a contribution that arrives after its round fired and
+before the re-arm, and, for counters created with `CMI_COUNTER_CHECK_ROUNDS`,
+one that would count in place of another round's.
 
 ## Randomized message order (`+randomized_msgq`)
 

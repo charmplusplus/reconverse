@@ -269,10 +269,10 @@ notice has been sent, and no completion can queue the notice twice.
 ## Destroy
 
 The owner keeps, per object, a balance per origin process: registrations
-minus notices. No step relies on the order in which two messages arrive: a
-notice that arrives first leaves the balance at -1 until its registration
-does. A destroy (`CmiRegionDestroy`, `CmiCounterDestroy`) marks the object and
-completes once
+minus notices. The balances do not rely on the order in which a process's
+registration and notice arrive: a notice that arrives first leaves the
+balance at -1 until its registration does. A destroy (`CmiRegionDestroy`,
+`CmiCounterDestroy`) marks the object and completes once
 
 - every balance is 0;
 - every contribution the notices report has landed: for a counter, its
@@ -290,9 +290,41 @@ build, naming the object, its owner PE and what it waits for: processes
 that have not detached, contributions that have not landed, or, for a
 counter, regions it was paired with that are not destroyed.
 
+The owner can wait only for the processes it knows. A registration still
+on its way when the destroy is called is not among them, and messages are
+not ordered, so a destroy is safe only once nothing of an unknown origin
+can be in flight. That holds when the destroy follows the firing of a round
+that every origin's puts counted toward: every contribution of that round
+has landed, registered or not (design 10.1, 10.2 step 1). It does not hold
+in two cases:
+
+- puts without a counter, which have no firing to wait for;
+- a counter (or its region) destroyed before its last round fired.
+
+In both, an application message from an origin ("I am done") is not a sign
+that its puts have landed: it can overtake the origin's registration, the
+destroy then completes without waiting for that origin, and its puts land
+in memory that is deregistered and may be freed (a late put with signal
+into a reused counter index decrements the new counter). The header says
+so in `CmiRegionDestroy` and `CmiCounterDestroy`. The current calls give an
+origin no way to learn that the owner has applied its notice; an optional
+completion callback on `CmiDetachTarget(s)`, run once the owner has applied
+the notice, would close this gap (the origin would send its "done" from
+there) and is a possible follow-up.
+
+The urgent queue does not close the gap even within one process: the
+default scheduler looks at it before the thread queue, but a registration
+and an application message pushed between those two looks are taken in
+the other order. region_counter_local's destroy_order case destroys on an
+application message and counts how often the destroy completed before the
+registration was handled (1 to 9 of 50 rounds with the default scheduler
+on a laptop, 0 to 2 with `+randomized_msgq`). Where a test needs the
+registration in first, it waits one more pass through its own queue after
+the message that follows the registration (teardown), and skips the check
+under `+randomized_msgq`.
+
 The landed counts are exact for a counter paired with the one region being
-destroyed: every contribution to it came through that region, and its destroy
-may be called at any time after the application stops putting. A counter
+destroyed: every contribution to it came through that region. A counter
 that also serves another region still in use, or a target with no region,
 counts their contributions too, which can make up for a put of this region
 still in flight. For that case the application follows the shared-counter
@@ -322,7 +354,7 @@ withholds its index until the message's handler has run, so that no later
 counter there queues the message twice. A registration that arrives for a
 generation already destroyed gets a detach request; a notice for one is
 dropped. An origin the owner had not heard of when the destroy completed
-has, by the application's own logic, nothing in flight (10.2, step 1).
+is safe to ignore only under the rule above.
 
 A counter destroyed in a partly filled round, or whose last round fired and
 has not run, reports its unconsumed contributions to the QD hook as
