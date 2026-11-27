@@ -43,6 +43,7 @@ int g_putKinds[2] = {-1, -1}; // the backend's kinds, by SignalKind
 size_t g_putMessageMax = 0;   // a put of at most this many bytes is a message
 int g_signalAm = -1;          // the active message of CmiSignal
 bool g_verbose = false;       // +region_verbose
+double g_destroyReportS = 30; // +region_destroy_report_s
 std::atomic<bool> g_pathShown[2] = {{false}, {false}};
 #if CMI_REGION_CHECKS
 int g_completionDelayUs = 0; // +region_test_completion_delay
@@ -422,6 +423,94 @@ void scheduleRecheck(ObjKind kind, uint32_t slot, uint32_t gen, bool &flag) {
   CcdCallFnAfter(recheckFn, new Recheck{kind, slot, gen}, 0.05);
 }
 
+// The processes a destroy still waits for, for its report: how many, and
+// the first one's number and balance (registrations minus notices).
+void describeBalance(const std::unordered_map<int, int> &balance, char *out,
+                     size_t n) {
+  int first = -1, b = 0;
+  for (const auto &kv : balance)
+    if (first < 0 || kv.first < first) {
+      first = kv.first;
+      b = kv.second;
+    }
+  snprintf(out, n,
+           "%zu processes have not detached (process %d first, %s); each "
+           "must call CmiDetachTarget, or destroy with CMI_DESTROY_DETACH_ALL",
+           balance.size(), first,
+           b > 0 ? "registered, no notice yet"
+                 : "its notice arrived before its registration");
+}
+
+// A destroy still waiting after +region_destroy_report_s seconds says once,
+// on stderr and in every build, what it waits for: a process that never
+// detaches, or a contribution that never lands (a lost one, or a counter
+// shared against the rule of CmiRegionDestroy's documentation).
+void reportFn(void *arg, double) {
+  Recheck *rc = static_cast<Recheck *>(arg);
+  PeState *ps = peState();
+  char what[512];
+  what[0] = 0;
+  if (rc->kind == ObjKind::Region) {
+    CmiRegionRec *r = rc->slot < ps->regions.size() ? ps->regions[rc->slot]
+                                                    : nullptr;
+    if (r != nullptr && r->generation == rc->gen &&
+        r->state == ObjState::Destroying) {
+      RegionSlot *rs = regionSlotOf(ps->rank, r->slot);
+      uint64_t landed = rs->landed.load(std::memory_order_acquire);
+      if (!r->balance.empty()) {
+        describeBalance(r->balance, what, sizeof(what));
+      } else if (landed < r->expectedUncounted) {
+        snprintf(what, sizeof(what),
+                 "%llu of the %llu puts without a counter that the notices "
+                 "report have landed", (unsigned long long)landed,
+                 (unsigned long long)r->expectedUncounted);
+      } else {
+        for (CmiCounterRec *c : r->pairedCounters)
+          if (landedOf(c) < (int64_t)c->expected) {
+            snprintf(what, sizeof(what),
+                     "counter %u has %lld of the %llu contributions its "
+                     "notices report", c->index, (long long)landedOf(c),
+                     (unsigned long long)c->expected);
+            break;
+          }
+      }
+      CmiError("Reconverse> regions: CmiRegionDestroy of region slot %u "
+               "(generation %u) of PE %d has waited %g s: %s\n", r->slot,
+               r->generation, r->ownerPe, g_destroyReportS,
+               what[0] ? what : "nothing it can name");
+    }
+  } else {
+    CmiCounterRec *c = rc->slot < ps->counters.size() ? ps->counters[rc->slot]
+                                                      : nullptr;
+    if (c != nullptr && c->generation == rc->gen &&
+        c->state == ObjState::Destroying) {
+      if (!c->balance.empty())
+        describeBalance(c->balance, what, sizeof(what));
+      else if (!c->pairedRegions.empty())
+        snprintf(what, sizeof(what),
+                 "%zu regions it was paired with in CmiTargetMake are not "
+                 "destroyed yet (region slot %u first)",
+                 c->pairedRegions.size(), c->pairedRegions[0]->slot);
+      else if (landedOf(c) < (int64_t)c->expected)
+        snprintf(what, sizeof(what),
+                 "%lld of the %llu contributions its notices report have "
+                 "landed", (long long)landedOf(c),
+                 (unsigned long long)c->expected);
+      CmiError("Reconverse> regions: CmiCounterDestroy of counter %u "
+               "(generation %u) of PE %d has waited %g s: %s\n", c->index,
+               c->generation, c->ownerPe, g_destroyReportS,
+               what[0] ? what : "nothing it can name");
+    }
+  }
+  delete rc;
+}
+
+void scheduleReport(ObjKind kind, uint32_t slot, uint32_t gen) {
+  if (g_destroyReportS <= 0) return;
+  CcdCallFnAfter(reportFn, new Recheck{kind, slot, gen},
+                 g_destroyReportS * 1000.0);
+}
+
 AttachEntry entryOf(const CmiRegionRec *r) {
   AttachEntry e{};
   e.ownerPe = r->ownerPe;
@@ -757,6 +846,10 @@ void CmiRegionNodeInit(char **argv) {
                    "most that fits one eager message with its header)");
   if (messageMax < 0) messageMax = 0;
   g_putMessageMax = (size_t)messageMax;
+  CmiGetArgDoubleDesc(argv, "+region_destroy_report_s", &g_destroyReportS,
+                      "seconds after which a region's or counter's destroy "
+                      "that is still waiting says what for, once (default "
+                      "30; 0: never)");
   g_verbose = CmiGetArgFlagDesc(argv, "+region_verbose",
                                 "say how a CmiPut to another process travels, "
                                 "the first time each way is used");
@@ -924,7 +1017,11 @@ void CmiCounterDestroy(CmiCounter c, int flags, CmiDoneFn done, void *arg) {
   c->done = done;
   c->doneArg = arg;
   if (flags & CMI_DESTROY_DETACH_ALL) requestDetachAll(c->balance, entryOf(c));
+  PeState *ps = peState();
+  uint32_t index = c->index, gen = c->generation;
   tryCompleteCounter(c);
+  if (ps->counters[index] != nullptr && ps->counters[index]->generation == gen)
+    scheduleReport(ObjKind::Counter, index, gen);
 }
 
 // ---------------------------------------------------------------------------
@@ -1031,7 +1128,11 @@ void CmiRegionDestroy(CmiRegion r, int flags, CmiDoneFn done, void *arg) {
   r->done = done;
   r->doneArg = arg;
   if (flags & CMI_DESTROY_DETACH_ALL) requestDetachAll(r->balance, entryOf(r));
+  PeState *ps = peState();
+  uint32_t slot = r->slot, gen = r->generation;
   tryCompleteRegion(r);
+  if (ps->regions[slot] != nullptr && ps->regions[slot]->generation == gen)
+    scheduleReport(ObjKind::Region, slot, gen);
 }
 
 // ---------------------------------------------------------------------------

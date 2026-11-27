@@ -24,6 +24,17 @@ foreach(_case ${_cases4})
     PASS_REGULAR_EXPRESSION "${_case} PASS" TIMEOUT 60)
 endforeach()
 
+# A destroy that waits says what for, once, after +region_destroy_report_s.
+foreach(_pes 1 4)
+  add_test(NAME region_counter_local_destroy_wait_pe${_pes}
+           COMMAND region_counter_local destroy_wait +pe ${_pes}
+                   +region_destroy_report_s 0.2)
+  set_tests_properties(region_counter_local_destroy_wait_pe${_pes} PROPERTIES
+    PASS_REGULAR_EXPRESSION
+    "CmiRegionDestroy of region slot 0 \\(generation 0\\) of PE 0 has waited 0.2 s: 1 processes have not detached \\(process 0 first, registered, no notice yet\\).*destroy_wait PASS"
+    TIMEOUT 60)
+endforeach()
+
 # Cases that end in CmiAbort: the output decides, since the status is a
 # signal, and the pattern is a message only the library prints.
 function(region_counter_abort_test name pes pattern)

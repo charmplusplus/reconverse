@@ -46,6 +46,9 @@
                while the owner destroys them (attach_all: with
                CMI_DESTROY_DETACH_ALL halfway)
     auto_handler  a handler action with CMI_COUNTER_AUTO_REARM
+    destroy_wait  a region's destroy waits for an origin that detaches only
+               after a while; with +region_destroy_report_s 0.2 the destroy
+               says what it waits for first
   These must abort (the CTest entry matches the library's message):
     rearm_early  a re-arm before the round's action started (every build)
     stale        a signal through a target whose counter was destroyed: the
@@ -1442,6 +1445,26 @@ void start() {
 }
 } // namespace autoHandler
 
+// ----------------------------------------------------------- destroy_wait
+namespace destroyWait {
+CmiRegion r;
+int origin;
+void done(void *) { pass("the destroy completed once the origin detached"); }
+void detachLater(void *, double) { sendOp(origin, OP_DETACH, 0, nullptr, 0); }
+void onAck(Ctl *m) {
+  if (m->tag != OP_ATTACH) return;
+  CmiRegionDestroy(r, 0, done, nullptr);
+  CcdCallFnAfter(detachLater, nullptr, 600.0);
+}
+void start() {
+  g_onAck = onAck;
+  origin = npes() - 1;
+  CmiRegionAlloc(64, CMI_MEM_HOST, 0, 0, &r);
+  CmiTarget t = CmiTargetMake(r, CMI_PIECE_ALL, nullptr);
+  sendOp(origin, OP_ATTACH, 0, &t, 1);
+}
+} // namespace destroyWait
+
 static void autoFiredHandler(void *vm) {
   if (strncmp(g_mode, "race", 4) == 0) race::firedHandler(vm);
   else autoHandler::fired(vm);
@@ -1638,6 +1661,7 @@ static const Case kCases[] = {
     {"race_handler", race::startHandler},
     {"attach", attachm::start},     {"attach_all", attachm::startAll},
     {"auto_handler", autoHandler::start},
+    {"destroy_wait", destroyWait::start},
     {"rearm_early", aborts::rearmEarly},
     {"round_skip", aborts::roundSkip},
     {"stale", aborts::stale},       {"detached", aborts::detached},

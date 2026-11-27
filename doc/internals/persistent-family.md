@@ -284,7 +284,11 @@ completes once
 
 Contributions land at poll time, on threads that know nothing of the
 destroy, so a destroy that waits only for them looks again on a timer
-(`CcdCallFnAfter`, 50 us).
+(`CcdCallFnAfter`, 50 us). A destroy still waiting after 30 seconds
+(`+region_destroy_report_s`) prints one line to stderr, once, in every
+build, naming the object, its owner PE and what it waits for: processes
+that have not detached, contributions that have not landed, or, for a
+counter, regions it was paired with that are not destroyed.
 
 The landed counts are exact for a counter paired with the one region being
 destroyed: every contribution to it came through that region, and its destroy
