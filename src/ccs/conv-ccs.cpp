@@ -33,35 +33,6 @@ static void initHandlerRec(CcsHandlerRec *c,const char *name) {
   c->nCalls=0;
 }
 
-#if CMK_CHARM4PY
-static void callHandlerRec(CcsHandlerRec *c, int reqLen, const void *reqData)
-{
-  c->nCalls++;
-  if (c->fnOld == NULL) {
-    /* registered with CcsRegisterHandlerFn: call it directly, as the non-charm4py
-       build does; only the old charm4py's handlers take the forwarded-message form */
-    (c->fn)(c->userPtr, reqLen, reqData);
-    return;
-  }
-  //structure of message: reserved header + handler name length (up to 32) + data length (up to 1024)
-  //+handler name + data
-  //get handler name and length (up to 32)
-  const char *handlerStr = c->name;
-  const int handlerStrLen = strlen(handlerStr);
-  //reserved header name and data
-  char *cmsg = (char *) CmiAlloc(CmiReservedHeaderSize+2*sizeof(int)+CCS_MAXHANDLER+reqLen);
-  //handler length (up to 32)
-  memcpy(cmsg+CmiReservedHeaderSize, &handlerStrLen, sizeof(int));
-  //data length (up to 1024)
-  memcpy(cmsg+CmiReservedHeaderSize+sizeof(int), &reqLen, sizeof(int));
-  //handler name (up to 32)
-  memcpy(cmsg+CmiReservedHeaderSize+2*sizeof(int), handlerStr, handlerStrLen);
-  //data
-  memcpy(cmsg+CmiReservedHeaderSize+2*sizeof(int)+CCS_MAXHANDLER, reqData, reqLen);
-  (c->fnOld)(cmsg);
-}
-
-#else
 static void callHandlerRec(CcsHandlerRec *c,int reqLen,const void *reqData) {
 	c->nCalls++;
 	if (c->fnOld) 
@@ -77,8 +48,6 @@ static void callHandlerRec(CcsHandlerRec *c,int reqLen,const void *reqData) {
 		(c->fn)(c->userPtr, reqLen, reqData);
 	}
 }
-
-#endif
 
 /*Table maps handler name to CcsHandler object. Pointers into an
   unordered_map stay valid across later insertions, so CcsGetHandler can
@@ -103,13 +72,6 @@ void CcsRegisterHandler(const char *name, CmiHandler fn) {
   cp.fnOld=fn;
   putHandlerRec(cp);
 }
-
-#ifdef CMK_CHARM4PY
-void CcsRegisterHandlerExt(const char *ccs_handlername, void *fn)
-{
-  CcsRegisterHandler(ccs_handlername, (CmiHandler)fn);
-}
-#endif
 
 void CcsRegisterHandlerFn(const char *name, CcsHandlerFn fn, void *ptr) {
   CcsHandlerRec cp;
