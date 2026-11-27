@@ -36,6 +36,43 @@ set_tests_properties(region_counter_local_destroy_order_pe4
   region_counter_local_destroy_order_randomized_pe4 PROPERTIES
   PASS_REGULAR_EXPRESSION "destroy_order PASS" TIMEOUT 60)
 
+# Detach callbacks (CmiDetachTarget's done): a batch over two owner PEs, an
+# attachment the owner ended and a notice it dropped, and a registration
+# that several PEs share. Every build.
+foreach(_case detach_done_batch detach_done_ended detach_done_shared
+        done_order_new)
+  add_test(NAME region_counter_local_${_case}_pe4
+           COMMAND region_counter_local ${_case} +pe 4)
+  set_tests_properties(region_counter_local_${_case}_pe4 PROPERTIES
+    PASS_REGULAR_EXPRESSION "${_case} PASS" TIMEOUT 60)
+endforeach()
+add_test(NAME region_counter_local_detach_done_ended_pe1
+         COMMAND region_counter_local detach_done_ended +pe 1)
+set_tests_properties(region_counter_local_detach_done_ended_pe1 PROPERTIES
+  PASS_REGULAR_EXPRESSION "detach_done_ended PASS" TIMEOUT 60)
+if(RECONVERSE_REGION_CHECKS)
+  # With each registration held 20 ms (+region_test_registration_delay), a
+  # destroy on a message the origin sends right after its detach completes
+  # before the registration arrives (the case asserts it does in at least
+  # one round); on a message sent from the detach's done callback it never
+  # does, also when the notice arrives before the registration.
+  add_test(NAME region_counter_local_done_order_old_delay_pe4
+           COMMAND region_counter_local done_order_old +pe 4
+                   +region_test_registration_delay 20)
+  add_test(NAME region_counter_local_done_order_new_delay_pe4
+           COMMAND region_counter_local done_order_new +pe 4
+                   +region_test_registration_delay 20)
+  add_test(NAME region_counter_local_done_order_new_notice_first_pe4
+           COMMAND region_counter_local done_order_new +pe 4
+                   +region_test_registration_delay 20
+                   +region_test_notice_first)
+  set_tests_properties(region_counter_local_done_order_old_delay_pe4
+    PROPERTIES PASS_REGULAR_EXPRESSION "done_order_old PASS" TIMEOUT 60)
+  set_tests_properties(region_counter_local_done_order_new_delay_pe4
+    region_counter_local_done_order_new_notice_first_pe4 PROPERTIES
+    PASS_REGULAR_EXPRESSION "done_order_new PASS: 4 PEs; in 0 of" TIMEOUT 60)
+endif()
+
 # A destroy that waits says what for, once, after +region_destroy_report_s.
 foreach(_pes 1 4)
   add_test(NAME region_counter_local_destroy_wait_pe${_pes}

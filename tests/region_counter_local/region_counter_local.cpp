@@ -63,6 +63,31 @@
     destroy_wait  a region's destroy waits for an origin that detaches only
                after a while; with +region_destroy_report_s 0.2 the destroy
                says what it waits for first
+    done_order_old, done_order_new  the destroy_order case with the origin
+               detached, under +region_test_registration_delay d
+               (error-checking builds): each round an origin on another PE
+               attaches a region with no counter, puts and detaches, then
+               tells the owner, which destroys the region on that message.
+               _old tells it right after CmiDetachTarget(a, NULL, NULL), and
+               must see a destroy complete before d ms have passed since the
+               attach (before the registration can have arrived) in at
+               least one round; _new tells it from the detach's done
+               callback, and must see none. With +region_test_notice_first
+               the notice reaches the owner before the registration
+               (balance -1). _new also runs without the delay
+    detach_done_batch  one CmiDetachTargets with a done callback over
+               attachments to regions and counters of PE 0 and PE 1 (a
+               target with both, one with a region only, one with a counter
+               only, and one named twice): done runs once, after both owners
+               applied their notices (each owner's pending destroys have
+               completed when the message done sends reaches it)
+    detach_done_ended  a done callback on an attachment whose owner ended it
+               (CMI_DESTROY_DETACH_ALL) runs without waiting; an attach to a
+               destroyed region detached at once with a callback: the owner
+               drops the notice and still answers it
+    detach_done_shared  the PEs other than PE 0 share one registration;
+               PE 1 detaches with a done callback, which must wait until the
+               last PE has detached, and runs once
   These must abort (the CTest entry matches the library's message):
     rearm_early  a re-arm before the round's action started (every build)
     stale        a signal through a target whose counter was destroyed: the
@@ -102,12 +127,14 @@
 
 static const char *g_mode = "";
 static bool g_randomized = false; // +randomized_msgq
+static int g_regDelayMs = 0;      // +region_test_registration_delay
+static bool g_noticeFirst = false; // +region_test_notice_first
 static const int kRounds = 300;
 static const int kPiece = 256;
 
 enum Op {
   OP_ATTACH, OP_DETACH, OP_SIGNAL, OP_PUT, OP_ACK, OP_STEP, OP_SETUP, OP_GO,
-  OP_END
+  OP_END, OP_DETACH_DONE, OP_CHECK
 };
 
 struct Ctl {
@@ -120,7 +147,8 @@ struct Ctl {
   int ack;    // nonzero: answer PE 0 with OP_ACK
   int from;
   int tag;    // OP_ACK: what is acknowledged
-  CmiTarget t, t2;
+  double time; // done_order: when the origin attached (CmiWallTimer)
+  CmiTarget t, t2, t3;
 };
 
 CpvDeclare(int, ctlIdx);
@@ -1608,6 +1636,304 @@ void start() {
 }
 } // namespace destroyWait
 
+// ------------------------------------------- done_order_old, done_order_new
+namespace doneOrder {
+const int kIters = 20;
+bool useCallback;
+CmiRegion r;
+int iter, early;
+double originAttachedAt; // on the origin
+void tellOwner() {
+  Ctl *m = newCtl(OP_ACK);
+  m->tag = OP_GO;
+  m->time = originAttachedAt;
+  send(0, m);
+}
+void detached(void *) { tellOwner(); }
+void onCtl(Ctl *m) {
+  if (m->op != OP_GO) return;
+  originAttachedAt = CmiWallTimer(); // before the registration is queued
+  CmiAttachment a = CmiAttachTarget(&m->t);
+  unsigned char *b = buf(8);
+  memset(b, 1, 8);
+  ok(CmiPut(a, 0, b, 8, nullptr, nullptr, nullptr), "CmiPut");
+  if (useCallback) {
+    CmiDetachTarget(a, detached, nullptr);
+  } else {
+    CmiDetachTarget(a, nullptr, nullptr);
+    tellOwner();
+  }
+}
+void start();
+double attachedAt; // on the owner: the origin's attach time
+void destroyed(void *) {
+  // the registration was queued after attachedAt, and waits g_regDelayMs
+  // before it is sent, so a destroy that completes earlier did not wait
+  // for it
+  if (CmiWallTimer() < attachedAt + g_regDelayMs * 1e-3) early++;
+  if (++iter < kIters) {
+    start();
+    return;
+  }
+  if (useCallback && early != 0)
+    fail("in %d of %d rounds the destroy completed before the origin's "
+         "registration was sent, although the origin said done from its "
+         "detach callback", early, kIters);
+  if (!useCallback && early == 0)
+    fail("no destroy completed before the registration was sent: this case "
+         "cannot show the order it is meant to show");
+  char what[200];
+  snprintf(what, sizeof(what),
+           "in %d of %d rounds the destroy completed before the origin's "
+           "registration was sent (%s; registrations held %d ms%s)", early,
+           kIters, useCallback ? "done sent from the detach callback"
+                               : "done sent right after the detach",
+           g_regDelayMs, g_noticeFirst ? ", notices first" : "");
+  pass(what);
+}
+void onAck(Ctl *m) {
+  if (m->tag != OP_GO) return;
+  attachedAt = m->time;
+  CmiRegionDestroy(r, 0, destroyed, nullptr);
+}
+void start() {
+  g_onCtl = onCtl;
+  g_onAck = onAck;
+  if (npes() < 2) fail("needs two PEs or more");
+  CmiRegionAlloc(64, CMI_MEM_HOST, 0, 0, &r);
+  CmiTarget t = CmiTargetMake(r, CMI_PIECE_ALL, nullptr);
+  sendOp(npes() - 1, OP_GO, 0, &t, 0);
+}
+void startOld() {
+  if (g_regDelayMs <= 0)
+    fail("needs +region_test_registration_delay (error-checking builds)");
+  useCallback = false;
+  start();
+}
+void startNew() {
+  useCallback = true;
+  start();
+}
+} // namespace doneOrder
+
+// ------------------------------------------------------ detach_done_batch
+// PE 0 owns region rA and counter cA (target tA has both); PE 1 owns region
+// rB (target tB, no counter) and counter cB (target tC, counter only). The
+// origin, the last PE, attaches tA, tB, tC and tA again (one registration),
+// contributes through each, and later detaches all four in one
+// CmiDetachTargets with a done callback. Each owner destroys its objects
+// before that, once their registrations have arrived, so the destroys
+// complete as the notices are applied, and queue their done messages
+// before the replies go out.
+namespace doneBatch {
+CmiRegion rA, rB;
+CmiCounter cA, cB;
+CmiTarget tA;
+CmiAttachment atts[4]; // on the origin
+// on owner PE 0 and 1: its region's and its counter's destroy completed
+bool destroyed[2][2];
+std::atomic<int> callbacks{0};
+int ends, checks;
+int origin() { return npes() - 1; }
+void ownerDone(void *which) { destroyed[CmiMyPe()][(intptr_t)which] = true; }
+void detached(void *) {
+  if (++callbacks != 1)
+    fail("the batch's done callback ran %d times", callbacks.load());
+  sendOp(0, OP_CHECK, 0, nullptr, 0);
+  sendOp(1, OP_CHECK, 0, nullptr, 0);
+}
+void finish(void *, double) {
+  if (callbacks.load() != 1)
+    fail("the batch's done callback ran %d times", callbacks.load());
+  pass("one done callback for a batch over two owner PEs, after both "
+       "applied their notices");
+}
+void onCtl(Ctl *m) {
+  if (m->op == OP_SETUP) { // PE 1
+    CmiRegionAlloc(64, CMI_MEM_HOST, 0, 0, &rB);
+    cB = CmiCounterCreate(1, CmiCounterActionNone(), 0);
+    Ctl *a = newCtl(OP_ACK);
+    a->tag = OP_SETUP;
+    a->t = CmiTargetMake(rB, CMI_PIECE_ALL, nullptr);
+    a->t2 = CmiTargetMake(nullptr, CMI_PIECE_ALL, cB);
+    send(0, a);
+  } else if (m->op == OP_GO) { // the origin
+    CmiTarget ts[4] = {m->t, m->t2, m->t3, m->t};
+    if (CmiAttachTargets(ts, 4, atts) != 4) fail("CmiAttachTargets");
+    unsigned char *b = buf(8);
+    memset(b, 2, 8);
+    ok(CmiPut(atts[0], 0, b, 8, nullptr, nullptr, nullptr), "CmiPut"); // cA
+    ok(CmiPut(atts[1], 0, b, 8, nullptr, nullptr, nullptr), "CmiPut");
+    ok(CmiSignal(atts[2]), "CmiSignal"); // cB
+    ack0(OP_GO);
+  } else if (m->op == OP_STEP && m->round == 0) {
+    // on PE 1: its registrations were handed on by PE 0 before this message
+    // was sent; one more pass serves them first (default scheduler)
+    sendOp(CmiMyPe(), OP_STEP, 0, nullptr, 0, 1);
+  } else if (m->op == OP_STEP && m->round == 1) {
+    if (CmiMyPe() == 0) {
+      CmiRegionDestroy(rA, 0, ownerDone, (void *)0);
+      CmiCounterDestroy(cA, 0, ownerDone, (void *)1);
+      sendOp(1, OP_STEP, 0, nullptr, 0, 0);
+    } else {
+      CmiRegionDestroy(rB, 0, ownerDone, (void *)0);
+      CmiCounterDestroy(cB, 0, ownerDone, (void *)1);
+    }
+    sendOp(CmiMyPe(), OP_STEP, 0, nullptr, 0, 2);
+  } else if (m->op == OP_STEP && m->round == 2) {
+    // a destroy that completed at once would have queued its done first
+    if (destroyed[CmiMyPe()][0] || destroyed[CmiMyPe()][1])
+      fail("a destroy on PE %d completed while the origin was attached",
+           CmiMyPe());
+    ack0(OP_END);
+  } else if (m->op == OP_DETACH_DONE) { // the origin
+    CmiDetachTargets(atts, 4, detached, nullptr);
+    for (CmiAttachment a : atts)
+      if (a != nullptr) fail("CmiDetachTargets left a handle");
+  } else if (m->op == OP_CHECK) { // each owner
+    if (!destroyed[CmiMyPe()][0] || !destroyed[CmiMyPe()][1])
+      fail("the origin's done callback ran before PE %d applied its notices "
+           "(region destroyed %d, counter destroyed %d)", CmiMyPe(),
+           (int)destroyed[CmiMyPe()][0], (int)destroyed[CmiMyPe()][1]);
+    ack0(OP_CHECK);
+  }
+}
+void onAck(Ctl *m) {
+  if (m->tag == OP_SETUP) {
+    Ctl *g = newCtl(OP_GO);
+    g->t = tA;
+    g->t2 = m->t;
+    g->t3 = m->t2;
+    send(origin(), g);
+  } else if (m->tag == OP_GO) {
+    // the registrations were queued before this acknowledgement: one more
+    // pass of PE 0 serves them, and hands PE 1's on
+    sendOp(0, OP_STEP, 0, nullptr, 0, 1);
+  } else if (m->tag == OP_END && ++ends == 2) {
+    sendOp(origin(), OP_DETACH_DONE, 0, nullptr, 0);
+  } else if (m->tag == OP_CHECK && ++checks == 2) {
+    CcdCallFnAfter(finish, nullptr, 50.0); // and no second callback
+  }
+}
+void start() {
+  g_onCtl = onCtl;
+  g_onAck = onAck;
+  if (npes() < 3) fail("needs three PEs or more");
+  if (g_randomized) fail("relies on the default scheduler's queue order");
+  CmiRegionAlloc(64, CMI_MEM_HOST, 0, 0, &rA);
+  cA = CmiCounterCreate(1, CmiCounterActionNone(), 0);
+  tA = CmiTargetMake(rA, CMI_PIECE_ALL, cA);
+  sendOp(1, OP_SETUP, 0, nullptr, 0);
+}
+} // namespace doneBatch
+
+// ------------------------------------------------------ detach_done_ended
+namespace doneEnded {
+CmiRegion r1, r2;
+int origin;
+// on the origin
+void ended(void *step) { ack0(OP_DETACH_DONE, (int)(intptr_t)step); }
+void destroyed1(void *) {
+  // the origin's notice has been applied, so the detach request ran there
+  sendOp(origin, OP_DETACH_DONE, 0, nullptr, 0, 1);
+}
+void onCtl(Ctl *m) {
+  if (m->op == OP_STEP) { // PE 0, one pass after the attach ack
+    CmiRegionDestroy(r1, CMI_DESTROY_DETACH_ALL, destroyed1, nullptr);
+  } else if (m->op == OP_DETACH_DONE) {
+    CmiDetachTarget(att(0), ended, (void *)1);
+    att(0) = nullptr;
+  } else if (m->op == OP_GO) {
+    // r2 is destroyed already; the detach request cannot have run yet, so
+    // the notice is built here, and the owner drops it
+    CmiAttachment a = CmiAttachTarget(&m->t);
+    CmiDetachTarget(a, ended, (void *)2);
+  }
+}
+void onAck(Ctl *m) {
+  if (m->tag == OP_ATTACH) {
+    sendOp(0, OP_STEP, 0, nullptr, 0);
+  } else if (m->tag == OP_DETACH_DONE && m->round == 1) {
+    CmiRegionAlloc(64, CMI_MEM_HOST, 0, 0, &r2);
+    CmiTarget t2 = CmiTargetMake(r2, CMI_PIECE_ALL, nullptr);
+    CmiRegionDestroy(r2, 0, nullptr, nullptr); // no one attached: at once
+    sendOp(origin, OP_GO, 0, &t2, 0);
+  } else if (m->tag == OP_DETACH_DONE && m->round == 2) {
+    pass("done callbacks on attachments the owner ended, and on a notice "
+         "the owner dropped");
+  }
+}
+void start() {
+  g_onCtl = onCtl;
+  g_onAck = onAck;
+  origin = npes() - 1;
+  CmiRegionAlloc(64, CMI_MEM_HOST, 0, 0, &r1);
+  CmiTarget t1 = CmiTargetMake(r1, CMI_PIECE_ALL, nullptr);
+  sendOp(origin, OP_ATTACH, 0, &t1, 1);
+}
+} // namespace doneEnded
+
+// ----------------------------------------------------- detach_done_shared
+namespace doneShared {
+CmiRegion r;
+std::atomic<int> callbacks{0};
+std::atomic<bool> lastDetached{false};
+int acks, next;
+void sharedDone(void *) { // on PE 1
+  if (!lastDetached.load())
+    fail("the done callback ran before the last PE of the process detached");
+  callbacks++;
+  ack0(OP_CHECK);
+}
+void destroyed(void *) {
+  pass("a done callback waited for the last PE of the process to detach, "
+       "and ran once");
+}
+void finish(void *, double) {
+  if (callbacks.load() != 1)
+    fail("the done callback ran %d times", callbacks.load());
+  CmiRegionDestroy(r, 0, destroyed, nullptr); // every PE has detached
+}
+void step(void *, double) {
+  if (callbacks.load() != 0)
+    fail("the done callback ran while PE %d was still attached", next);
+  if (next < npes() - 1) {
+    sendOp(next++, OP_DETACH, 0, nullptr, 1);
+  } else {
+    sendOp(next, OP_END, 0, nullptr, 0);
+  }
+}
+void onCtl(Ctl *m) {
+  if (m->op == OP_DETACH_DONE) {
+    CmiDetachTarget(att(0), sharedDone, nullptr);
+    att(0) = nullptr;
+    ack0(OP_DETACH_DONE);
+  } else if (m->op == OP_END) { // the last PE
+    lastDetached = true;
+    CmiDetachTarget(att(0), nullptr, nullptr);
+    att(0) = nullptr;
+  }
+}
+void onAck(Ctl *m) {
+  if (m->tag == OP_ATTACH && ++acks == npes() - 1) {
+    sendOp(1, OP_DETACH_DONE, 0, nullptr, 0);
+  } else if (m->tag == OP_DETACH_DONE || m->tag == OP_DETACH) {
+    CcdCallFnAfter(step, nullptr, 20.0);
+  } else if (m->tag == OP_CHECK) {
+    CcdCallFnAfter(finish, nullptr, 50.0);
+  }
+}
+void start() {
+  g_onCtl = onCtl;
+  g_onAck = onAck;
+  if (npes() < 3) fail("needs three PEs or more");
+  next = 2;
+  CmiRegionAlloc(64, CMI_MEM_HOST, 0, 0, &r);
+  CmiTarget t = CmiTargetMake(r, CMI_PIECE_ALL, nullptr);
+  for (int pe = 1; pe < npes(); pe++) sendOp(pe, OP_ATTACH, 0, &t, 1);
+}
+} // namespace doneShared
+
 static void autoFiredHandler(void *vm) {
   if (strncmp(g_mode, "race", 4) == 0) race::firedHandler(vm);
   else autoHandler::fired(vm);
@@ -1818,6 +2144,11 @@ static const Case kCases[] = {
     {"auto_handler", autoHandler::start},
     {"destroy_wait", destroyWait::start},
     {"destroy_order", destroyOrder::start},
+    {"done_order_old", doneOrder::startOld},
+    {"done_order_new", doneOrder::startNew},
+    {"detach_done_batch", doneBatch::start},
+    {"detach_done_ended", doneEnded::start},
+    {"detach_done_shared", doneShared::start},
     {"rearm_early", aborts::rearmEarly},
     {"round_skip", aborts::roundSkip},
     {"stale", aborts::stale},       {"detached", aborts::detached},
@@ -1832,8 +2163,12 @@ static const Case kCases[] = {
 };
 
 int main(int argc, char **argv) {
-  for (int i = 1; i < argc; i++)
+  for (int i = 1; i < argc; i++) {
     if (strcmp(argv[i], "+randomized_msgq") == 0) g_randomized = true;
+    if (strcmp(argv[i], "+region_test_registration_delay") == 0 && i + 1 < argc)
+      g_regDelayMs = atoi(argv[i + 1]);
+    if (strcmp(argv[i], "+region_test_notice_first") == 0) g_noticeFirst = true;
+  }
   for (int i = 1; i < argc && g_start == nullptr; i++)
     for (const Case &c : kCases)
       if (strcmp(argv[i], c.name) == 0) {
