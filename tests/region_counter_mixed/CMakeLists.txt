@@ -38,11 +38,13 @@ set_tests_properties(region_counter_mixed_detach_stress_2proc
 # The teardown with detach callbacks, with each registration held 50 ms
 # (error-checking builds): the origins' puts land before their
 # registrations, and their notices follow the registrations, or, with
-# +region_test_notice_first, arrive before them.
+# +region_test_notice_first, arrive before them. The first also delays each
+# completion, so that more notices wait for puts in flight.
 if(RECONVERSE_REGION_CHECKS)
   add_test(NAME region_counter_mixed_detach_done_delay_2proc
     COMMAND ${RECONVERSE_TEST_LAUNCHER} -n 2 $<TARGET_FILE:region_counter_mixed>
-            detach_done +pe 4 +region_test_registration_delay 50)
+            detach_done +pe 4 +region_test_registration_delay 50
+            +region_test_completion_delay 50)
   add_test(NAME region_counter_mixed_detach_done_notice_first_2proc
     COMMAND ${RECONVERSE_TEST_LAUNCHER} -n 2 $<TARGET_FILE:region_counter_mixed>
             detach_done +pe 4 +region_test_registration_delay 50

@@ -763,7 +763,8 @@ void onAck(Ctl *m) {
   // these puts have no round whose firing would show that they landed
   // (CmiRegionDestroy): wait for those messages a while. This wait is a
   // heuristic for this test only; the header's rule says an application
-  // must not destroy a region that took puts without a counter this way.
+  // must not destroy a region that took puts without a counter this way,
+  // but tell the owner from a detach callback (the detach_done case).
   CcdCallFnAfter(destroyAll, nullptr, 200.0);
 }
 void hooks() {
@@ -794,9 +795,11 @@ void start() {
 // ----------------------------------------------------------- detach_done
 // Origin i has two pieces: puts without a counter fill the first, puts
 // through the counter the second. The counter (N = 2^30, an action that
-// fails) never fires; it is destroyed once every origin has said done.
+// fails) never fires; it is destroyed once every origin has said done. The
+// puts are large enough to travel as puts with signal where there are
+// any, so that the detach can find them in flight and its notice wait.
 namespace ddone {
-const int kPuts = 16, kBytes = 1024;
+const int kPuts = 8, kBytes = 16384;
 const int32_t kBig = 1 << 30;
 std::vector<unsigned char> mem;
 std::vector<int> pes;
