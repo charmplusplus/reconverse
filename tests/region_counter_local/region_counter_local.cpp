@@ -81,6 +81,7 @@
                  region with CMI_DESTROY_DETACH_ALL
     detached_handle  a put through a detached attachment after another
                  attach
+    double_detach  the same attachment twice in one CmiDetachTargets
     bad_flags    a flag bit that means nothing yet (CmiCounterCreate)
     alloc_null   CmiRegionAlloc with no place to return the region
   With +randomized_msgq, teardown does not check that a destroy waits for
@@ -1671,6 +1672,16 @@ void detachedHandle() {
   int rc = CmiPut(old, 0, b, sizeof(b), nullptr, nullptr, nullptr);
   fail("a put through a detached attachment returned %d", rc);
 }
+void doubleDetach() {
+  unsigned char mem[64];
+  CmiRegion r = CmiRegionCreate(mem, sizeof(mem), CMI_MEM_HOST, 0, 0);
+  CmiTarget t = CmiTargetMake(r, CMI_PIECE_ALL, nullptr);
+  CmiAttachment pair[2];
+  pair[0] = CmiAttachTarget(&t);
+  pair[1] = pair[0];
+  CmiDetachTargets(pair, 2);
+  fail("the same attachment twice in one CmiDetachTargets was not refused");
+}
 void badFlags() {
   c = CmiCounterCreate(1, CmiCounterActionNone(), 0x100);
   fail("a counter with an unknown flag was not refused");
@@ -1812,6 +1823,7 @@ static const Case kCases[] = {
     {"stale", aborts::stale},       {"detached", aborts::detached},
     {"stale_region", aborts::staleRegion},
     {"detached_handle", aborts::detachedHandle},
+    {"double_detach", aborts::doubleDetach},
     {"bad_flags", aborts::badFlags},
     {"alloc_null", aborts::allocNull},
     {"late_attach", aborts::lateAttach},

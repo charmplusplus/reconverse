@@ -367,11 +367,13 @@ CmiAttachment CmiAttachTarget(const CmiTarget *t) {
 }
 
 void CmiDetachTargets(CmiAttachment *a, int n) {
-  for (int i = 0; i < n; i++) checkAttachment(a[i], "CmiDetachTarget");
   std::map<int, std::vector<Pending>> notices; // by owner process
   std::vector<CmiAttachRec *> unused;
   CmiLock(g_lock);
   for (int i = 0; i < n; i++) {
+    // checked under the lock, where the detached marker is stored: the same
+    // handle twice in one batch, or two PEs detaching it at once, abort
+    checkAttachment(a[i], "CmiDetachTarget");
     CmiAttachRec *rec = a[i]->rec;
     retire(rec, a[i]);
     a[i]->magic.store(kAttachmentDetached, std::memory_order_relaxed);
