@@ -143,6 +143,10 @@ private:
   std::unique_ptr<std::atomic<uint32_t>[]> m_pendingOfRank;
   alignas(CMI_CACHE_LINE_SIZE) std::atomic<size_t> m_nPending{0};
   std::atomic<size_t> m_pendingBytes{0};
+  // Totals since start, written under m_pendingMutex; +lci_send_stats prints
+  // them at exit
+  size_t m_everQueued = 0, m_everQueuedBytes = 0, m_maxQueued = 0;
+  bool m_sendStats = false;
   PostResult postOp(const PendingOp &op);
   void submit(const PendingOp &op);
   void enqueue(const PendingOp &op);

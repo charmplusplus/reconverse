@@ -327,6 +327,8 @@ void CommBackendLCI::init(char **argv) {
                    "attempts to hand LCI a send, with progress in between, "
                    "before it is queued and the PE goes on (default: 4)");
   if (m_postTries < 1) m_postTries = 1;
+  m_sendStats = CmiGetArgFlagDesc(argv, "+lci_send_stats",
+      "at exit, each process that queued sends prints how many");
   m_pendingOfRank.reset(new std::atomic<uint32_t>[lci::get_rank_n()]);
   for (int i = 0; i < lci::get_rank_n(); i++)
     m_pendingOfRank[i].store(0, std::memory_order_relaxed);
@@ -348,6 +350,12 @@ void CommBackendLCI::abortAll(int exit_code, const char *msg) {
 }
 
 void CommBackendLCI::exit() {
+  if (m_sendStats && m_everQueued != 0)
+    CmiPrintf("Reconverse> LCI sends, process %d: %zu operations (%zu bytes) "
+              "waited in a queue, at most %zu at a time; %zu still queued at "
+              "exit\n",
+              lci::get_rank_me(), m_everQueued, m_everQueuedBytes, m_maxQueued,
+              m_nPending.load(std::memory_order_relaxed));
   // Operations still queued (ConverseExit's flushSends gave up, or they were
   // issued after it) are not delivered; give the messages' buffers back.
   for (auto &entry : m_pending)
@@ -549,7 +557,10 @@ void CommBackendLCI::enqueue(const PendingOp &op) {
   q.push_back(op);
   m_pendingOfRank[op.rank].fetch_add(1, std::memory_order_relaxed);
   m_pendingBytes.fetch_add(op.size, std::memory_order_relaxed);
-  m_nPending.fetch_add(1, std::memory_order_relaxed);
+  size_t n = m_nPending.fetch_add(1, std::memory_order_relaxed) + 1;
+  m_everQueued++;
+  m_everQueuedBytes += op.size;
+  if (n > m_maxQueued) m_maxQueued = n;
 }
 
 // Posts queued operations, each rank's oldest first, until LCI refuses; the
