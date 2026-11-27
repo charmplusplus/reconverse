@@ -748,8 +748,10 @@ void onAck(Ctl *m) {
   // The last cycles' registrations and notices are urgent messages sent
   // before the acknowledgements, but no message order is guaranteed, and
   // these puts have no round whose firing would show that they landed
-  // (CmiRegionDestroy): wait for those messages a while.
-  CcdCallFnAfter(destroyAll, nullptr, 20.0);
+  // (CmiRegionDestroy): wait for those messages a while. This wait is a
+  // heuristic for this test only; the header's rule says an application
+  // must not destroy a region that took puts without a counter this way.
+  CcdCallFnAfter(destroyAll, nullptr, 200.0);
 }
 void hooks() {
   g_onAck = onAck;
