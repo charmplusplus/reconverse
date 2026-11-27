@@ -133,7 +133,7 @@ private:
   enum class PostResult { posted, done, retry, locked, capped };
   size_t m_maxEager = 0;
   long m_rdvMax = 0;
-  int m_postTries = 16;  // +lci_post_tries
+  int m_postTries = 4;  // +lci_post_tries
   std::mutex m_pendingMutex;
   std::unordered_map<int, std::deque<PendingOp>> m_pending;  // by rank
   // The ranks with a queue, in the order postPending() tries them next
