@@ -861,13 +861,15 @@ void CmiInitState(int rank) {
   // allocate global entries
 #ifdef ATOMIC_QUEUE_ENABLED
   ConverseQueue<void *> *queue = new ConverseQueue<void *>(thread_queue_per_producer);
+  ConverseQueue<void *> *urgentQueue = new ConverseQueue<void *>(thread_queue_per_producer);
 #else
   ConverseQueue<void *> *queue = new ConverseQueue<void *>();
+  ConverseQueue<void *> *urgentQueue = new ConverseQueue<void *>();
 #endif
   std::vector<CmiHandlerInfo> *handlerTable = new std::vector<CmiHandlerInfo>();
 
   Cmi_queues[Cmi_myrank] = queue;
-  Cmi_urgentQueues[Cmi_myrank] = new ConverseQueue<void *>();
+  Cmi_urgentQueues[Cmi_myrank] = urgentQueue;
   CmiHandlerTable[Cmi_myrank] = handlerTable;
 
   // random
