@@ -64,6 +64,8 @@
                  region with CMI_DESTROY_DETACH_ALL
     detached_handle  a put through a detached attachment after another
                  attach
+    bad_flags    a flag bit that means nothing yet (CmiCounterCreate)
+    alloc_null   CmiRegionAlloc with no place to return the region
   With +randomized_msgq, teardown does not check that a destroy waits for
   origins it may not have heard of yet: that relies on the default
   scheduler serving the urgent queue first.
@@ -1504,6 +1506,14 @@ void detachedHandle() {
   int rc = CmiPut(old, 0, b, sizeof(b), nullptr, nullptr, nullptr);
   fail("a put through a detached attachment returned %d", rc);
 }
+void badFlags() {
+  c = CmiCounterCreate(1, CmiCounterActionNone(), 0x100);
+  fail("a counter with an unknown flag was not refused");
+}
+void allocNull() {
+  void *p = CmiRegionAlloc(64, CMI_MEM_HOST, 0, 0, nullptr);
+  fail("CmiRegionAlloc with out NULL returned %p", p);
+}
 // With CMI_DESTROY_DETACH_ALL the owner's detach request reaches this
 // process before the done callback (the urgent queue first), and every
 // build refuses the attachment itself.
@@ -1633,6 +1643,8 @@ static const Case kCases[] = {
     {"stale", aborts::stale},       {"detached", aborts::detached},
     {"stale_region", aborts::staleRegion},
     {"detached_handle", aborts::detachedHandle},
+    {"bad_flags", aborts::badFlags},
+    {"alloc_null", aborts::allocNull},
     {"late_attach", aborts::lateAttach},
     {"detach_all_put", aborts::detachAllPut},
     {"wrong_pe", aborts::wrongPe},  {"table_limit", aborts::tableLimit},

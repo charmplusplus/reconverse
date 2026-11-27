@@ -51,6 +51,10 @@ foreach(_pes 1 4)
     "CmiPut: region slot [0-9]+ \\(generation [0-9]+\\) of PE 0 was destroyed; this target is stale")
   region_counter_abort_test(detached_handle ${_pes}
     "CmiPut: the attachment was detached already")
+  region_counter_abort_test(bad_flags ${_pes}
+    "CmiCounterCreate: unknown flags 0x100")
+  region_counter_abort_test(alloc_null ${_pes}
+    "CmiRegionAlloc: out is NULL")
   region_counter_abort_test(table_limit ${_pes}
     "already has 3 counters, the limit" +counter_table 3)
   region_counter_abort_test(detached ${_pes}

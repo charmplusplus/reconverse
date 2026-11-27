@@ -68,6 +68,20 @@ void alignedFree(void *p) {
 #endif
 }
 
+// Flag bits and device numbers not defined yet are refused, so that they
+// can be given a meaning later without changing what a program does.
+void checkFlags(int flags, int known, const char *call) {
+  if (flags & ~known)
+    CmiAbort("%s: unknown flags 0x%x\n", call, (unsigned)(flags & ~known));
+}
+
+void checkHostMemory(CmiMemKind kind, int devId, const char *call) {
+  if (kind != CMI_MEM_HOST)
+    CmiAbort("%s: device regions are not implemented yet\n", call);
+  if (devId != 0)
+    CmiAbort("%s: device %d given for host memory; pass 0\n", call, devId);
+}
+
 void checkOwner(int ownerPe, const char *call, const char *what) {
   if (ownerPe != CmiMyPe())
     CmiAbort("%s: the %s belongs to PE %d; call this on that PE, not on PE %d\n",
@@ -785,6 +799,8 @@ void CmiRegionSetQdHook(CmiRegionQdFn fn) {
 // Counters (design 3.2, 4.2)
 
 CmiCounter CmiCounterCreate(int32_t n, CmiCounterAction action, int flags) {
+  checkFlags(flags, CMI_COUNTER_AUTO_REARM | CMI_COUNTER_CHECK_ROUNDS,
+             "CmiCounterCreate");
   if (n < 1)
     CmiAbort("CmiCounterCreate: N is %d; a round needs at least one "
              "contribution\n", (int)n);
@@ -899,6 +915,7 @@ int32_t CmiCounterValue(CmiCounter c) {
 
 void CmiCounterDestroy(CmiCounter c, int flags, CmiDoneFn done, void *arg) {
   checkOwner(c->ownerPe, "CmiCounterDestroy", "counter");
+  checkFlags(flags, CMI_DESTROY_DETACH_ALL, "CmiCounterDestroy");
   if (c->state != ObjState::Live)
     CmiAbort("CmiCounterDestroy: counter %u of PE %d is already being "
              "destroyed\n", c->index, c->ownerPe);
@@ -915,10 +932,8 @@ void CmiCounterDestroy(CmiCounter c, int flags, CmiDoneFn done, void *arg) {
 
 CmiRegion CmiRegionCreate(void *base, size_t bytes, CmiMemKind kind, int devId,
                           int flags) {
-  (void)devId;
-  (void)flags;
-  if (kind != CMI_MEM_HOST)
-    CmiAbort("CmiRegionCreate: device regions are not implemented yet\n");
+  checkHostMemory(kind, devId, "CmiRegionCreate");
+  checkFlags(flags, 0, "CmiRegionCreate");
   if (base == nullptr || bytes == 0)
     CmiAbort("CmiRegionCreate: a region needs memory (base %p, %zu bytes)\n",
              base, bytes);
@@ -967,19 +982,23 @@ CmiRegion CmiRegionCreate(void *base, size_t bytes, CmiMemKind kind, int devId,
 
 void *CmiRegionAlloc(size_t bytes, CmiMemKind kind, int devId, int flags,
                      CmiRegion *out) {
-  if (kind != CMI_MEM_HOST)
-    CmiAbort("CmiRegionAlloc: device regions are not implemented yet\n");
+  checkHostMemory(kind, devId, "CmiRegionAlloc");
+  checkFlags(flags, 0, "CmiRegionAlloc");
+  if (out == nullptr)
+    CmiAbort("CmiRegionAlloc: out is NULL, so the region would have no "
+             "handle to destroy it with\n");
   if (bytes == 0) CmiAbort("CmiRegionAlloc: a region of 0 bytes\n");
   void *base = alignedAlloc(CMI_CACHE_LINE_SIZE, bytes, "CmiRegionAlloc");
   CmiRegion r = CmiRegionCreate(base, bytes, kind, devId, flags);
   r->runtimeAllocated = true;
-  if (out != nullptr) *out = r;
+  *out = r;
   return base;
 }
 
 int CmiRegionAddPiece(CmiRegion r, size_t offset, size_t bytes,
                       const CmiLayout *layout, int flags) {
   checkOwner(r->ownerPe, "CmiRegionAddPiece", "region");
+  checkFlags(flags, CMI_PIECE_VARSIZE, "CmiRegionAddPiece");
   if (r->state != ObjState::Live)
     CmiAbort("CmiRegionAddPiece: the region is being destroyed\n");
   if (layout != nullptr)
@@ -1004,6 +1023,7 @@ size_t CmiRegionPieceLength(CmiRegion r, int piece) {
 
 void CmiRegionDestroy(CmiRegion r, int flags, CmiDoneFn done, void *arg) {
   checkOwner(r->ownerPe, "CmiRegionDestroy", "region");
+  checkFlags(flags, CMI_DESTROY_DETACH_ALL, "CmiRegionDestroy");
   if (r->state != ObjState::Live)
     CmiAbort("CmiRegionDestroy: the region is already being destroyed\n");
   r->state = ObjState::Destroying;
