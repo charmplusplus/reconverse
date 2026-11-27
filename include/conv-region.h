@@ -21,11 +21,15 @@
   message: it lands whenever it arrives, whatever the owner is doing.
 
   Checks. Every build aborts on a put, get or signal through a detached
-  attachment, through one the owner ended, or through a target whose region
-  or counter was destroyed (within the owner's process; from another
-  process, the owner catches a transfer that names a destroyed counter or
-  region where it lands, in most cases but not all), on a re-arm before the
-  round's action has started, and on an owner's call made on another PE.
+  attachment, through one the owner ended with CMI_DESTROY_DETACH_ALL, or
+  through a target whose region or counter was destroyed; on a re-arm
+  before the round's action has started; and on an owner's call made on
+  another PE. A transfer to another process through an attachment the
+  owner ended either aborts or is waited for, never neither; one that names
+  a destroyed counter or region is caught where it lands, in most cases but
+  not all. Within the owner's process these are checks made before the
+  copy: a destroy that completes during the call is not caught, so origins
+  there must have stopped before the owner destroys.
   Builds with error checking (the CMake option RECONVERSE_ERROR_CHECKING, on
   by default where CMK_OPTIMIZE is 0) also abort on a contribution that
   arrives after its round fired and before the re-arm, and, for
@@ -125,7 +129,11 @@ typedef struct CmiLayout CmiLayout;
 #define CMI_COUNTER_CHECK_ROUNDS 0x2
 /* CmiRegionDestroy/CmiCounterDestroy flags: ask every attached process to
    detach, rather than wait for each to call CmiDetachTarget. An origin's put,
-   get or signal through an attachment the owner ended this way aborts. */
+   get or signal through an attachment the owner ended this way aborts; one
+   to another process that was issued before the request arrived is waited
+   for. Origins in the owner's process must have stopped before the
+   destroy: a transfer of theirs under way when the request is handled is
+   neither waited for nor caught. */
 #define CMI_DESTROY_DETACH_ALL 0x1
 
 /* What CmiPut, CmiGet and CmiSignal return. */
@@ -235,8 +243,12 @@ size_t CmiRegionPieceLength(CmiRegion r, int piece);
    fired: messages are not ordered, so that message can overtake the
    origin's registration, the destroy then completes without waiting for
    that origin, and its puts land in freed memory. Puts without a counter
-   have no firing to wait for; give them a counter if the region may be
-   destroyed while an origin could still be putting.
+   have no firing to wait for, and neither side can tell when one has
+   landed, so the current calls give no safe point to destroy a region
+   that took them: give them a counter unless the region lives until the
+   end of the run. A get reads the region until it completes: destroy only
+   after every origin's gets have completed (their local counter has
+   fired), not just been issued.
    If the region's counter also serves another region still in use, or a
    target with no region, call this only after the counter has fired the last
    round that a put into this region counted toward (the shared-counter

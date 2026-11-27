@@ -424,8 +424,12 @@ Rules that the example follows:
   toward. A destroy called on an application message alone can complete
   before an origin's registration arrives (messages are not ordered), so
   puts without a counter, or a counter destroyed before its last round
-  fired, are not safe that way. A counter given as `local` must outlive the
-  transfers that decrement it.
+  fired, are not safe that way. A put without a counter cannot be torn down
+  safely with the current calls, since no one can tell when it has landed:
+  give it a counter unless the region lives until the end of the run. A
+  get reads the region until it completes, so the owner destroys only after
+  every origin's gets have completed, not just been issued. A counter given
+  as `local` must outlive the transfers that decrement it.
 - **Check the result** of `CmiPut`, `CmiGet`, `CmiSignal` and
   `CmiAttachTargets` (they are declared warn-unused-result): an error code
   means nothing was transferred or counted.
@@ -435,7 +439,11 @@ Rules that the example follows:
 Every build aborts on a put, get or signal through a detached attachment or
 one whose owner ended it, on an in-process put or get through a target whose
 region or counter was destroyed, and on a re-arm before the round's action
-has started. The CMake option **`RECONVERSE_ERROR_CHECKING`** (`AUTO`, the
+has started. To another process the refusal is exact: a transfer through an
+attachment the owner ended either aborts or is waited for. Within the
+owner's process it is a check made before the copy, which a destroy that
+completes during the call can miss, so origins there stop before the owner
+destroys, `CMI_DESTROY_DETACH_ALL` or not. The CMake option **`RECONVERSE_ERROR_CHECKING`** (`AUTO`, the
 default, is on in builds where `CMK_OPTIMIZE` is 0, decided again at every
 configure; `ON` or `OFF` overrides it) adds the checks that cost something on
 every contribution: a contribution that arrives after its round fired and
