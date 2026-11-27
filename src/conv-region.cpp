@@ -3,6 +3,8 @@
 // charm's doc/persistent-family-design.md.
 
 #include <algorithm>
+#include <climits>
+#include <cstdint>
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
@@ -703,16 +705,17 @@ void CmiRegionNodeInit(char **argv) {
              comm_backend::getRMR(comm_backend::MR_NULL, nullptr, 0),
              CMI_TARGET_RKEY_BYTES);
   // Where the backend emulates the put with signal (the write, its delivery
-  // completion, then a message), a put that fits one eager message is
-  // quicker as that message.
-  int messageMax = comm_backend::isPutSignalNative()
-                       ? 0
-                       : (int)comm_backend::getMaxEagerBytes();
+  // completion, then a message), a put whose message, header included, fits
+  // one eager send is quicker as that message.
+  size_t eager = comm_backend::getMaxEagerBytes();
+  int messageMax = 0;
+  if (!comm_backend::isPutSignalNative() && eager > sizeof(PutDataMsg))
+    messageMax = (int)std::min<size_t>(eager - sizeof(PutDataMsg), INT_MAX);
   CmiGetArgIntDesc(argv, "+put_message_max_bytes", &messageMax,
                    "between processes, a CmiPut of at most this many bytes "
                    "travels as one message with its signal (default 0 where "
                    "the put with signal is one network operation, else the "
-                   "backend's eager limit)");
+                   "most that fits one eager message with its header)");
   if (messageMax < 0) messageMax = 0;
   g_putMessageMax = (size_t)messageMax;
   g_verbose = CmiGetArgFlagDesc(argv, "+region_verbose",
@@ -744,7 +747,10 @@ void CmiRegionPeInit(void) {
   attachPeInit();
 }
 
-size_t CmiRegionPutMessageMaxBytes(void) { return g_putMessageMax; }
+size_t CmiRegionPutMessageMaxBytes(void) {
+  // without a put with signal, every put to another process is a message
+  return g_usePutSignal ? g_putMessageMax : SIZE_MAX;
+}
 
 void CmiRegionSetQdHook(CmiRegionQdFn fn) {
   g_qdHook.store(fn, std::memory_order_release);
@@ -1149,10 +1155,18 @@ void qdIssued(const CmiTarget &t, bool contributes, CmiCounter local) {
 
 void showPath(int path, size_t bytes, const CmiTarget &t) {
   if (!g_verbose || g_pathShown[path].exchange(true)) return;
-  CmiPrintf("Reconverse> regions: a %zu-byte CmiPut to process %d travels %s\n",
-            bytes, t.ownerNode,
-            path == 0 ? "as a put with signal"
-                      : "in one message with its signal");
+  if (path == 0) {
+    CmiPrintf("Reconverse> regions: a %zu-byte CmiPut to process %d travels "
+              "as a put with signal\n", bytes, t.ownerNode);
+    return;
+  }
+  // the comparison the backend makes (issueAm) with the same limit
+  size_t message = sizeof(PutDataMsg) + bytes;
+  CmiPrintf("Reconverse> regions: a %zu-byte CmiPut to process %d travels in "
+            "one message with its signal (%zu bytes, %s)\n", bytes,
+            t.ownerNode, message,
+            message <= comm_backend::getMaxEagerBytes() ? "eager"
+                                                        : "rendezvous");
 }
 
 void putRemote(CmiAttachmentRec *a, CmiAttachRec *rec, size_t offset,

@@ -95,20 +95,22 @@ if(RECONVERSE_ENABLE_COMM_LCI2)
     TIMEOUT 120
     PASS_REGULAR_EXPRESSION "as a put with signal.*mixed PASS"
     FAIL_REGULAR_EXPRESSION "in one message with its signal")
-  # both ways: the first rounds' puts, 8 to 4096 bytes, fit LCI's eager
-  # limit (8116 bytes at the default 8 KiB packet); the sixth's 8200 do not
+  # both ways: the first rounds' puts, 8 to 4096 bytes, fit one eager
+  # message (LCI's 8116 bytes at the default 8 KiB packet, less the 72-byte
+  # header); the sixth's 8200 do not
   set_tests_properties(region_counter_mixed_emulated PROPERTIES TIMEOUT 120
     PASS_REGULAR_EXPRESSION
     "a 8-byte CmiPut to process 0 travels in one message with its signal.*a 8200-byte CmiPut to process 0 travels as a put with signal.*mixed PASS")
-  # At the default threshold, emulated: a put of exactly the limit goes in a
-  # message, one of a byte more as a put with signal.
+  # At the default threshold, emulated: a put of exactly the limit goes in
+  # one eager message (header included), one of a byte more as a put with
+  # signal.
   add_test(NAME region_counter_mixed_threshold
     COMMAND ${RECONVERSE_TEST_LAUNCHER} -n 2 $<TARGET_FILE:region_counter_mixed>
             threshold +pe 4 +lci_put_signal_emulate +region_verbose rounds=200)
   set_tests_properties(region_counter_mixed_threshold PROPERTIES TIMEOUT 120
     PASS_REGULAR_EXPRESSION
-    "puts of ([0-9]+) and [0-9]+ bytes.*CmiPut to process 0 travels in one message with its signal.*CmiPut to process 0 travels as a put with signal.*threshold PASS"
-    FAIL_REGULAR_EXPRESSION "a 0-byte CmiPut")
+    "puts of ([0-9]+) and [0-9]+ bytes.*CmiPut to process 0 travels in one message with its signal \\([0-9]+ bytes, eager\\).*CmiPut to process 0 travels as a put with signal.*threshold PASS"
+    FAIL_REGULAR_EXPRESSION "a 0-byte CmiPut|rendezvous")
 endif()
 
 # Readiness errors that only the owner's process can see (design 11): the
