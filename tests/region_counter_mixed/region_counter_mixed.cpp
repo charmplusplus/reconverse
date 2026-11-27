@@ -40,10 +40,22 @@
               into a counter with no action: its process counts 8 created
               and none processed before they land, and the owner's process
               counts them processed where they land
-  nocounter and reuse destroy on the origins' acknowledgements, which is
-  safe only if each origin's registration, sent before its first put, has
-  arrived by then (CmiRegionDestroy's rule): they test the destroy's
-  accounting, not that rule.
+    detach_done  the teardown that CmiRegionDestroy's rule gives for puts
+              without a counter and for a counter destroyed before its last
+              round fired: the origins (the PEs of the other processes, or
+              every PE of a single process) put without a counter, put
+              through a counter that never fires and signal it through a
+              counter-only target, then detach with done callbacks (one
+              CmiDetachTargets, one CmiDetachTarget) and tell the owner from
+              the callbacks. The owner destroys the region and the counter
+              on the last message; the region's destroy checks every byte,
+              and both destroys must complete. Also run with
+              +region_test_registration_delay (error-checking builds)
+  nocounter and reuse destroy on the origins' acknowledgements sent right
+  after their detaches, which is safe only if each origin's registration,
+  sent before its first put, has arrived by then (CmiRegionDestroy's rule):
+  they test the destroy's accounting, not that rule. detach_done is the
+  safe form.
   Every case that passes first checks quiescence detection's counts: each
   process installs a QD hook, and the owner adds up created and processed
   over the processes, which must balance once the case is done.
@@ -81,7 +93,7 @@ enum Op { OP_ATTACH, OP_DETACH, OP_SIGNAL, OP_ACK, OP_GO, OP_SETUP, OP_END,
 struct Ctl {
   char core[CmiMsgHeaderSizeBytes];
   int op, slot, round, ack, from, tag, arg;
-  CmiTarget t, t2;
+  CmiTarget t, t2, t3;
   CmiAttachment h[2]; // OP_HANDOFF: attachments for this PE to detach
   long long created, processed; // OP_QD's answer: this process's counts
 };
@@ -97,6 +109,7 @@ struct PeData {
   unsigned char *mem = nullptr;
   CmiTarget t, t2; // detach_stress
   long gets = 0;
+  int detachDones = 0; // detach_done
 };
 CpvDeclare(PeData *, pd);
 
@@ -778,6 +791,94 @@ void start() {
 }
 } // namespace dstress
 
+// ----------------------------------------------------------- detach_done
+// Origin i has two pieces: puts without a counter fill the first, puts
+// through the counter the second. The counter (N = 2^30, an action that
+// fails) never fires; it is destroyed once every origin has said done.
+namespace ddone {
+const int kPuts = 16, kBytes = 1024;
+const int32_t kBig = 1 << 30;
+std::vector<unsigned char> mem;
+std::vector<int> pes;
+CmiRegion r;
+CmiCounter c;
+int acks, dones;
+size_t pieceBytes() { return (size_t)kPuts * kBytes; }
+void never(void *, CmiCounter) { fail("the counter fired"); }
+void destroyed(void *) {
+  if (++dones < 2) return;
+  for (size_t i = 0; i < pes.size(); i++)
+    for (int k = 0; k < kPuts; k++) {
+      const unsigned char *p = mem.data() + 2 * i * pieceBytes();
+      expect(p + (size_t)k * kBytes, k, (int)i, 0, kBytes,
+             "a put without a counter, after the destroy");
+      expect(p + pieceBytes() + (size_t)k * kBytes, kPuts + k, (int)i, 0,
+             kBytes, "a put through the counter, after the destroy");
+    }
+  pass("origins said done from their detach callbacks; the destroys waited "
+       "for every put, with and without a counter");
+}
+void originDetached(void *) {
+  if (++CpvAccess(pd)->detachDones == 2) ack0(OP_END);
+}
+void onCtl(Ctl *m) {
+  if (m->op != OP_GO) return;
+  // m->t: the first piece, no counter; m->t2: the second piece, with the
+  // counter; m->t3: the counter alone
+  CmiAttachment aU = CmiAttachTarget(&m->t), aC = CmiAttachTarget(&m->t2),
+                aS = CmiAttachTarget(&m->t3);
+  // the sources stay untouched: a put with no local counter may read its
+  // source until its local completion
+  unsigned char *b = buf(2 * pieceBytes());
+  for (int k = 0; k < kPuts; k++) {
+    unsigned char *u = b + (size_t)k * kBytes;
+    unsigned char *w = b + pieceBytes() + (size_t)k * kBytes;
+    fill(u, k, m->slot, 0, kBytes);
+    fill(w, kPuts + k, m->slot, 0, kBytes);
+    int rc = CmiPut(aU, (size_t)k * kBytes, u, kBytes, nullptr, nullptr, nullptr);
+    if (rc == CMI_REGION_OK)
+      rc = CmiPut(aC, (size_t)k * kBytes, w, kBytes, nullptr, nullptr, nullptr);
+    if (rc == CMI_REGION_OK) rc = CmiSignal(aS);
+    if (rc != CMI_REGION_OK) fail("returned %d", rc);
+  }
+  CmiAttachment v[2] = {aU, aC};
+  CmiDetachTargets(v, 2, originDetached, nullptr);
+  CmiDetachTarget(aS, originDetached, nullptr);
+}
+void onAck(Ctl *m) {
+  if (m->tag != OP_END || ++acks < (int)pes.size()) return;
+  // every origin's notices have been applied: the destroys wait for
+  // everything they reported
+  CmiRegionDestroy(r, 0, destroyed, nullptr);
+  CmiCounterDestroy(c, 0, destroyed, nullptr); // before its last round
+}
+void hooks() {
+  g_onAck = onAck;
+  g_onCtl = onCtl;
+}
+void start() {
+  for (int pe = 0; pe < npes(); pe++)
+    if (CmiNumNodes() == 1 ? pe != CmiMyPe() : CmiNodeOf(pe) != CmiMyNode())
+      pes.push_back(pe);
+  if (pes.empty()) fail("needs two PEs or more");
+  mem.assign(2 * pes.size() * pieceBytes(), 0);
+  r = CmiRegionCreate(mem.data(), mem.size(), CMI_MEM_HOST, 0, 0);
+  c = CmiCounterCreate(kBig, CmiCounterActionFn(never, nullptr), 0);
+  CmiTarget ts = CmiTargetMake(nullptr, CMI_PIECE_ALL, c);
+  for (size_t i = 0; i < pes.size(); i++) {
+    int pu = CmiRegionAddPiece(r, 2 * i * pieceBytes(), pieceBytes(), nullptr, 0);
+    int pc = CmiRegionAddPiece(r, (2 * i + 1) * pieceBytes(), pieceBytes(),
+                               nullptr, 0);
+    Ctl *m = newCtl(OP_GO);
+    m->slot = (int)i;
+    m->t = CmiTargetMake(r, pu, nullptr);
+    m->t2 = CmiTargetMake(r, pc, c);
+    m->t3 = ts;
+    send(pes[i], m);
+  }
+}
+} // namespace ddone
+
 // ------------------------------------------------------------- qd_remote
 namespace qdr {
 const int kEach = 4, kBytes = 64;
@@ -972,6 +1073,7 @@ static const Case kCases[] = {
     {"zero", zero::hooks, zero::start},
     {"detach_stress", dstress::hooks, dstress::start},
     {"qd_remote", qdr::hooks, qdr::start},
+    {"detach_done", ddone::hooks, ddone::start},
     {"count_remote", aborts::countHooks, aborts::countRemote},
     {"stale_remote", aborts::staleHooks, aborts::staleRemote},
     {"detach_all_remote", aborts::detachAllHooks, aborts::detachAllRemote},

@@ -2,7 +2,7 @@
 # the other process's PEs (with two processes).
 add_reconverse_executable(region_counter_mixed region_counter_mixed.cpp)
 
-set(_cases mixed signal get nocounter reuse zero)
+set(_cases mixed signal get nocounter reuse zero detach_done)
 set(_tests)
 foreach(_case ${_cases})
   add_test(NAME region_counter_mixed_${_case}_1proc
@@ -34,6 +34,23 @@ add_test(NAME region_counter_mixed_detach_stress_1proc
 set_tests_properties(region_counter_mixed_detach_stress_2proc
   region_counter_mixed_detach_stress_1proc PROPERTIES
   PASS_REGULAR_EXPRESSION "detach_stress PASS" TIMEOUT 120)
+
+# The teardown with detach callbacks, with each registration held 50 ms
+# (error-checking builds): the origins' puts land before their
+# registrations, and their notices follow the registrations, or, with
+# +region_test_notice_first, arrive before them.
+if(RECONVERSE_REGION_CHECKS)
+  add_test(NAME region_counter_mixed_detach_done_delay_2proc
+    COMMAND ${RECONVERSE_TEST_LAUNCHER} -n 2 $<TARGET_FILE:region_counter_mixed>
+            detach_done +pe 4 +region_test_registration_delay 50)
+  add_test(NAME region_counter_mixed_detach_done_notice_first_2proc
+    COMMAND ${RECONVERSE_TEST_LAUNCHER} -n 2 $<TARGET_FILE:region_counter_mixed>
+            detach_done +pe 4 +region_test_registration_delay 50
+            +region_test_notice_first)
+  set_tests_properties(region_counter_mixed_detach_done_delay_2proc
+    region_counter_mixed_detach_done_notice_first_2proc PROPERTIES
+    PASS_REGULAR_EXPRESSION "detach_done PASS" TIMEOUT 120)
+endif()
 
 # QD counts a contribution to another process's counter with no action as
 # created at issue and processed where it lands: through a put with signal
