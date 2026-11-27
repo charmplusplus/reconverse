@@ -146,6 +146,21 @@ if(RECONVERSE_ENABLE_COMM_LCI2)
     FAIL_REGULAR_EXPRESSION "a 0-byte CmiPut|rendezvous")
 endif()
 
+if(RECONVERSE_ENABLE_COMM_LCW)
+  # The LCW backend (+lcw_backend auto: LCW over LCI2 where LCW has it): no
+  # one-sided transfers, so every put and get to another process is a
+  # message, and CmiSignal is a Converse message, since LCW takes one
+  # active-message handler.
+  foreach(_case mixed signal get nocounter qd_remote)
+    add_test(NAME region_counter_mixed_lcw_${_case}
+      COMMAND ${RECONVERSE_TEST_LAUNCHER} -n 2
+              $<TARGET_FILE:region_counter_mixed> ${_case} +pe 4 +backend lcw
+              +lcw_backend auto rounds=200)
+    set_tests_properties(region_counter_mixed_lcw_${_case} PROPERTIES
+      TIMEOUT 120 PASS_REGULAR_EXPRESSION "${_case} PASS")
+  endforeach()
+endif()
+
 # Readiness errors that only the owner's process can see (design 11): the
 # CTest entries match the abort, since the status is a signal.
 function(region_counter_early_test name pattern)

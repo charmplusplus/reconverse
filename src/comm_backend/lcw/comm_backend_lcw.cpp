@@ -150,11 +150,13 @@ int CommBackendLCW::getMyNodeId() { return lcw::get_rank_me(); }
 
 int CommBackendLCW::getNumNodes() { return lcw::get_rank_n(); }
 
+// One handler only: a message here names none, and remoteCallback calls the
+// first. A later caller gets -1, as where there is no backend, and sends
+// Converse messages instead (CmiSignal does).
 AmHandler CommBackendLCW::registerAmHandler(CompHandler handler) {
-  CmiAssertMsg(g_handlers.empty(),
-               "Only one AM handler is supported in the LCW backend");
+  if (!g_handlers.empty()) return -1;
   g_handlers.push_back(handler);
-  return g_handlers.size() - 1;
+  return 0;
 }
 
 void CommBackendLCW::issueAm(int rank, const void *local_buf, size_t size,

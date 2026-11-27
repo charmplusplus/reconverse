@@ -97,6 +97,7 @@ CpvStaticDeclare(int, regionDoneHandlerIdx);
 CpvStaticDeclare(int, regionPutDataHandlerIdx);
 CpvStaticDeclare(int, regionGetRequestHandlerIdx);
 CpvStaticDeclare(int, regionGetReplyHandlerIdx);
+CpvStaticDeclare(int, regionSignalMsgHandlerIdx);
 
 namespace cmi_region {
 
@@ -656,6 +657,15 @@ void signalAmHandler(comm_backend::Status status) {
   CmiFree(m);
 }
 
+// The same as a Converse message to the owner PE, where the backend takes
+// only one active-message handler (LCW): handled from the owner's scheduler.
+void signalMsgHandler(void *vmsg) {
+  auto *m = static_cast<SignalMsg *>(vmsg);
+  contributeArrived(arrivedLine(m->rank, m->index, &m->gen, "CmiSignal"),
+                    "CmiSignal");
+  CmiFree(m);
+}
+
 // A put carried in a message, where the network has no put with signal, or
 // for a small put where it is emulated. Handled on the owner PE: the copy
 // runs there, not where the network is polled (W7).
@@ -853,6 +863,8 @@ void CmiRegionNodeInit(char **argv) {
   g_verbose = CmiGetArgFlagDesc(argv, "+region_verbose",
                                 "say how a CmiPut to another process travels, "
                                 "the first time each way is used");
+  // -1 where the backend takes no more handlers: CmiSignal then sends a
+  // Converse message
   g_signalAm = comm_backend::registerAmHandler(signalAmHandler);
 #if CMI_REGION_CHECKS
   CmiGetArgIntDesc(argv, "+region_test_completion_delay", &g_completionDelayUs,
@@ -876,6 +888,8 @@ void CmiRegionPeInit(void) {
   CpvAccess(regionGetRequestHandlerIdx) = CmiRegisterHandler(getRequestHandler);
   CpvInitialize(int, regionGetReplyHandlerIdx);
   CpvAccess(regionGetReplyHandlerIdx) = CmiRegisterHandler(getReplyHandler);
+  CpvInitialize(int, regionSignalMsgHandlerIdx);
+  CpvAccess(regionSignalMsgHandlerIdx) = CmiRegisterHandler(signalMsgHandler);
   attachPeInit();
 }
 
@@ -1442,8 +1456,14 @@ int CmiSignal(CmiAttachment a) {
     m->index = tg.counterIndex;
     m->gen = tg.counterGen;
     reinterpret_cast<CmiMessageHeader *>(m)->messageSize = sizeof(SignalMsg);
-    comm_backend::issueAm(CmiNodeToGlobal(tg.ownerNode), m, sizeof(SignalMsg),
-                          MRFIELD(m), CommLocalHandler, g_signalAm, nullptr);
+    if (g_signalAm >= 0) {
+      comm_backend::issueAm(CmiNodeToGlobal(tg.ownerNode), m,
+                            sizeof(SignalMsg), MRFIELD(m), CommLocalHandler,
+                            g_signalAm, nullptr);
+    } else {
+      CmiSetHandler(m, CpvAccess(regionSignalMsgHandlerIdx));
+      CmiSyncSendAndFree(tg.ownerPe, sizeof(SignalMsg), m);
+    }
     operationDone(rec);
     return CMI_REGION_OK;
   }

@@ -173,6 +173,7 @@ the device.
 | `CmiPut` | a put with signal (`comm_backend::issueRputSignal`) into the region's registration, at the piece's displacement plus the offset | the signal's handler finds the counter by (PE, index) and calls `contribute()`; for a target with no counter, it counts the region slot's landed put |
 | `CmiPut`, otherwise | one message carrying the data, sent to the owner PE | its handler, in the scheduler, copies the data into the piece and contributes, or counts the landed put |
 | `CmiSignal` | an active message (`comm_backend::issueAm`) | its handler, at poll time, checks the counter's generation and contributes |
+| `CmiSignal`, where the backend takes one active-message handler (LCW) | a Converse message to the owner PE | its handler, in the scheduler, does the same |
 | `CmiGet` | `comm_backend::issueRget` from the owner's address | nothing; the reader's completion decrements `local` |
 | `CmiGet`, without one-sided support | a request to the owner PE | its handler copies the piece into the reply; the reply's handler copies it into the destination |
 

@@ -74,7 +74,9 @@ int getNumNodes();
  */
 bool isRMACapable();
 /**
- * @brief Register an active message handler. Not thread-safe.
+ * @brief Register an active message handler. Not thread-safe. Returns -1
+ * where there is no backend, or where the backend takes no more handlers
+ * (LCW takes one); the caller then uses Converse messages.
  */
 AmHandler registerAmHandler(CompHandler handler);
 /**
