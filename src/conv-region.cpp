@@ -1032,15 +1032,43 @@ CmiAttachmentRec *checkHandle(CmiAttachment a, const char *call) {
   if (a == nullptr || a->magic != CMI_TARGET_MAGIC)
     CmiAbort("%s: not an attachment from CmiAttachTarget, or one already "
              "detached\n", call);
-#if CMI_REGION_CHECKS
+  return a;
+}
+
+[[noreturn]] void abortDetachedByOwner(const CmiAttachmentRec *a,
+                                       const char *call) {
+  CmiAbort("%s: the owner, PE %d, destroyed this target's %s and detached "
+           "this process. %s\n", call, a->target.ownerPe,
+           (a->target.flags & kTargetHasRegion) ? "region" : "counter",
+           kReadinessAdvice);
+}
+
+// Within the owner's process: a registration the owner ended (its destroy
+// with CMI_DESTROY_DETACH_ALL, or an attach to an object already destroyed)
+// is refused in every build (design 11). A destroy that completes between
+// this check and the copy is the application's error, and is not caught.
+void checkLocalState(CmiAttachmentRec *a, const char *call) {
   if (a->rec->state.load(std::memory_order_acquire) ==
       (int)AttachState::DetachedByOwner)
-    CmiAbort("%s: the owner, PE %d, destroyed this target's %s and detached "
-             "this process. %s\n", call, a->target.ownerPe,
-             (a->target.flags & kTargetHasRegion) ? "region" : "counter",
-             kReadinessAdvice);
-#endif
-  return a;
+    abortDetachedByOwner(a, call);
+}
+
+// To another process: the transfer is counted in flight before it looks at
+// the registration's state, and the owner's detach request sets the state
+// before it looks at the count (detachRequestHandler, oweNotice), all
+// seq_cst. Either the detach sees this transfer and its notice waits for
+// it, or this transfer sees the detach and aborts, in every build, without
+// issuing anything. So no transfer is counted after the notice is sent, and
+// only one completion can see the notice waiting. The caller ends the
+// transfer with operationDone: at its local completion, or right after the
+// send for one that a message carries.
+CmiAttachRec *beginRemote(CmiAttachmentRec *a, const char *call) {
+  CmiAttachRec *rec = a->rec;
+  rec->outstanding.fetch_add(1, std::memory_order_seq_cst);
+  if (rec->state.load(std::memory_order_seq_cst) ==
+      (int)AttachState::DetachedByOwner)
+    abortDetachedByOwner(a, call);
+  return rec;
 }
 
 bool isLocal(const CmiTarget &t) { return t.ownerNode == CmiMyNode(); }
@@ -1097,17 +1125,16 @@ void showPath(int path, size_t bytes, const CmiTarget &t) {
                       : "in one message with its signal");
 }
 
-void putRemote(CmiAttachmentRec *a, size_t offset, const void *src,
-               size_t bytes, CmiCounter local) {
+void putRemote(CmiAttachmentRec *a, CmiAttachRec *rec, size_t offset,
+               const void *src, size_t bytes, CmiCounter local) {
   const CmiTarget &t = a->target;
   if (g_usePutSignal && (t.flags & kTargetHasRkey) && bytes > g_putMessageMax) {
     showPath(0, bytes, t);
-    a->rec->outstanding.fetch_add(1, std::memory_order_relaxed);
     comm_backend::issueRputSignal(
         CmiNodeToGlobal(t.ownerNode), src, bytes, comm_backend::MR_NULL,
         (uintptr_t)(t.pieceDisp + offset), const_cast<uint8_t *>(t.rkey),
         CmiRankOf(t.ownerPe), g_putKinds[t.sigKind], t.sigValue, putLocalDone,
-        new PutCtx{a->rec, local});
+        new PutCtx{rec, local});
     return;
   }
   showPath(1, bytes, t);
@@ -1127,6 +1154,7 @@ void putRemote(CmiAttachmentRec *a, size_t offset, const void *src,
   CmiSetHandler(m, CpvAccess(regionPutDataHandlerIdx));
   CmiSyncSendAndFree(t.ownerPe, size, m);
   if (local != nullptr) contributeLocal(local, "CmiPut");
+  operationDone(rec);
 }
 
 } // namespace
@@ -1141,11 +1169,13 @@ int CmiPut(CmiAttachment t, size_t offset, const void *src, size_t bytes,
     return CMI_REGION_ECAPACITY;
   bool hasCounter = (tg.flags & kTargetHasCounter) != 0;
   if (!isLocal(tg)) {
+    CmiAttachRec *rec = beginRemote(a, "CmiPut");
     counted(a);
     qdIssued(tg, true, local);
-    putRemote(a, offset, src, bytes, local);
+    putRemote(a, rec, offset, src, bytes, local);
     return CMI_REGION_OK;
   }
+  checkLocalState(a, "CmiPut");
   CounterLine *L = hasCounter ? liveLine(a, counted(a), "CmiPut") : nullptr;
   qdIssued(tg, hasCounter, local);
   memcpy((char *)(uintptr_t)tg.pieceAddr + offset, src, bytes);
@@ -1163,16 +1193,17 @@ int CmiGet(void *dst, size_t bytes, const CmiLayout *dstLayout,
   if (offset > tg.pieceBytes || bytes > tg.pieceBytes - offset)
     return CMI_REGION_ECAPACITY;
   if (isLocal(tg)) {
+    checkLocalState(a, "CmiGet");
     memcpy(dst, (const char *)(uintptr_t)tg.pieceAddr + offset, bytes);
     qdIssued(tg, false, local);
     if (local != nullptr) contributeLocal(local, "CmiGet");
     return CMI_REGION_OK;
   }
+  CmiAttachRec *rec = beginRemote(a, "CmiGet");
   // created here, processed at its completion (design 4.8)
   qdCount(1, 0);
   qdIssued(tg, false, local);
-  a->rec->outstanding.fetch_add(1, std::memory_order_relaxed);
-  auto *ctx = new GetCtx{a->rec, local, dst};
+  auto *ctx = new GetCtx{rec, local, dst};
   if (g_useRma && (tg.flags & kTargetHasRkey) && bytes > 0) {
     comm_backend::issueRget(CmiNodeToGlobal(tg.ownerNode), dst, bytes,
                             comm_backend::MR_NULL,
@@ -1197,6 +1228,7 @@ int CmiSignal(CmiAttachment t) {
   const CmiTarget &tg = a->target;
   if (!(tg.flags & kTargetHasCounter)) return CMI_REGION_ENOCOUNTER;
   if (!isLocal(tg)) {
+    CmiAttachRec *rec = beginRemote(a, "CmiSignal");
     counted(a);
     qdIssued(tg, true, nullptr);
     auto *m = static_cast<SignalMsg *>(CmiAlloc(sizeof(SignalMsg)));
@@ -1206,8 +1238,10 @@ int CmiSignal(CmiAttachment t) {
     reinterpret_cast<CmiMessageHeader *>(m)->messageSize = sizeof(SignalMsg);
     comm_backend::issueAm(CmiNodeToGlobal(tg.ownerNode), m, sizeof(SignalMsg),
                           MRFIELD(m), CommLocalHandler, g_signalAm, nullptr);
+    operationDone(rec);
     return CMI_REGION_OK;
   }
+  checkLocalState(a, "CmiSignal");
   CounterLine *L = liveLine(a, counted(a), "CmiSignal");
   qdIssued(tg, true, nullptr);
   contribute(L, 1, "CmiSignal");

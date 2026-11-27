@@ -49,18 +49,20 @@ foreach(_pes 1 4)
   region_counter_abort_test(stale ${_pes} "was destroyed; this target is stale")
   region_counter_abort_test(table_limit ${_pes}
     "already has 3 counters, the limit" +counter_table 3)
+  region_counter_abort_test(detached ${_pes}
+    "destroyed this target's counter and detached this process")
+  region_counter_abort_test(late_attach ${_pes}
+    "destroyed this target's region and detached this process")
   if(RECONVERSE_REGION_CHECKS)
     region_counter_abort_test(early ${_pes}
       "a contribution arrived after the round fired and before the owner re-armed it")
     region_counter_abort_test(round_skip ${_pes}
       "arrived while the owner had armed 1 rounds")
-    region_counter_abort_test(detached ${_pes}
-      "destroyed this target's counter and detached this process")
-    region_counter_abort_test(late_attach ${_pes}
-      "destroyed this target's region and detached this process")
   endif()
 endforeach()
 foreach(_pes 2 4)
   region_counter_abort_test(wrong_pe ${_pes}
     "the counter belongs to PE 0; call this on that PE")
+  region_counter_abort_test(detach_all_put ${_pes}
+    "CmiPut: the owner, PE 0, destroyed this target's region and detached this process")
 endforeach()

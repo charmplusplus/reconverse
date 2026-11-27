@@ -35,6 +35,8 @@
                   (error-checking builds)
     stale_remote  a signal from another process through a target whose
                   counter was destroyed
+    detach_all_remote  an origin in another process keeps putting while the
+                  owner destroys the region with CMI_DESTROY_DETACH_ALL
  ****************************************************************/
 
 #include <atomic>
@@ -696,6 +698,47 @@ void staleRemote() {
   t = CmiTargetMake(nullptr, CMI_PIECE_ALL, c);
   sendOp(remotePe(), OP_SETUP, 0, &t, 0);
 }
+// The last PE puts without pause into a region of PE 0, yielding to its
+// scheduler every 16 puts; PE 0 destroys the region with
+// CMI_DESTROY_DETACH_ALL once the first put has been issued. The origin's
+// first put after the detach request must abort; the puts before it are
+// counted, and the destroy waits for them.
+CmiRegion daRegion;
+void daFailLater(void *, double) {
+  fail("the origin kept putting after the owner ended its attachment");
+}
+void daDone(void *) { CcdCallFnAfter(daFailLater, nullptr, 3000.0); }
+void daPuts() {
+  unsigned char *b = buf(16384);
+  for (int i = 0; i < 16; i++) {
+    int rc = CmiPut(att(0), 0, b, 16384, nullptr, nullptr, nullptr);
+    if (rc != CMI_REGION_OK) fail("CmiPut returned %d", rc);
+  }
+}
+void daOnCtl(Ctl *m) {
+  if (m->op == OP_GO) {
+    attOf(m);
+    daPuts();
+    ack0(OP_GO);
+    sendOp(CmiMyPe(), OP_STEP, 0, nullptr, 0);
+  } else if (m->op == OP_STEP) {
+    daPuts();
+    sendOp(CmiMyPe(), OP_STEP, 0, nullptr, 0);
+  }
+}
+void daOnAck(Ctl *m) {
+  if (m->tag == OP_GO)
+    CmiRegionDestroy(daRegion, CMI_DESTROY_DETACH_ALL, daDone, nullptr);
+}
+void detachAllHooks() {
+  g_onCtl = daOnCtl;
+  g_onAck = daOnAck;
+}
+void detachAllRemote() {
+  CmiRegionAlloc(16384, CMI_MEM_HOST, 0, 0, &daRegion);
+  CmiTarget t = CmiTargetMake(daRegion, CMI_PIECE_ALL, nullptr);
+  sendOp(npes() - 1, OP_GO, 0, &t, 0);
+}
 } // namespace aborts
 
 // ------------------------------------------------------------------ main
@@ -732,6 +775,7 @@ static const Case kCases[] = {
     {"detach_stress", dstress::hooks, dstress::start},
     {"count_remote", aborts::countHooks, aborts::countRemote},
     {"stale_remote", aborts::staleHooks, aborts::staleRemote},
+    {"detach_all_remote", aborts::detachAllHooks, aborts::detachAllRemote},
 };
 static void (*g_hooks)() = nullptr;
 

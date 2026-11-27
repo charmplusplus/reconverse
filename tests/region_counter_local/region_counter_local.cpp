@@ -55,9 +55,11 @@
     round_skip   a second contribution through one attachment in one round
                  (error-checking builds, CMI_COUNTER_CHECK_ROUNDS)
     detached     a signal through an attachment whose owner destroyed the
-                 counter with CMI_DESTROY_DETACH_ALL (error-checking builds)
-    late_attach  an attach to a destroyed region is told to detach
-                 (error-checking builds)
+                 counter with CMI_DESTROY_DETACH_ALL
+    late_attach  an attach to a destroyed region is told to detach, and a
+                 put through it is refused
+    detach_all_put  another PE keeps putting while the owner destroys the
+                 region with CMI_DESTROY_DETACH_ALL
   With +randomized_msgq, teardown does not check that a destroy waits for
   origins it may not have heard of yet: that relies on the default
   scheduler serving the urgent queue first.
@@ -1473,8 +1475,8 @@ void stale() {
   fail("a signal through a destroyed counter's target was not refused");
 }
 // With CMI_DESTROY_DETACH_ALL the owner's detach request reaches this
-// process before the done callback (the urgent queue first), and an
-// error-checking build refuses the attachment itself.
+// process before the done callback (the urgent queue first), and every
+// build refuses the attachment itself.
 void detachedDone(void *) {
   CmiSignal(a);
   fail("a signal through an attachment its owner ended was not refused");
@@ -1486,7 +1488,7 @@ void detached() {
   CmiCounterDestroy(c, CMI_DESTROY_DETACH_ALL, detachedDone, nullptr);
 }
 // An attach to a destroyed region: the owner answers the registration with
-// a detach request, after which an error-checking build refuses the put.
+// a detach request, after which every build refuses the put.
 CmiTarget lateTarget;
 void lateOnCtl(Ctl *m) {
   if (m->op != OP_STEP) return;
@@ -1503,6 +1505,37 @@ void lateAttach() {
   a = CmiAttachTarget(&lateTarget);
   // the registration and the detach request are urgent: served first
   sendOp(0, OP_STEP, 0, nullptr, 0);
+}
+// PE 1 puts without pause into a region of PE 0, which destroys it with
+// CMI_DESTROY_DETACH_ALL once the first put has arrived: once the detach
+// request has run, PE 1's next put must abort, not write into the memory
+// the destroy freed.
+CmiRegion daRegion;
+void daFailLater(void *, double) {
+  fail("the origin kept putting after the owner ended its attachment");
+}
+void daDone(void *) { CcdCallFnAfter(daFailLater, nullptr, 2000.0); }
+void daOnCtl(Ctl *m) {
+  if (m->op != OP_GO) return;
+  CmiAttachment pa = CmiAttachTarget(&m->t);
+  unsigned char b[64] = {0};
+  ack0(OP_GO);
+  for (;;) {
+    int rc = CmiPut(pa, 0, b, sizeof(b), nullptr, nullptr, nullptr);
+    if (rc != CMI_REGION_OK) fail("CmiPut returned %d", rc);
+  }
+}
+void daOnAck(Ctl *m) {
+  if (m->tag == OP_GO)
+    CmiRegionDestroy(daRegion, CMI_DESTROY_DETACH_ALL, daDone, nullptr);
+}
+void detachAllPut() {
+  g_onCtl = daOnCtl;
+  g_onAck = daOnAck;
+  if (npes() < 2) fail("needs two PEs or more");
+  CmiRegionAlloc(64, CMI_MEM_HOST, 0, 0, &daRegion);
+  CmiTarget t = CmiTargetMake(daRegion, CMI_PIECE_ALL, nullptr);
+  sendOp(1, OP_GO, 0, &t, 0);
 }
 void wrongOnCtl(Ctl *m) {
   if (m->op != OP_GO) return;
@@ -1569,6 +1602,7 @@ static const Case kCases[] = {
     {"round_skip", aborts::roundSkip},
     {"stale", aborts::stale},       {"detached", aborts::detached},
     {"late_attach", aborts::lateAttach},
+    {"detach_all_put", aborts::detachAllPut},
     {"wrong_pe", aborts::wrongPe},  {"table_limit", aborts::tableLimit},
 };
 

@@ -133,14 +133,16 @@ rule below.
 (`CMI_REGION_EUNSUPPORTED`) and a put past the piece's end
 (`CMI_REGION_ECAPACITY`), and then, on the calling PE:
 
-1. counts the contribution on the attachment, for its detach notice;
-2. checks the target's counter: its line must be `LIVE` with the target's
+1. checks that the owner has not ended the registration (a load of its
+   state, in every build);
+2. counts the contribution on the attachment, for its detach notice;
+3. checks the target's counter: its line must be `LIVE` with the target's
    generation, in every build (the line is about to be written anyway);
-3. with `CHECK_ROUNDS` in an error-checking build, the round check;
-4. reports a created contribution to the QD hook, if the counter has an
+4. with `CHECK_ROUNDS` in an error-checking build, the round check;
+5. reports a created contribution to the QD hook, if the counter has an
    action, and one more if `local` has one;
-5. copies the source into the piece;
-6. `contribute()` on the target's counter, then on `local`.
+6. copies the source into the piece;
+7. `contribute()` on the target's counter, then on `local`.
 
 The source may be reused when `CmiPut` returns. Memory ordering: the copy
 happens before the acq_rel decrement; each later decrement continues the
@@ -226,11 +228,26 @@ A detach notice carries what the process contributed through the
 registration (design 10.2): per counter, the contributions through every
 attachment (each attachment counts its own), and, when the owner is in
 another process, the puts without a counter. The notice waits for the
-registration's network operations (puts with signal and gets) to complete
-locally. Their count and a pending bit share one atomic: the detach sets
+registration's transfers to another process to complete locally. Their
+count (`outstanding`) and a pending bit share one atomic: the detach sets
 the bit, and the completion that brings the count to zero with the bit set
 is the only one that sees that value, so it alone queues the notice on the
-PE that owes it, and touches the registration no more.
+PE that owes it. It reads that PE and the notice message only after its
+decrement, and only when it sees that value: the detach sets both before
+it sets the bit, and until the notice has been sent the registration is
+not freed. A completion that sees any other value does not touch the
+registration again.
+
+Every transfer to another process is counted: a put with signal or a get
+until its local completion, a put or signal that a message carries until
+just after the send (by then its contribution is in the attachment's count
+that the notice reports). A transfer increments `outstanding` and then
+loads the registration's state; the owner's detach request stores
+`DetachedByOwner` and then sets the pending bit; all four are seq_cst.
+Either the transfer is counted before the detach looks, and the notice
+waits for it, or the transfer sees the state and aborts, in every build,
+without issuing anything. No transfer is therefore counted after its
+notice has been sent, and no completion can queue the notice twice.
 
 ## Destroy
 
@@ -292,8 +309,11 @@ processed: `sumArmed - word - sumStarted`.
 
 In the origin process, a detach request marks the registration
 `DetachedByOwner`, removes it from the table and sends the notice once its
-operations in flight have completed. Attachments that still refer to it
-stay valid memory; in an error-checking build a put through them aborts.
+transfers in flight have completed. Attachments that still refer to it stay
+valid memory, and a put, get or signal through them aborts in every build:
+to another process by the ordering above, within the owner's process by a
+load of the state before the copy (a destroy that completes between that
+load and the copy is the application's error and is not caught).
 
 ## Error checks
 
@@ -311,10 +331,10 @@ configure; `ON` or `OFF` overrides it. It adds:
   owner has armed at least k rounds (`armedRounds`), which catches a later
   round's contribution counted in place of a missing one. It assumes each
   attachment contributes once per round. Across processes there is none: the
-  signal names no origin and no round;
-- a put, get or signal through a registration its owner ended.
+  signal names no origin and no round.
 
-Every build checks the attachment and target (`magic`), the capacity, the
+Every build checks the attachment and target (`magic`), the capacity, a
+put, get or signal through a registration its owner ended (above), the
 counter's generation on an in-process contribution and at the owner of a
 remote signal or message, a signal that names a counter or region that does
 not exist, re-arm legality, and that the owner's calls run on the owner PE.

@@ -195,7 +195,8 @@ bool oweNotice(CmiAttachRec *rec, Pending &p) {
     rec->noticeMsg = m;
   }
   rec->noticeRank = CmiMyRank();
-  uint64_t v = rec->outstanding.fetch_or(kNoticePending, std::memory_order_acq_rel);
+  // seq_cst, against a transfer's count and state check (beginRemote)
+  uint64_t v = rec->outstanding.fetch_or(kNoticePending, std::memory_order_seq_cst);
   if ((v & ~kNoticePending) != 0) return false; // the last completion sends it
   p.entry = rec->entry;
   p.counts = countsOf(rec);
@@ -240,7 +241,8 @@ void detachRequestHandler(void *vmsg) {
   auto it = g_table->find(k);
   if (it != g_table->end()) {
     CmiAttachRec *rec = it->second;
-    rec->state.store((int)AttachState::DetachedByOwner, std::memory_order_release);
+    // seq_cst, against a transfer's count and state check (beginRemote)
+    rec->state.store((int)AttachState::DetachedByOwner, std::memory_order_seq_cst);
     g_table->erase(it);
     rec->inTable = false;
     Pending p;
