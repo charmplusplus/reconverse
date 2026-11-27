@@ -143,10 +143,57 @@ void retire(CmiAttachRec *rec, CmiAttachmentRec *a) {
     }
 }
 
+#if CMI_REGION_CHECKS
+// +region_test_registration_delay: the origin process's registrations wait,
+// in order, each for the delay; a notice sent while one waits goes behind it
+// (unless +region_test_notice_first). Each registration's timer sends what
+// is queued up to it and the notices behind it.
+struct Held {
+  uint64_t seq;
+  int pe, size;
+  AttachMsg *m;
+};
+CmiNodeLock g_heldLock;
+std::deque<Held> *g_held = nullptr;
+uint64_t g_heldSeq = 0;
+
+void releaseHeld(void *arg, double) {
+  uint64_t upTo = (uint64_t)(uintptr_t)arg;
+  CmiLock(g_heldLock); // held across the sends, which keep their order
+  while (!g_held->empty() && g_held->front().seq <= upTo) {
+    Held h = g_held->front();
+    g_held->pop_front();
+    CmiSyncSendAndFreeUrgent(h.pe, h.size, h.m);
+  }
+  CmiUnlock(g_heldLock);
+}
+
+// true if m now waits
+bool holdForTest(AttachOp op, int pe, int size, AttachMsg *m) {
+  int ms = testRegistrationDelayMs();
+  if (ms <= 0) return false;
+  bool held = false;
+  CmiLock(g_heldLock);
+  if (op == AttachOp::Register) {
+    uint64_t seq = ++g_heldSeq;
+    g_held->push_back(Held{seq, pe, size, m});
+    CcdCallFnAfter(releaseHeld, (void *)(uintptr_t)seq, ms);
+    held = true;
+  } else if (!testNoticeFirst() && !g_held->empty()) {
+    g_held->push_back(Held{g_held->back().seq, pe, size, m});
+    held = true;
+  }
+  CmiUnlock(g_heldLock);
+  return held;
+}
+#endif
+
 // Registrations or notices, all for objects of one owner process, as one
 // message to the first entry's PE, which hands the others to their PEs.
 // Sent urgent (design 10.2): they must not wait behind application work.
-void sendAttachMsg(AttachOp op, int fromNode, const std::vector<Pending> &items) {
+// fromOrigin: sent by the origin process, not handed on by the owner's.
+void sendAttachMsg(AttachOp op, int fromNode, const std::vector<Pending> &items,
+                   bool fromOrigin) {
   int n = (int)items.size(), nCounts = 0;
   for (const Pending &p : items) nCounts += (int)p.counts.size();
   int size = (int)(sizeof(AttachMsg) + n * sizeof(AttachEntry) +
@@ -167,12 +214,17 @@ void sendAttachMsg(AttachOp op, int fromNode, const std::vector<Pending> &items)
   }
   CmiSetHandler(m, attachHandlerIdx());
   reinterpret_cast<CmiMessageHeader *>(m)->messageSize = size;
+#if CMI_REGION_CHECKS
+  if (fromOrigin && holdForTest(op, items[0].entry.ownerPe, size, m)) return;
+#else
+  (void)fromOrigin;
+#endif
   CmiSyncSendAndFreeUrgent(items[0].entry.ownerPe, size, m);
 }
 
 void sendByOwnerNode(AttachOp op,
                      const std::map<int, std::vector<Pending>> &byNode) {
-  for (const auto &kv : byNode) sendAttachMsg(op, CmiMyNode(), kv.second);
+  for (const auto &kv : byNode) sendAttachMsg(op, CmiMyNode(), kv.second, true);
 }
 
 void attachHandler(void *vmsg) {
@@ -190,7 +242,7 @@ void attachHandler(void *vmsg) {
       others[e[i].ownerPe].push_back(p);
     }
   }
-  for (const auto &kv : others) sendAttachMsg(op, m->fromNode, kv.second);
+  for (const auto &kv : others) sendAttachMsg(op, m->fromNode, kv.second, false);
   CmiFree(m);
 }
 
@@ -275,7 +327,7 @@ void noticeHandler(void *vmsg) {
   del = rec->refs == 0;
   if (del) rec->noticeMsg = nullptr; // this message; freed below
   CmiUnlock(g_lock);
-  sendAttachMsg(AttachOp::Notice, CmiMyNode(), items);
+  sendAttachMsg(AttachOp::Notice, CmiMyNode(), items, true);
   if (del) {
     delete rec;
     CmiFree(m);
@@ -302,7 +354,7 @@ void detachRequestHandler(void *vmsg) {
     if (oweNotice(rec, p)) now.push_back(p);
   }
   CmiUnlock(g_lock);
-  if (!now.empty()) sendAttachMsg(AttachOp::Notice, CmiMyNode(), now);
+  if (!now.empty()) sendAttachMsg(AttachOp::Notice, CmiMyNode(), now, true);
   CmiFree(m);
 }
 
@@ -367,6 +419,10 @@ void attachNodeInit() {
   g_lock = CmiCreateLock();
   g_table = new std::unordered_map<Key, CmiAttachRec *, KeyHash>();
   g_freeHandles = new std::deque<CmiAttachmentRec *>();
+#if CMI_REGION_CHECKS
+  g_heldLock = CmiCreateLock();
+  g_held = new std::deque<Held>();
+#endif
 }
 
 void attachPeInit() {

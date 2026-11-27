@@ -46,7 +46,9 @@ bool g_verbose = false;       // +region_verbose
 double g_destroyReportS = 30; // +region_destroy_report_s
 std::atomic<bool> g_pathShown[2] = {{false}, {false}};
 #if CMI_REGION_CHECKS
-int g_completionDelayUs = 0; // +region_test_completion_delay
+int g_completionDelayUs = 0;   // +region_test_completion_delay
+int g_registrationDelayMs = 0; // +region_test_registration_delay
+bool g_noticeFirst = false;    // +region_test_notice_first
 #endif
 
 void *alignedAlloc(size_t align, size_t bytes, const char *what) {
@@ -133,6 +135,9 @@ void testCompletionDelay() {
   while (CmiWallTimer() < end) {
   }
 }
+
+int testRegistrationDelayMs() { return g_registrationDelayMs; }
+bool testNoticeFirst() { return g_noticeFirst; }
 #endif
 
 // The handler index is the same on every PE, so any PE of the process may
@@ -883,6 +888,16 @@ void CmiRegionNodeInit(char **argv) {
                    "error-checking builds, for tests: microseconds a transfer "
                    "to another process waits in its completion before it is "
                    "counted, which widens the window a detach can race");
+  CmiGetArgIntDesc(argv, "+region_test_registration_delay",
+                   &g_registrationDelayMs,
+                   "error-checking builds, for tests: milliseconds each "
+                   "registration (attach) waits before it is sent; a notice "
+                   "(detach) sent while a registration of its process waits "
+                   "is sent right after it, unless +region_test_notice_first");
+  g_noticeFirst = CmiGetArgFlagDesc(argv, "+region_test_notice_first",
+                                    "error-checking builds, for tests: with "
+                                    "+region_test_registration_delay, notices "
+                                    "do not wait behind registrations");
 #endif
 }
 

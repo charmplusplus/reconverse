@@ -192,6 +192,10 @@ void qdCount(int created, int processed);
 #if CMI_REGION_CHECKS
 // +region_test_completion_delay: spin in operationDone, for tests
 void testCompletionDelay();
+// +region_test_registration_delay (milliseconds; 0: off) and
+// +region_test_notice_first, for tests
+int testRegistrationDelayMs();
+bool testNoticeFirst();
 #endif
 
 // Owner side of the attach protocol (conv-region.cpp): a registration or
