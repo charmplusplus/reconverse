@@ -421,23 +421,29 @@ Rules that the example follows:
 - **Teardown.** Origins detach after their last put; transfers still in
   flight are allowed, and the detach waits for them. The owner destroys
   after the counter has fired a round that every origin's puts counted
-  toward. A destroy called on an application message alone can complete
-  before an origin's registration arrives (messages are not ordered), so
-  puts without a counter, or a counter destroyed before its last round
-  fired, are not safe that way. A put without a counter cannot be torn down
-  safely with the current calls, since no one can tell when it has landed:
-  give it a counter unless the region lives until the end of the run. A
-  get reads the region until it completes, so the owner destroys only after
-  every origin's gets have completed, not just been issued. A counter given
-  as `local` must outlive the transfers that decrement it.
+  toward. For puts without a counter, or a counter destroyed before its last
+  round fired, each origin detaches with a done callback,
+  `CmiDetachTarget(a, done, arg)`, and sends the owner its message from
+  `done`; the owner destroys once it has every origin's message. `done` runs
+  once the owner has applied the origin's detach notice, so the destroy then
+  waits for every put the origin reported. A message sent right after
+  `CmiDetachTarget(a, NULL, NULL)` is not enough in those two cases:
+  messages are not ordered, so it can arrive before the origin's
+  registration and notice, and the destroy then completes without waiting
+  for that origin's puts. A get reads the region until it completes, so the
+  owner destroys only after every origin's gets have completed, not just
+  been issued. A counter given as `local` must outlive the transfers that
+  decrement it.
 - **Check the result** of `CmiPut`, `CmiGet`, `CmiSignal` and
   `CmiAttachTargets` (they are declared warn-unused-result): an error code
   means nothing was transferred or counted.
-- **Puts without a counter** tell no one that they have landed. From
-  another process, only quiescence detection (Charm++) shows it; a message
-  from the origin can arrive before the data, and a put's local completion
-  means only that `src` may be reused. Use them for data whose age does not
-  matter or in regions that live until the end of the run; otherwise give
+- **Puts without a counter** tell no one that they have landed. During the
+  run, from another process, only quiescence detection (Charm++) shows it;
+  a message from the origin can arrive before the data, and a put's local
+  completion means only that `src` may be reused. At teardown the origins
+  detach with a done callback and send their message from it, and the
+  region's destroy, called once the owner has every origin's message, waits
+  for every such put (above). When the owner must know during the run, give
   the target a counter (one with no action costs the same, and
   `CmiCounterValue` shows the count).
 - **An attachment may be shared** by the PEs of its process, and used by

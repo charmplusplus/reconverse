@@ -236,6 +236,7 @@ wait behind application work:
 | registration | the first attachment of a process to an object | origin process to owner PE |
 | detach notice | the last attachment of a process is detached, or the owner asked | origin process to owner PE |
 | detach request | a registration for a destroyed generation, or a destroy with `CMI_DESTROY_DETACH_ALL` | owner PE to the origin process's first PE |
+| detach reply | a notice that carries a reply token has been applied, or dropped | owner PE to the origin process (a node-level send, not urgent) |
 
 Registrations and notices are batched: one message carries every entry for
 one owner process, goes to the first entry's PE, and that PE forwards the
@@ -255,6 +256,41 @@ decrement, and only when it sees that value: the detach sets both before
 it sets the bit, and until the notice has been sent the registration is
 not freed. A completion that sees any other value does not touch the
 registration again.
+
+### Detach callbacks
+
+`CmiDetachTarget(a, done, arg)` and `CmiDetachTargets(a, n, done, arg)` with
+`done` not NULL create one `DetachWait` (the calling PE's rank, `done`,
+`arg`, and `remaining`, a count under the table lock). In the locked loop of
+the detach, before the registration's reference count is decremented, the
+wait is appended to the registration's `waits` list if the registration is
+still in the table (its notice is not built yet) and the wait is not
+already the list's last entry (a batch can name one registration twice, as
+two attachments of one target do); each append increments `remaining`.
+A registration the owner ended (detach request) is out of the table, its
+notice already built or sent, and is not waited for. If `remaining` is 0
+when the loop ends, still under the lock, `done` is queued on the calling PE
+at once (`postDone`); otherwise the wait belongs to the replies from then on.
+
+When a notice entry is built (in `oweNotice` when it is sent at once, in
+the notice message's handler when it waited for transfers in flight), the
+registration's waits move into a `ReplyToken` allocated on the heap, and the
+entry's `replyToken` field carries the token's address (0 when none wait,
+and in every registration). The token is not part of the registration,
+which is freed once the notice is sent and its last attachment is gone.
+
+The owner PE answers a notice with a nonzero token by a detach reply to the
+origin process (`fromNode` of the attach message, which a forward within
+the owner's process keeps): in `applyAttach` after applying the notice and
+trying to complete the destroys it may finish, a notice that arrives before
+its registration (balance -1) included, and also when it drops a notice
+because its object's generation was destroyed. The reply's handler, on
+whichever PE of the origin process takes it from the node queue, decrements
+`remaining` of every wait in the token under the table lock, queues `done`
+on the wait's PE (`postDoneOn`, the message that runs a destroy's `done`)
+for each that reaches 0, frees those waits and the token. QD does not count
+replies. With `done` NULL nothing of this happens: the entry's token is 0
+and no reply is sent; the put, get and signal paths do not look at waits.
 
 Every transfer to another process is counted: a put with signal or a get
 until its local completion, a put or signal that a message carries until
@@ -294,24 +330,27 @@ counter, regions it was paired with that are not destroyed.
 The owner can wait only for the processes it knows. A registration still
 on its way when the destroy is called is not among them, and messages are
 not ordered, so a destroy is safe only once nothing of an unknown origin
-can be in flight. That holds when the destroy follows the firing of a round
-that every origin's puts counted toward: every contribution of that round
-has landed, registered or not (design 10.1, 10.2 step 1). It does not hold
-in two cases:
+can be in flight. That holds in two ways:
 
-- puts without a counter, which have no firing to wait for;
-- a counter (or its region) destroyed before its last round fired.
+- the destroy follows the firing of a round that every origin's puts
+  counted toward: every contribution of that round has landed, registered
+  or not (design 10.1, 10.2 step 1);
+- every origin detached with a done callback and the destroy follows the
+  messages the origins sent from their callbacks. A callback runs only
+  after the owner applied the notice, so the owner has counted the
+  registration too: a notice applied first left the balance at -1, which
+  the destroy waits to see return to 0. The destroy then waits for every
+  contribution the notice reported.
 
-In both, an application message from an origin ("I am done") is not a sign
-that its puts have landed: it can overtake the origin's registration, the
+The second way is what puts without a counter, which have no firing to wait
+for, and a counter (or its region) destroyed before its last round fired
+need. For an application that uses neither, an application message from an
+origin ("I am done"), sent without the callback, is not a sign that its
+puts have landed: it can overtake the origin's registration and notice, the
 destroy then completes without waiting for that origin, and its puts land
 in memory that is deregistered and may be freed (a late put with signal
 into a reused counter index decrements the new counter). The header says
-so in `CmiRegionDestroy` and `CmiCounterDestroy`. The current calls give an
-origin no way to learn that the owner has applied its notice; an optional
-completion callback on `CmiDetachTarget(s)`, run once the owner has applied
-the notice, would close this gap (the origin would send its "done" from
-there) and is a possible follow-up.
+so in `CmiRegionDestroy` and `CmiCounterDestroy`.
 
 The urgent queue does not close the gap even within one process: the
 default scheduler looks at it before the thread queue, but a registration
@@ -319,10 +358,16 @@ and an application message pushed between those two looks are taken in
 the other order. region_counter_local's destroy_order case destroys on an
 application message and counts how often the destroy completed before the
 registration was handled (1 to 9 of 50 rounds with the default scheduler
-on a laptop, 0 to 2 with `+randomized_msgq`). Where a test needs the
-registration in first, it waits one more pass through its own queue after
-the message that follows the registration (teardown), and skips the check
-under `+randomized_msgq`.
+on a laptop, 0 to 2 with `+randomized_msgq`). Its done_order cases show
+both sides under `+region_test_registration_delay 20` (error-checking
+builds: each registration an origin process sends waits 20 ms, and a
+notice sent meanwhile waits behind it unless `+region_test_notice_first`):
+with "done" sent right after the detach, 20 of 20 destroys complete before
+the registration is sent; with "done" sent from the detach callback, none
+do, with or without the notice first. Where a test needs the registration
+in first and does not use the callback, it waits one more pass through its
+own queue after the message that follows the registration (teardown), and
+skips the check under `+randomized_msgq`.
 
 The landed counts are exact for a counter paired with the one region being
 destroyed: every contribution to it came through that region. A counter
@@ -354,8 +399,9 @@ queued, or about to be (its round fired and its action has not started),
 withholds its index until the message's handler has run, so that no later
 counter there queues the message twice. A registration that arrives for a
 generation already destroyed gets a detach request; a notice for one is
-dropped. An origin the owner had not heard of when the destroy completed
-is safe to ignore only under the rule above.
+dropped, and answered with a detach reply if it carries a reply token. An
+origin the owner had not heard of when the destroy completed is safe to
+ignore only under the rule above.
 
 A counter destroyed in a partly filled round, or whose last round fired and
 has not run, reports its unconsumed contributions to the QD hook as

@@ -76,10 +76,10 @@
     // after the last round's put, and its srcFree action
     CmiDetachTarget(a, NULL, NULL);
 
-  Without a counter fired by every origin's last put (puts without a
-  counter, or a destroy before the last round), each origin detaches with a
-  done callback and sends the owner its message from there; the owner
-  destroys once it has every origin's message (CmiDetachTarget).
+  For puts without a counter, or a destroy before the last round fired,
+  each origin instead detaches with a done callback and sends the owner a
+  message from it; the owner destroys once it has every origin's message
+  (CmiRegionDestroy, CmiDetachTarget).
 
   doc/internals/persistent-family.md describes the implementation; the
   design is charm's doc/persistent-family-design.md (section 4.9 has the
@@ -249,7 +249,7 @@ size_t CmiRegionPieceLength(CmiRegion r, int piece);
    their detach notices report has landed; then done(arg) runs on this PE,
    and memory from CmiRegionAlloc is freed. Memory given to CmiRegionCreate
    may be freed once done has run. done may be NULL.
-   When to call it: once the owner knows of every origin, in one of two ways.
+   When to call it, one of two points:
    (1) The region's counter has fired a round that every origin's puts
    counted toward, and no origin puts again: every contribution of that
    round has landed, whether or not its origin's registration has arrived.
@@ -341,11 +341,12 @@ CmiAttachment CmiAttachTarget(const CmiTarget *t);
      attachment to it is detached, and only once its transfers in flight
      through it have completed locally. So done can also wait for detaches
      by other PEs of this process that share the registration.
-   * An attachment whose registration the owner already ended (destroyed
-     with CMI_DESTROY_DETACH_ALL, or attached after the object was
-     destroyed, both of which send the notice without a detach) is not
-     waited for: its owner is already destroying. If nothing is left to
-     wait for, done still runs from the scheduler.
+   * An attachment whose registration the owner had already ended when
+     this call ran is not waited for: the owner's detach request (sent by
+     a destroy with CMI_DESTROY_DETACH_ALL, or in answer to an attach to an
+     object already destroyed) was handled in this process, which then
+     built the notice itself, and the owner is already destroying. If
+     nothing is left to wait for, done still runs from the scheduler.
    With done NULL nothing is requested and no extra message is sent. Puts,
    gets and signals cost the same either way. */
 void CmiDetachTarget(CmiAttachment a, CmiDoneFn done, void *arg);
