@@ -569,9 +569,23 @@ CmiRegionRec *liveRegion(uint32_t slot, uint32_t gen, int fromPe,
   return ps->regions[slot];
 }
 
+// The bytes a message names lie inside the region: a corrupt target aborts
+// rather than write or read outside it.
+void checkInRegion(const CmiRegionRec *r, uint64_t addr, uint64_t bytes,
+                   int fromPe, const char *call) {
+  uint64_t base = (uint64_t)(uintptr_t)r->base;
+  if (addr < base || addr - base > r->bytes || bytes > r->bytes - (addr - base))
+    CmiAbort("%s: a transfer from PE %d of %llu bytes at 0x%llx falls outside "
+             "region slot %u of PE %d (%zu bytes at 0x%llx); the target is "
+             "corrupt\n", call, fromPe, (unsigned long long)bytes,
+             (unsigned long long)addr, r->slot, CmiMyPe(), r->bytes,
+             (unsigned long long)base);
+}
+
 void putDataHandler(void *vmsg) {
   auto *m = static_cast<PutDataMsg *>(vmsg);
-  liveRegion(m->regionSlot, m->regionGen, m->fromPe, "CmiPut");
+  CmiRegionRec *r = liveRegion(m->regionSlot, m->regionGen, m->fromPe, "CmiPut");
+  checkInRegion(r, m->pieceAddr + m->offset, m->bytes, m->fromPe, "CmiPut");
   memcpy((char *)(uintptr_t)m->pieceAddr + m->offset, m + 1, m->bytes);
   if (m->flags & kTargetHasCounter) {
     contributeArrived(arrivedLine(peState()->rank, m->counterIndex,
@@ -608,7 +622,10 @@ struct GetReplyMsg {
 
 void getRequestHandler(void *vmsg) {
   auto *m = static_cast<GetRequestMsg *>(vmsg);
-  liveRegion(m->regionSlot, m->regionGen, m->replyPe, "CmiGet");
+  CmiRegionRec *reg = liveRegion(m->regionSlot, m->regionGen, m->replyPe,
+                                 "CmiGet");
+  checkInRegion(reg, m->src, m->bytes, m->replyPe, "CmiGet");
+  // the reader checked that the reply fits a message (CmiGet)
   int size = (int)(sizeof(GetReplyMsg) + m->bytes);
   auto *r = static_cast<GetReplyMsg *>(CmiAlloc(size));
   r->bytes = m->bytes;
@@ -1181,6 +1198,10 @@ void putRemote(CmiAttachmentRec *a, CmiAttachRec *rec, size_t offset,
         new PutCtx{rec, local});
     return;
   }
+  if (bytes > (size_t)INT_MAX - sizeof(PutDataMsg))
+    CmiAbort("CmiPut: a put of %zu bytes to another process travels in one "
+             "message here, and a message holds at most %zu bytes of data; "
+             "split the put\n", bytes, (size_t)INT_MAX - sizeof(PutDataMsg));
   showPath(1, bytes, t);
   int size = (int)(sizeof(PutDataMsg) + bytes);
   auto *m = static_cast<PutDataMsg *>(CmiAlloc(size));
@@ -1245,12 +1266,24 @@ int CmiGet(void *dst, size_t bytes, const CmiLayout *dstLayout,
     if (local != nullptr) contributeLocal(local, "CmiGet");
     return CMI_REGION_OK;
   }
+  if (bytes == 0) {
+    // nothing to read: complete now, as within a process
+    checkLocalState(a, "CmiGet");
+    qdIssued(tg, false, local);
+    if (local != nullptr) contributeLocal(local, "CmiGet");
+    return CMI_REGION_OK;
+  }
+  bool rma = g_useRma && (tg.flags & kTargetHasRkey);
+  if (!rma && bytes > (size_t)INT_MAX - sizeof(GetReplyMsg))
+    CmiAbort("CmiGet: a get of %zu bytes from another process travels in one "
+             "message here, and a message holds at most %zu bytes of data; "
+             "split the get\n", bytes, (size_t)INT_MAX - sizeof(GetReplyMsg));
   CmiAttachRec *rec = beginRemote(a, "CmiGet");
   // created here, processed at its completion (design 4.8)
   qdCount(1, 0);
   qdIssued(tg, false, local);
   auto *ctx = new GetCtx{rec, local, dst};
-  if (g_useRma && (tg.flags & kTargetHasRkey) && bytes > 0) {
+  if (rma) {
     comm_backend::issueRget(CmiNodeToGlobal(tg.ownerNode), dst, bytes,
                             comm_backend::MR_NULL,
                             (void *)(uintptr_t)(tg.pieceAddr + offset),

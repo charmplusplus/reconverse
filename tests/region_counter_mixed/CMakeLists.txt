@@ -2,7 +2,7 @@
 # the other process's PEs (with two processes).
 add_reconverse_executable(region_counter_mixed region_counter_mixed.cpp)
 
-set(_cases mixed signal get nocounter reuse)
+set(_cases mixed signal get nocounter reuse zero)
 set(_tests)
 foreach(_case ${_cases})
   add_test(NAME region_counter_mixed_${_case}_1proc

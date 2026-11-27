@@ -24,6 +24,10 @@
               they say they are done, and the destroy must wait for every
               contribution to land: a new counter in the same index then
               sees no late one
+    zero      every PE puts 0 bytes through a target with a counter and
+              one without, and gets 0 bytes, whose local counter must have
+              fired when CmiGet returns; the round fires once every PE's
+              put has landed, and the region's destroy waits for the others
     detach_stress  half the PEs of the other processes attach, put or
               get, and detach, rounds= times each, without waiting for the
               transfer, so that the last detach of a registration finds it
@@ -564,6 +568,65 @@ void start() {
 }
 } // namespace reuse
 
+// ------------------------------------------------------------------ zero
+namespace zero {
+const int kPieceBytes = 64;
+std::vector<unsigned char> mem;
+CmiRegion r;
+CmiCounter c;
+int acks, dones;
+void done(void *) {
+  if (++dones == 2) pass("zero-byte puts and gets in every locality");
+}
+void onRound(void *, CmiCounter) {
+  for (int o = 0; o < npes(); o++) sendOp(o, OP_END, 0, nullptr, 0);
+}
+void onCtl(Ctl *m) {
+  if (m->op == OP_GO) {
+    CmiAttachment a = attOf(m); // a piece with the counter
+    CmiAttachment &b = att(1);  // the same piece, no counter
+    b = CmiAttachTarget(&m->t2);
+    CmiCounter L = CmiCounterCreate(1, CmiCounterActionNone(), 0);
+    unsigned char *dummy = buf(1);
+    int rc = CmiGet(dummy, 0, nullptr, a, 0, L, nullptr);
+    if (rc != CMI_REGION_OK) fail("CmiGet returned %d", rc);
+    if (CmiCounterValue(L) != 0)
+      fail("a zero-byte get had not completed when CmiGet returned");
+    CmiCounterDestroy(L, 0, nullptr, nullptr);
+    rc = CmiPut(b, kPieceBytes, dummy, 0, nullptr, nullptr, nullptr);
+    if (rc == CMI_REGION_OK)
+      rc = CmiPut(a, kPieceBytes, dummy, 0, nullptr, nullptr, nullptr);
+    if (rc != CMI_REGION_OK) fail("CmiPut returned %d", rc);
+  } else if (m->op == OP_END) {
+    CmiAttachment v[2] = {att(0), att(1)};
+    CmiDetachTargets(v, 2);
+    att(0) = att(1) = nullptr;
+    ack0(OP_END);
+  }
+}
+void onAck(Ctl *m) {
+  if (m->tag != OP_END || ++acks < npes()) return;
+  CmiRegionDestroy(r, 0, done, nullptr);
+  CmiCounterDestroy(c, 0, done, nullptr);
+}
+void hooks() {
+  g_onAck = onAck;
+  g_onCtl = onCtl;
+}
+void start() {
+  mem.assign((size_t)npes() * kPieceBytes, 0);
+  r = CmiRegionCreate(mem.data(), mem.size(), CMI_MEM_HOST, 0, 0);
+  c = CmiCounterCreate(npes(), CmiCounterActionFn(onRound, nullptr), 0);
+  for (int o = 0; o < npes(); o++) {
+    CmiRegionAddPiece(r, (size_t)o * kPieceBytes, kPieceBytes, nullptr, 0);
+    Ctl *m = newCtl(OP_GO);
+    m->t = CmiTargetMake(r, o, c);
+    m->t2 = CmiTargetMake(r, o, nullptr);
+    send(o, m);
+  }
+}
+} // namespace zero
+
 // --------------------------------------------------------- detach_stress
 // Half the PEs of each other process (even ranks) run the cycles; the others
 // only poll, so that a cycle's completions run on another PE than its
@@ -884,6 +947,7 @@ static const Case kCases[] = {
     {"get", getm::hooks, getm::start},
     {"nocounter", nocount::hooks, nocount::start},
     {"reuse", reuse::hooks, reuse::start},
+    {"zero", zero::hooks, zero::start},
     {"detach_stress", dstress::hooks, dstress::start},
     {"qd_remote", qdr::hooks, qdr::start},
     {"count_remote", aborts::countHooks, aborts::countRemote},
