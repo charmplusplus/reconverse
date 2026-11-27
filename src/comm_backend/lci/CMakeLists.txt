@@ -88,6 +88,41 @@ if(RECONVERSE_TRY_ENABLE_COMM_LCI2)
     # installed LCI's LCI::lci target does not link liblct.
     target_link_libraries(reconverse PUBLIC LCI::lci LCI::lct)
     target_sources(reconverse PRIVATE comm_backend_lci.cpp)
+    # AllocatorLCI gives LCI the message pool's registration for a rendezvous
+    # AM's receive buffer through allocator_base_t::allocate_with_mr, which LCI
+    # added in 6f0cda12 (uiuc-hpc/lci#226). An installed LCI may be older, and
+    # LCI has no version or macro that says so, so try compiling an override.
+    # Without the hook the override is left out, and LCI registers each such
+    # buffer itself, as before. A fetched LCI is the pinned tag, which has it;
+    # its target is not built yet, so it could not be tried anyway.
+    get_target_property(_reconverse_lci_imported LCI::lci IMPORTED)
+    if(_reconverse_lci_imported)
+      include(CheckCXXSourceCompiles)
+      set(CMAKE_REQUIRED_LIBRARIES LCI::lci LCI::lct)
+      check_cxx_source_compiles("
+        #include \"lci.hpp\"
+        struct A : lci::allocator_base_t {
+          void *allocate(size_t) override { return nullptr; }
+          void deallocate(void *) override {}
+          void *allocate_with_mr(size_t, lci::device_t, lci::mr_t *) override {
+            return nullptr;
+          }
+        };
+        int main() { A a; return a.allocate(0) != nullptr; }"
+        RECONVERSE_LCI_ALLOCATE_WITH_MR)
+      unset(CMAKE_REQUIRED_LIBRARIES)
+      if(NOT RECONVERSE_LCI_ALLOCATE_WITH_MR)
+        message(
+          STATUS
+            "The installed LCI has no allocator_base_t::allocate_with_mr (LCI 6f0cda12 and later): LCI registers every rendezvous AM receive buffer itself"
+        )
+      endif()
+    else()
+      set(RECONVERSE_LCI_ALLOCATE_WITH_MR ON)
+    endif()
+    if(RECONVERSE_LCI_ALLOCATE_WITH_MR)
+      target_compile_definitions(reconverse PRIVATE RECONVERSE_LCI_ALLOCATE_WITH_MR=1)
+    endif()
     set(RECONVERSE_ENABLE_COMM_LCI2 ON PARENT_SCOPE)
   else()
     message(

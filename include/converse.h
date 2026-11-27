@@ -303,6 +303,12 @@ typedef struct Header {
   CmiInt2 bcastSwapHandlerId;
   bool nokeep;
   CmiUInt1 zcMsgType; // 0: normal, 1: zero-copy
+  // Set by CmiSyncSendAndFreeUrgent: the destination PE serves this message
+  // from its urgent queue, polled before every other queue. For a protocol's
+  // control messages, which otherwise wait behind everything ahead of them in
+  // the PE's FIFO: a scheduler queue N ms deep delays each hop by N ms. The
+  // scheduler clears it as it takes the message, so it applies to one send.
+  CmiUInt1 urgent;
 } CmiMessageHeader;
 
 typedef CmiMessageHeader CmiMsgHeaderBasic;
@@ -745,6 +751,8 @@ void CmiHandleMessage(void *msg);
 // message sending
 void CmiSyncSend(int destPE, int messageSize, void *msg);
 void CmiSyncSendAndFree(int destPE, int messageSize, void *msg);
+void CmiSyncSendAndFreeUrgent(int destPE, int messageSize, void *msg);
+void CmiPushPEUrgent(int destRank, void *msg);
 void CmiSyncListSend(int npes, const int *pes, int len, void *msg);
 void CmiSyncListSendAndFree(int npes, const int *pes, int len, void *msg);
 void CmiPushPE(int destRank, void *msg);
@@ -930,6 +938,15 @@ CMK_NORETURN void CmiAbort(const char *format, ...);
    It must not take Converse locks. NULL removes it. See README.md. */
 typedef void (*CmiAbortHookFn)(int code, const char *msg);
 void CmiSetAbortHook(CmiAbortHookFn hook);
+/* A function ConverseExit calls once per process, on the thread of rank 0
+   (the thread that called ConverseInit), after every PE of the process has
+   stopped and the node is torn down, immediately before exit(exitcode).
+   ConverseInit also calls it, with code 1, before it exits on an invalid
+   +pe, +ppn or +p argument. Not called when ConverseExit returns
+   (CmiInteropReturnOnExit) or on an abort.
+   NULL removes it. */
+typedef void (*CmiExitHookFn)(int exitcode);
+void CmiSetExitHook(CmiExitHookFn hook);
 /* Registers a function that CmiAbort calls once per process, after printing
    the reason and the stack and before the abort hook, to write out state that
    the process would otherwise lose at abort(), such as a coverage profile.

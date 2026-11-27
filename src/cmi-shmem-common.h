@@ -195,13 +195,6 @@ inline static void initIpcShared_(ipc_shared_* shared) {
   new (shared) ipc_shared_(begin, end);
 }
 
-inline static ipc_shared_* makeIpcShared_(void) {
-  auto* shared = (ipc_shared_*)(::operator new(sizeof(ipc_shared_) +
-                                               CpvAccess(kSegmentSize)));
-  initIpcShared_(shared);
-  return shared;
-}
-
 inline void initSegmentSize_(char** argv) {
   using namespace cmi::ipc;
   CpvInitialize(std::size_t, kRecommendedCutoff);

@@ -40,8 +40,8 @@ option(RECONVERSE_TRY_ENABLE_COMM_LCI2 "whether to enable the LCIv2 backend" ON)
 option(RECONVERSE_AUTOFETCH_LCI2
         "whether to autofetch LCIv2 if LCI2 cannot be found" OFF)
 set(RECONVERSE_AUTOFETCH_LCI2_TAG
-    "9757d6abc8a29a00a57238f3ad38a3edcb25abc0"
-    CACHE STRING "The tag to fetch for LCIv2") # uiuc-hpc/lci master, 2026-11-14: file PMI counts ranks from SLURM_STEP_NUM_TASKS, so a process started directly in a Slurm job no longer waits forever (#223); bundled UCX async prototypes for GCC 15 (#224)
+    "6f0cda1283f46df52262dc1fbf1cf7878c676d39"
+    CACHE STRING "The tag to fetch for LCIv2") # uiuc-hpc/lci master, 2026-11-24: a rendezvous transfer holds no packet while in flight (#227); the allocator can supply the mr for a rendezvous AM's receive buffer (#226), which CommBackendLCI's allocator uses (an older installed LCI builds without it; see src/comm_backend/lci/CMakeLists.txt)
 
 option(RECONVERSE_TRY_ENABLE_COMM_LCW "whether to enable the LCW backend" ON)
 option(RECONVERSE_AUTOFETCH_LCW
@@ -109,8 +109,10 @@ elseif(RECONVERSE_ENABLE_CPU_AFFINITY)
                  "+showcpuaffinity are available")
 else()
   message(WARNING
-    "hwloc was not found, so CPU affinity is DISABLED: +setcpuaffinity, +pemap "
-    "and +showcpuaffinity will be accepted but do nothing. Install hwloc "
+    "hwloc was not found, so CPU affinity is DISABLED: a run given "
+    "+setcpuaffinity or +pemap aborts at startup, and +showcpuaffinity "
+    "reports that it is off. Do not use this build for timing. On a cluster, "
+    "load the hwloc module before configuring; otherwise install hwloc "
     "(libhwloc-dev on Debian/Ubuntu, hwloc-devel on RHEL, 'brew install hwloc' "
     "on macOS) and reconfigure to enable them.")
 endif()

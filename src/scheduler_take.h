@@ -27,6 +27,19 @@ inline void *CmiTakeNodeQueue() {
   return nullptr;
 }
 
+// this PE's urgent queue: messages sent with CmiSyncSendAndFreeUrgent. Every
+// loop takes from it before any other source, so such a message does not wait
+// behind the thread queue's FIFO. The mark is cleared as the message is taken:
+// it applies to one send, so a handler that sends the buffer on (or a copy of
+// it) with an ordinary send sends an ordinary message.
+inline void *CmiTakeUrgent(ConverseQueue<void *> *queue) {
+  auto r = queue->pop();
+  if (!r) return nullptr;
+  ((CmiMessageHeader *)*r)->urgent = 0;
+  return *r;
+}
+inline void *CmiTakeUrgentQueue() { return CmiTakeUrgent(CmiGetUrgentQueue(CmiMyRank())); }
+
 // converse-level thread queue
 inline void *CmiTakeThreadQueue() {
   ConverseQueue<void *> *queue = CmiGetQueue(CmiMyRank());

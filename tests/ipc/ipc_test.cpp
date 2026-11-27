@@ -12,7 +12,9 @@
 // lost, duplicated or misrouted hangs or aborts the test rather than passing.
 //
 // The run is correct whether or not IPC is on; what changes is the counters,
-// which are checked against the mode the runtime reports.
+// which are checked against the mode the runtime reports. +expect-impl <name>
+// also fails the run unless the pool is up and CmiIpcImplName() is <name>, so
+// a ctest entry can pin which mechanism actually carried the traffic.
 #include "converse.h"
 
 #include <cstdio>
@@ -180,6 +182,15 @@ static void mymain(int argc, char **argv) {
   CpvAccess(nodeIdx) = CmiRegisterHandler(nodeHandler);
   CpvAccess(ackIdx) = CmiRegisterHandler(ackHandler);
   CpvAccess(exitIdx) = CmiRegisterHandler(exitHandler);
+
+  char *expectImpl = nullptr;
+  CmiGetArgStringDesc(argv, "+expect-impl", &expectImpl,
+                      "fail unless the pool is up and backed by this "
+                      "mechanism (posixshm or xpmem)");
+  if (expectImpl != nullptr &&
+      (!CmiIpcEnabled() || strcmp(CmiIpcImplName(), expectImpl) != 0))
+    CmiAbort("ipc: PE %d: +expect-impl %s, but the pool is %s", CmiMyPe(),
+             expectImpl, CmiIpcEnabled() ? CmiIpcImplName() : "off");
 
   if (CmiMyPe() == 0) {
     acksExpected = expectedDeliveries();

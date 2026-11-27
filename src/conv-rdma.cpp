@@ -5,6 +5,8 @@
 #include "converse_internal.h"
 #include <algorithm>
 #include <atomic>
+#include <climits>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <vector>
@@ -48,6 +50,7 @@ static int put_data_handler_idx;
 static int put_done_handler_idx;
 static int reg_and_put_handler_idx;
 static int reg_and_get_handler_idx;
+static int put_signal_msg_handler_idx;
 
 // Invoked when this PE has to deregister the local memory
 static void remoteDeregHandler(ConverseRdmaMsg *deregMsg) {
@@ -289,6 +292,7 @@ static void memcpyAnyPtr(void *dst, const void *src, size_t size) {
 
 static void regAndPutHandler(ConverseRdmaMsg *msg);
 static void regAndGetHandler(ConverseRdmaMsg *msg);
+static void putSignalMsgHandler(void *msg);
 
 // Rget/Rput operations are implemented as normal converse messages
 // This method is invoked during converse initialization to initialize these
@@ -301,6 +305,8 @@ void CmiOnesidedDirectInit(void) {
   reg_and_put_handler_idx = CmiRegisterHandler((CmiHandler)regAndPutHandler);
   reg_and_get_handler_idx = CmiRegisterHandler((CmiHandler)regAndGetHandler);
   zc_pup_handler_idx = CmiRegisterHandler((CmiHandler)zcPupHandler);
+  put_signal_msg_handler_idx =
+      CmiRegisterHandler((CmiHandler)putSignalMsgHandler);
 }
 
 /****************************** Zerocopy Direct API
@@ -719,6 +725,186 @@ void CmiIssueRput(NcpyOperationInfo *ncpyOpInfo) {
       rdmaIssuePut(ncpyOpInfo, len);
   } else {
     CmiIssueRputCopyBased(ncpyOpInfo);
+  }
+}
+
+/****************************** Put with signal
+ * *****************************/
+
+// The kinds this process registered through CmiRegisterRputSignalKind,
+// indexed by the kind's number. That number is the backend's, from
+// comm_backend::registerPutSignalKind, so it is the same one the backend's
+// signals carry; a kind registered with the backend directly leaves its slot
+// here empty. Without the backend's put with signal, there are no backend
+// kinds, and kinds are numbered here, from 0 in registration order. An entry
+// is published by its pointer before the count that covers it.
+namespace {
+struct RputSignalKind {
+  CmiRputSignalHandler handler;
+  void *ctx;
+};
+constexpr int kMaxRputSignalKinds = 64;
+std::atomic<RputSignalKind *> rputSignalKinds[kMaxRputSignalKinds];
+std::atomic<int> numRputSignalKinds{0};  // one past the highest kind here
+
+// A put that Converse carries as one message: the data, its destination and,
+// for a put with signal (kind >= 0), the signal. The data follows the struct.
+struct PutSignalMsg {
+  char core[CmiMsgHeaderSizeBytes];
+  void *destPtr;
+  uint64_t size;
+  int destPe;
+  int kind;  // -1: CmiRdmaPutRaw, no signal
+  int srcNode;
+  uint32_t signal;
+};
+} // namespace
+
+static const RputSignalKind *findRputSignalKind(int kind) {
+  if (kind < 0 || kind >= numRputSignalKinds.load(std::memory_order_acquire))
+    return nullptr;
+  return rputSignalKinds[kind].load(std::memory_order_acquire);
+}
+
+static void raiseRputSignal(int kind, int destPe, uint16_t signal, int srcNode,
+                            size_t size) {
+  const RputSignalKind *k = findRputSignalKind(kind);
+  if (k == nullptr)
+    CmiAbort("put with signal: kind %d is not registered with "
+             "CmiRegisterRputSignalKind in this process\n", kind);
+  k->handler(k->ctx, destPe, signal, srcNode, size);
+}
+
+// The backend's handler for every kind registered here; ctx is the kind's
+// entry.
+static void backendRputSignal(void *ctx, int destRank, uint16_t signal,
+                              int srcRank, size_t size) {
+  const RputSignalKind *k = (const RputSignalKind *)ctx;
+  k->handler(k->ctx, CmiNodeFirst(CmiMyNode()) + destRank, signal, srcRank,
+             size);
+}
+
+int CmiIsPutSignalCapable(void) {
+  return !CmiUseCopyBasedRDMA && comm_backend::isPutSignalCapable();
+}
+
+int CmiRegisterRputSignalKind(CmiRputSignalHandler handler, void *ctx) {
+  if (CmiMyRank() != 0)
+    CmiAbort("CmiRegisterRputSignalKind: call it on rank 0 of each process, "
+             "not on PE %d (rank %d)\n", CmiMyPe(), CmiMyRank());
+  if (handler == nullptr)
+    CmiAbort("CmiRegisterRputSignalKind: no handler\n");
+  RputSignalKind *entry = new RputSignalKind{handler, ctx};
+  int count = numRputSignalKinds.load(std::memory_order_relaxed);
+  int kind = CmiIsPutSignalCapable()
+                 ? comm_backend::registerPutSignalKind(
+                       backendRputSignal, entry, CmiMyNodeSize())
+                 : count;
+  if (kind < 0 || kind >= kMaxRputSignalKinds)
+    CmiAbort("CmiRegisterRputSignalKind: kind %d is outside 0 to %d\n", kind,
+             kMaxRputSignalKinds - 1);
+  if (rputSignalKinds[kind].load(std::memory_order_relaxed) != nullptr)
+    CmiAbort("CmiRegisterRputSignalKind: kind %d is registered twice\n", kind);
+  rputSignalKinds[kind].store(entry, std::memory_order_release);
+  if (kind >= count)
+    numRputSignalKinds.store(kind + 1, std::memory_order_release);
+  return kind;
+}
+
+// On a PE of the destination's process: copy the data, then raise the signal.
+static void putSignalMsgHandler(void *msg) {
+  PutSignalMsg *m = (PutSignalMsg *)msg;
+  if (m->size > 0)
+    memcpyAnyPtr(m->destPtr, (char *)msg + sizeof(PutSignalMsg), m->size);
+  if (m->kind >= 0)
+    raiseRputSignal(m->kind, m->destPe, (uint16_t)m->signal, m->srcNode,
+                    m->size);
+  CmiFree(msg);
+}
+
+// The put as one message carrying the data: correct on every backend, since
+// the data and the signal arrive together. The source has been copied when
+// this returns.
+static void sendPutSignalMsg(int destPe, void *destPtr, const void *src,
+                             size_t size, int kind, uint16_t signal) {
+  size_t total = sizeof(PutSignalMsg) + size;
+  if (total > (size_t)INT_MAX)
+    CmiAbort("put with signal: %zu bytes do not fit one Converse message\n",
+             size);
+  PutSignalMsg *m = (PutSignalMsg *)CmiAlloc((int)total);
+  m->destPtr = destPtr;
+  m->size = size;
+  m->destPe = destPe;
+  m->kind = kind;
+  m->srcNode = CmiMyNodeGlobal();
+  m->signal = signal;
+  memcpyAnyPtr((char *)m + sizeof(PutSignalMsg), src, size);
+  CmiSetHandler(m, put_signal_msg_handler_idx);
+  CmiSyncSendAndFree(destPe, (int)total, m);
+}
+
+void CmiIssueRputSignal(NcpyOperationInfo *ncpyOpInfo, int destPe, int kind,
+                        uint16_t signal) {
+  int target_node = CmiNodeOf(ncpyOpInfo->destPe);
+  if (destPe < 0 || destPe >= CmiNumPes() || CmiNodeOf(destPe) != target_node)
+    CmiAbort("CmiIssueRputSignal: PE %d is not in the process of the "
+             "destination buffer (PE %d)\n", destPe, ncpyOpInfo->destPe);
+  if (findRputSignalKind(kind) == nullptr)
+    CmiAbort("CmiIssueRputSignal: kind %d is not registered with "
+             "CmiRegisterRputSignalKind\n", kind);
+  // See CmiIssueRget: the transfer is bounded by both buffers.
+  size_t len = std::min(ncpyOpInfo->srcSize, ncpyOpInfo->destSize);
+  comm_backend::Status status;
+  status.local_buf = ncpyOpInfo->srcPtr;
+  status.size = len;
+  status.user_context = ncpyOpInfo;
+  if (target_node == CmiMyNode()) {
+    memcpyAnyPtr((void *)ncpyOpInfo->destPtr, ncpyOpInfo->srcPtr, len);
+    raiseRputSignal(kind, destPe, signal, CmiMyNodeGlobal(), len);
+    CommRputLocalHandler(status);
+  } else if (!CmiIsPutSignalCapable()) {
+    // Converse's emulation. A put followed by a message after its local
+    // completion would not do: LCI reports an injected put complete when it
+    // is posted, so the message could overtake the data.
+    sendPutSignalMsg(destPe, (void *)ncpyOpInfo->destPtr, ncpyOpInfo->srcPtr,
+                     len, kind, signal);
+    CommRputLocalHandler(status);
+  } else {
+    if (!ncpyOpInfo->isSrcRegistered || !ncpyOpInfo->isDestRegistered)
+      CmiAbort("CmiIssueRputSignal: the %s buffer is not registered\n",
+               ncpyOpInfo->isSrcRegistered ? "destination" : "source");
+    auto mr = *(comm_backend::mr_t *)ncpyOpInfo->srcLayerInfo;
+    void *rmr = ncpyOpInfo->destLayerInfo + sizeof(comm_backend::mr_t);
+    comm_backend::issueRputSignal(CmiNodeToGlobal(target_node),
+                                  ncpyOpInfo->srcPtr, len, mr, 0, rmr,
+                                  CmiRankOf(destPe), kind, signal,
+                                  CommRputLocalHandler, ncpyOpInfo);
+  }
+}
+
+static void rawPutDone(comm_backend::Status) {}
+
+void CmiRdmaPutRaw(const CmiNcpyBuffer &src, const CmiNcpyBuffer &dest,
+                   size_t destOffset) {
+  if (destOffset > dest.cnt || src.cnt > dest.cnt - destOffset)
+    CmiAbort("CmiRdmaPutRaw: %zu bytes at offset %zu do not fit the %zu-byte "
+             "destination\n", src.cnt, destOffset, dest.cnt);
+  void *destPtr = (char *)dest.ptr + destOffset;
+  int destNode = CmiNodeOf(dest.pe);
+  if (destNode == CmiMyNode()) {
+    memcpyAnyPtr(destPtr, src.ptr, src.cnt);
+  } else if (CmiUseCopyBasedRDMA) {
+    sendPutSignalMsg(dest.pe, destPtr, src.ptr, src.cnt, -1, 0);
+  } else {
+    if (!src.isRegistered || !dest.isRegistered)
+      CmiAbort("CmiRdmaPutRaw: the %s buffer is not registered\n",
+               src.isRegistered ? "destination" : "source");
+    const char *srcInfo = src.layerInfo + CmiGetRdmaCommonInfoSize();
+    const char *destInfo = dest.layerInfo + CmiGetRdmaCommonInfoSize();
+    auto mr = *(const comm_backend::mr_t *)srcInfo;
+    void *rmr = (void *)(destInfo + sizeof(comm_backend::mr_t));
+    comm_backend::issueRput(CmiNodeToGlobal(destNode), src.ptr, src.cnt, mr,
+                            destOffset, rmr, rawPutDone, nullptr);
   }
 }
 

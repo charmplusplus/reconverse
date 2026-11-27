@@ -21,9 +21,9 @@
 #include <cstring>
 
 static void mymain(int argc, char **argv) {
-  // ctest passes: +setcpuaffinity +pemap L0 +showcpuaffinity
+  // ctest passes: +setcpuaffinity +pemap L0 +showcpuaffinity, or a subset
   int before = CmiGetArgc(argv);
-  if (before < 4)
+  if (before < 2)
     CmiAbort("cpuaffinity_args needs its arguments; run it through ctest");
 
   CmiInitCPUAffinity(argv);

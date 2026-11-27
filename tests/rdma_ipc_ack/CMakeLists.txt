@@ -15,3 +15,9 @@ add_test(NAME rdma_ipc_ack-noipc COMMAND ${RECONVERSE_TEST_LAUNCHER} -n 2
 # and may travel through the pool. Covers the copy-based fallback's ordering.
 add_test(NAME rdma_ipc_ack-nordma COMMAND ${RECONVERSE_TEST_LAUNCHER} -n 2
          $<TARGET_FILE:rdma_ipc_ack> +pe 2 +ipc +expect-ipc +nordma)
+
+# The put/ack ordering with the xpmem pool as the second channel.
+if(RECONVERSE_ENABLE_XPMEM)
+  add_test(NAME rdma_ipc_ack-xpmem COMMAND ${RECONVERSE_TEST_LAUNCHER} -n 2
+           $<TARGET_FILE:rdma_ipc_ack> +pe 2 +ipcmode xpmem +expect-ipc)
+endif()

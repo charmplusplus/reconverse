@@ -37,6 +37,20 @@ public:
     // Default implementation: not supported
     CmiAbort("Rput not supported in this backend");
   }
+  // Put with signal: unsupported unless a backend overrides all four.
+  virtual bool isPutSignalCapable() { return false; }
+  virtual bool isPutSignalNative() { return false; }
+  virtual int registerPutSignalKind(PutSignalHandler handler, void *ctx,
+                                    int nranks) {
+    CmiAbort("Rput with a signal is not supported in this backend");
+    return -1;
+  }
+  virtual void issueRputSignal(int rank, const void *local_buf, size_t size,
+                               mr_t local_mr, uintptr_t remote_disp, void *rmr,
+                               int dest_rank, int kind, uint16_t signal,
+                               CompHandler localComp, void *user_context) {
+    CmiAbort("Rput with a signal is not supported in this backend");
+  }
   // return true if there is more work to do
   virtual bool progress(void) = 0;
   // True if this thread must poll progress whatever +backend_poll_thread says,
