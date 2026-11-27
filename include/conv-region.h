@@ -274,7 +274,8 @@ CmiTarget CmiTargetMake(CmiRegion r, int piece, CmiCounter c);
 
 /* Origins (any PE). An attachment is one origin's handle on a target; the
    attachments of one process to one region (or counter) share one
-   registration with the owner. */
+   registration with the owner. Any PE of the process may use an
+   attachment, several at once. */
 CmiAttachment CmiAttachTarget(const CmiTarget *t);
 /* Ends the attachment. Transfers through it still in flight are allowed:
    the detach notice waits for them to complete locally, and their sources

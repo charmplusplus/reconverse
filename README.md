@@ -429,7 +429,8 @@ Rules that the example follows:
 - **Check the result** of `CmiPut`, `CmiGet`, `CmiSignal` and
   `CmiAttachTargets` (they are declared warn-unused-result): an error code
   means nothing was transferred or counted.
-- **One PE at a time per attachment**; hand it to another PE in a message.
+- **An attachment may be shared** by the PEs of its process, and used by
+  several of them at once.
 
 Every build aborts on a put, get or signal through a detached attachment or
 one whose owner ended it, on an in-process put or get through a target whose
