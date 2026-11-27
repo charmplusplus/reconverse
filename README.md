@@ -384,6 +384,12 @@ process-manager step goes through LCI's `LCT_pmi_abort`: under `srun` with
 `lcrun` ends the other processes itself when one exits with a failure; with
 the file PMI backend (no launcher) nothing else is needed.
 
+`CmiSetExitHook(fn)` registers a function that `ConverseExit` calls once per
+process with the exit code, on the thread of rank 0 (the thread that called
+`ConverseInit`), after every PE of the process has stopped and the node is
+torn down, immediately before `exit`. An MPI program that starts Converse
+from `main` uses it to call `MPI_Finalize` on the thread that initialized MPI.
+
 A program that owns the job can end it its own way: `CmiSetAbortHook(fn)`
 registers a function that `CmiAbort` calls once per process, with code 1 and
 the formatted reason, after printing and before the process-manager step.
