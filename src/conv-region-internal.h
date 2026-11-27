@@ -188,8 +188,9 @@ void sendDetachRequest(int toNode, const AttachEntry &e);
 void attachNodeInit();
 void attachPeInit();
 
-// A network operation through a registration has completed locally (origin
-// side); the last one of a registration whose notice waits sends it.
+// A transfer to another process through a registration has completed
+// locally (origin side), or, for one a message carries, has been sent; the
+// last one of a registration whose notice waits sends it.
 void operationDone(CmiAttachRec *rec);
 
 // Aborts unless a is a live attachment: names the call, and says whether a
@@ -256,11 +257,15 @@ struct CmiAttachRec {
   bool inTable;
   bool noticeSent;
   std::atomic<int> state; // AttachState
-  // network operations issued and not yet locally complete, plus
+  // transfers to another process issued and not yet locally complete (one
+  // that a message carries: until just after its send), plus
   // kNoticePending once the notice waits for them to reach zero
   std::atomic<uint64_t> outstanding;
-  int noticeRank;   // the PE that sends the notice that waited
-  void *noticeMsg;  // the message that tells it to
+  // the PE that sends the notice that waited, and the message that tells it
+  // to: set before kNoticePending, and read only by the completion that sees
+  // kNoticePending | 1 (operationDone)
+  int noticeRank;
+  void *noticeMsg;
   std::vector<CmiAttachmentRec *> handles;
   // contributions of detached handles: (counter index, generation) or
   // kUncounted, to count
