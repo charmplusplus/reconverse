@@ -1,20 +1,23 @@
 // A send must return although its destination is not receiving.
 //
-// Two processes of one PE each. PE 1 registers a small buffer, tells PE 0, and
-// on PE 0's go-ahead stays in one handler for `block` seconds, in a loop that
-// calls nothing of Converse: its process makes no network progress, as a
-// process does that is inside a long computation or blocked in another
-// library. Meanwhile PE 0 sends it `count` messages from one handler, of
-// sizes on both sides of the backend's eager limit and far more in total than
-// the network buffers between the two processes hold, so the network layer
-// stops accepting them. PE 0 then issues a zero-copy get from PE 1's buffer,
-// whose completion callback sends PE 1 one more message from inside the
-// backend's progress, and sends itself a message.
+// Three processes of one PE each. PE 2 registers a small buffer and tells
+// PE 0. On PE 0's go-ahead PE 1 stays in one handler for `block` seconds, in
+// a loop that calls nothing of Converse: its process makes no network
+// progress, as a process does that is inside a long computation or blocked in
+// another library. Meanwhile PE 0 sends PE 1 `count` messages from one
+// handler, of sizes on both sides of the backend's eager limit and far more
+// in total than the network buffers between the two processes hold, so the
+// network layer stops accepting them. PE 0 then issues a zero-copy get from
+// PE 2's buffer and sends itself a message. PE 2 is receiving, so the get
+// completes while PE 1 is still busy, and its completion callback, which the
+// backend calls from inside its network progress, sends PE 1 one more
+// message.
 //
 // Checked:
-//  - PE 0 gets back from all its sends and runs the handler of the message to
-//    itself within half of `block`. A backend that retries a send until the
-//    network takes it stays in the send loop until PE 1 resumes.
+//  - PE 0 gets back from all its sends, runs the handler of the message to
+//    itself, and gets back from the send in the callback, all within half of
+//    `block`. A backend that retries a send until the network takes it stays
+//    in the send loop until PE 1 resumes.
 //  - PE 1 then receives every message exactly once, with the size and the
 //    contents it was sent with, the one sent from the callback included.
 //
@@ -48,7 +51,6 @@ static CmiNcpyBuffer local_buf, remote_buf;
 // PE 1
 static std::vector<char> seen;
 static long received = 0;
-static double block_end;
 
 static int sizeOf(long seq) { return seq == count ? 64 : sizes[seq % nsizes]; }
 
@@ -78,7 +80,7 @@ static void getAck(void *) {
   sendData(count);
 }
 
-// PE 0: PE 1 has its handlers and its buffer
+// PE 0: PE 2 has its buffer registered
 static void readyHandler(void *vmsg) {
   Msg *msg = (Msg *)vmsg;
   remote_buf = msg->buf;
@@ -109,7 +111,6 @@ static void blockHandler(void *msg) {
   volatile unsigned long spin = 0;
   while (std::chrono::steady_clock::now() < end)
     spin = spin + 1;
-  block_end = CmiWallTimer();
 }
 
 // PE 1
@@ -139,10 +140,11 @@ static void doneHandler(void *msg) {
             "for %.1f s: send loop returned after %.3f s, next handler ran "
             "after %.3f s, get completed after %.3f s; all received intact\n",
             count + 1, block_seconds, send_loop_end, after_time, get_done);
-  if (after_time < 0 || after_time > block_seconds / 2)
+  if (after_time < 0 || after_time > block_seconds / 2 || get_done < 0 ||
+      get_done > block_seconds / 2)
     CmiAbort("send_nonblocking: FAIL: the sender was held for %.3f s (limit "
              "%.3f s) by a destination that was not receiving\n",
-             after_time, block_seconds / 2);
+             after_time > get_done ? after_time : get_done, block_seconds / 2);
   CmiPrintf("send_nonblocking: PASS\n");
   CmiSyncBroadcastAllAndFree(sizeof(Msg), newMsg(exit_handler));
 }
@@ -164,14 +166,14 @@ static void start(int argc, char **argv) {
   if (argc > 1) count = atol(argv[1]);
   if (argc > 2) block_seconds = atof(argv[2]);
 
-  if (CmiNumPes() != 2 || CmiNumNodes() != 2)
-    CmiAbort("send_nonblocking needs 2 PEs in 2 processes: <launcher> -n 2 "
-             "./reconverse_send_nonblocking +pe 2\n");
-  // both PEs have their handlers before either sends
+  if (CmiNumPes() != 3 || CmiNumNodes() != 3)
+    CmiAbort("send_nonblocking needs 3 PEs in 3 processes: <launcher> -n 3 "
+             "./reconverse_send_nonblocking +pe 3\n");
+  // every PE has its handlers before any sends
   CmiBarrier();
 
-  if (CmiMyPe() == 1) {
-    seen.assign(count + 1, 0);
+  if (CmiMyPe() == 1) seen.assign(count + 1, 0);
+  if (CmiMyPe() == 2) {
     char *src = (char *)CmiAlloc(kGetBytes);
     memset(src, 0x5a, kGetBytes);
     Msg *m = newMsg(ready_handler);
