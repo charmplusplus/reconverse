@@ -135,15 +135,19 @@ void testCompletionDelay() {
 }
 #endif
 
-void postDone(CmiDoneFn fn, void *arg) {
+// The handler index is the same on every PE, so any PE of the process may
+// queue the message for another.
+void postDoneOn(int rank, CmiDoneFn fn, void *arg) {
   if (fn == nullptr) return;
   auto *m = static_cast<DoneMsg *>(CmiAlloc(sizeof(DoneMsg)));
   m->fn = fn;
   m->arg = arg;
   CmiSetHandler(m, CpvAccess(regionDoneHandlerIdx));
   reinterpret_cast<CmiMessageHeader *>(m)->messageSize = sizeof(DoneMsg);
-  CmiPushPE(CmiMyRank(), m);
+  CmiPushPE(rank, m);
 }
+
+void postDone(CmiDoneFn fn, void *arg) { postDoneOn(CmiMyRank(), fn, arg); }
 
 } // namespace cmi_region
 
@@ -557,8 +561,10 @@ bool applyAttach(AttachOp op, const AttachEntry &e, const CountEntry *counts,
     c = ps->counters[e.slot];
   }
   if (r == nullptr && c == nullptr) {
-    // destroyed: a late registration is told to detach; a late notice dropped
+    // destroyed: a late registration is told to detach; a late notice is
+    // dropped, and answered if detach callbacks wait for it
     if (op == AttachOp::Register) sendDetachRequest(fromNode, e);
+    else if (e.replyToken != 0) sendDetachReply(fromNode, e.replyToken);
     return false;
   }
   // what the process contributed through this registration (10.2)
@@ -592,6 +598,12 @@ bool applyAttach(AttachOp op, const AttachEntry &e, const CountEntry *counts,
     if (ig.first < ps->counters.size() && ps->counters[ig.first] != nullptr &&
         ps->counters[ig.first]->generation == ig.second)
       tryCompleteCounter(ps->counters[ig.first]);
+  // Applied, a notice that arrived before its registration (balance -1)
+  // included: a destroy called from now on waits until every balance is 0
+  // and for the contributions the notice reported. The origin's detach
+  // callbacks may run.
+  if (op == AttachOp::Notice && e.replyToken != 0)
+    sendDetachReply(fromNode, e.replyToken);
   return true;
 }
 

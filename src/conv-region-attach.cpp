@@ -10,7 +10,27 @@
 
 using namespace cmi_region;
 
+namespace cmi_region {
+
+// One CmiDetachTargets call's done callback, run on the PE that called it
+// once every registration it waits for has had its notice answered.
+struct DetachWait {
+  int rank;
+  CmiDoneFn fn;
+  void *arg;
+  int remaining; // notices not answered yet; under the table lock
+};
+
+} // namespace cmi_region
+
 namespace {
+
+// The callbacks one notice answers: built with the notice entry, whose
+// replyToken is its address, and freed by the reply's handler. It does not
+// live in the registration, which may be freed once the notice is sent.
+struct ReplyToken {
+  std::vector<DetachWait *> waits;
+};
 
 struct Key {
   int32_t ownerNode, ownerPe;
@@ -174,6 +194,37 @@ void attachHandler(void *vmsg) {
   CmiFree(m);
 }
 
+// The detach callbacks waiting for a registration's notice go into the
+// notice's reply token as the notice entry is built; 0 if none wait. Under
+// the table lock.
+uint64_t takeWaits(CmiAttachRec *rec) {
+  if (rec->waits.empty()) return 0;
+  auto *t = new ReplyToken();
+  t->waits.swap(rec->waits);
+  return (uint64_t)(uintptr_t)t;
+}
+
+CpvStaticDeclare(int, regionDetachReplyHandlerIdx);
+
+// In the origin process: the owner applied, or dropped, a notice that
+// detach callbacks waited for. A callback runs once every notice it waits
+// for has been answered.
+void detachReplyHandler(void *vmsg) {
+  auto *m = static_cast<DetachReplyMsg *>(vmsg);
+  auto *t = reinterpret_cast<ReplyToken *>((uintptr_t)m->token);
+  CmiFree(m);
+  std::vector<DetachWait *> ready;
+  CmiLock(g_lock);
+  for (DetachWait *w : t->waits)
+    if (--w->remaining == 0) ready.push_back(w);
+  CmiUnlock(g_lock);
+  for (DetachWait *w : ready) {
+    postDoneOn(w->rank, w->fn, w->arg);
+    delete w;
+  }
+  delete t;
+}
+
 // The message operationDone queues on the PE that owes a notice.
 struct NoticeMsg {
   char core[CmiMsgHeaderSizeBytes];
@@ -199,6 +250,7 @@ bool oweNotice(CmiAttachRec *rec, Pending &p) {
   uint64_t v = rec->outstanding.fetch_or(kNoticePending, std::memory_order_seq_cst);
   if ((v & ~kNoticePending) != 0) return false; // the last completion sends it
   p.entry = rec->entry;
+  p.entry.replyToken = takeWaits(rec);
   p.counts = countsOf(rec);
   rec->noticeSent = true;
   return true;
@@ -217,6 +269,7 @@ void noticeHandler(void *vmsg) {
   bool del;
   CmiLock(g_lock);
   items[0].entry = rec->entry;
+  items[0].entry.replyToken = takeWaits(rec);
   items[0].counts = countsOf(rec);
   rec->noticeSent = true;
   del = rec->refs == 0;
@@ -274,6 +327,15 @@ void sendDetachRequest(int toNode, const AttachEntry &e) {
   CmiSyncSendAndFreeUrgent(CmiNodeFirst(toNode), sizeof(DetachRequestMsg), m);
 }
 
+// Any PE of the origin process may handle it.
+void sendDetachReply(int toNode, uint64_t token) {
+  auto *m = static_cast<DetachReplyMsg *>(CmiAlloc(sizeof(DetachReplyMsg)));
+  m->token = token;
+  CmiSetHandler(m, CpvAccess(regionDetachReplyHandlerIdx));
+  reinterpret_cast<CmiMessageHeader *>(m)->messageSize = sizeof(DetachReplyMsg);
+  CmiSyncNodeSendAndFree(toNode, sizeof(DetachReplyMsg), m);
+}
+
 // The completion that takes the count to zero, with the notice waiting, is
 // the only one that sees kNoticePending | 1: it hands the notice to the PE
 // that owes it. It reads that PE and the message only after its fetch_sub,
@@ -315,6 +377,8 @@ void attachPeInit() {
       CmiRegisterHandler(detachRequestHandler);
   CpvInitialize(int, regionNoticeHandlerIdx);
   CpvAccess(regionNoticeHandlerIdx) = CmiRegisterHandler(noticeHandler);
+  CpvInitialize(int, regionDetachReplyHandlerIdx);
+  CpvAccess(regionDetachReplyHandlerIdx) = CmiRegisterHandler(detachReplyHandler);
 }
 
 } // namespace cmi_region
@@ -366,15 +430,26 @@ CmiAttachment CmiAttachTarget(const CmiTarget *t) {
   return a;
 }
 
-void CmiDetachTargets(CmiAttachment *a, int n) {
+void CmiDetachTargets(CmiAttachment *a, int n, CmiDoneFn done, void *arg) {
   std::map<int, std::vector<Pending>> notices; // by owner process
   std::vector<CmiAttachRec *> unused;
+  DetachWait *wait = done == nullptr ? nullptr
+                                     : new DetachWait{CmiMyRank(), done, arg, 0};
+  bool runNow = false;
   CmiLock(g_lock);
   for (int i = 0; i < n; i++) {
     // checked under the lock, where the detached marker is stored: the same
     // handle twice in one batch, or two PEs detaching it at once, abort
     checkAttachment(a[i], "CmiDetachTarget");
     CmiAttachRec *rec = a[i]->rec;
+    // done waits for the notice that covers this attachment, unless the
+    // owner ended the registration (its notice is built or sent already);
+    // once per registration, which a batch may name twice
+    if (wait != nullptr && rec->inTable &&
+        (rec->waits.empty() || rec->waits.back() != wait)) {
+      rec->waits.push_back(wait);
+      wait->remaining++;
+    }
     retire(rec, a[i]);
     a[i]->magic.store(kAttachmentDetached, std::memory_order_relaxed);
     g_freeHandles->push_back(a[i]);
@@ -389,9 +464,17 @@ void CmiDetachTargets(CmiAttachment *a, int n) {
     // a registration whose notice waits is freed by noticeHandler
     if (rec->noticeSent) unused.push_back(rec);
   }
+  // read under the lock: once it is released, a reply may free the wait
+  if (wait != nullptr && wait->remaining == 0) runNow = true;
   CmiUnlock(g_lock);
   sendByOwnerNode(AttachOp::Notice, notices);
   for (CmiAttachRec *rec : unused) freeRec(rec);
+  if (runNow) {
+    postDone(done, arg); // nothing to wait for; still from the scheduler
+    delete wait;
+  }
 }
 
-void CmiDetachTarget(CmiAttachment a) { CmiDetachTargets(&a, 1); }
+void CmiDetachTarget(CmiAttachment a, CmiDoneFn done, void *arg) {
+  CmiDetachTargets(&a, 1, done, arg);
+}

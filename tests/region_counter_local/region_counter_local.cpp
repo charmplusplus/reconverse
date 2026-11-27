@@ -247,7 +247,7 @@ static void ctlHandler(void *vmsg) {
     CmiAttachment &a = att(m->slot);
     if (a != nullptr) {
       g_detached++; // before the detach, which may complete a destroy
-      CmiDetachTarget(a);
+      CmiDetachTarget(a, nullptr, nullptr);
       a = nullptr;
     }
     break;
@@ -426,7 +426,7 @@ void onRound(void *, CmiCounter cc) {
   for (int o = 0; o < npes(); o++)
     expect(mem.data() + o * kPiece, actions, o, 0, kPiece, "piece");
   if (actions == kRounds) {
-    for (CmiAttachment a : credits) CmiDetachTarget(a);
+    for (CmiAttachment a : credits) CmiDetachTarget(a, nullptr, nullptr);
     credits.clear();
     for (int o = 0; o < npes(); o++) sendOp(o, OP_END, o, nullptr, 0);
     return;
@@ -445,7 +445,7 @@ void onCtl(Ctl *m) {
     ack0(OP_SETUP, 0, &credit, o);
     putNext();
   } else if (m->op == OP_END) {
-    CmiDetachTarget(att(o));
+    CmiDetachTarget(att(o), nullptr, nullptr);
     att(o) = nullptr;
     CmiCounterDestroy(p->local, 0, creditDone, nullptr);
     p->local = nullptr;
@@ -529,7 +529,7 @@ void onCtl(Ctl *m) {
       if (rc != CMI_REGION_OK) fail("CmiPut returned %d", rc);
     }
   } else if (m->op == OP_END) {
-    CmiDetachTarget(att(m->slot));
+    CmiDetachTarget(att(m->slot), nullptr, nullptr);
     att(m->slot) = nullptr;
     CmiCounterDestroy(p->local, 0, nullptr, nullptr);
     p->local = nullptr;
@@ -596,7 +596,7 @@ void onCtl(Ctl *m) {
   } else if (m->op == OP_END) {
     if (CmiCounterValue(p->counter) != 1)
       fail("the target's counter is %d, not 1", CmiCounterValue(p->counter));
-    CmiDetachTarget(att(0));
+    CmiDetachTarget(att(0), nullptr, nullptr);
     att(0) = nullptr;
     CmiCounterDestroy(p->local, 0, nullptr, nullptr);
     CmiRegionDestroy(p->region, 0, nullptr, nullptr);
@@ -1030,7 +1030,7 @@ void onAck(Ctl *m) {
         fail("CmiPut");
     }
   } else if (m->tag == OP_GO && ++full == npes()) {
-    CmiDetachTargets(A.data(), kTotal);
+    CmiDetachTargets(A.data(), kTotal, nullptr, nullptr);
     for (int i = 0; i < kTotal; i++)
       if (A[i] != nullptr) fail("CmiDetachTargets left a handle");
     for (int pe = 0; pe < npes(); pe++) sendOp(pe, OP_END, 0, nullptr, 0);
@@ -1076,9 +1076,9 @@ void start() {
   check(CmiSignal(an), CMI_REGION_ENOCOUNTER, "a signal through a target with no counter");
   check(CmiSignal(ac), CMI_REGION_OK, "a signal");
   if (CmiCounterValue(c) != 98) fail("value %d, expected 98", CmiCounterValue(c));
-  CmiDetachTarget(ap);
-  CmiDetachTarget(ac);
-  CmiDetachTarget(an);
+  CmiDetachTarget(ap, nullptr, nullptr);
+  CmiDetachTarget(ac, nullptr, nullptr);
+  CmiDetachTarget(an, nullptr, nullptr);
   CmiRegionDestroy(r, 0, nullptr, nullptr);
   CmiCounterDestroy(c, 0, done, nullptr);
 }
@@ -1151,7 +1151,7 @@ void onAck(Ctl *m) {
     acks = 0;
     for (int pe = 0; pe < npes(); pe++) sendOp(pe, OP_DETACH, 0, nullptr, 1);
   } else if (step == 4 && m->tag == OP_DETACH && ++acks == npes()) {
-    CmiDetachTarget(a2);
+    CmiDetachTarget(a2, nullptr, nullptr);
     CmiCounterDestroy(q, 0, qDone, nullptr);
     CmiRegionDestroy(reg, 0, allDone, nullptr);
     CmiCounterDestroy(q2, 0, allDone, nullptr);
@@ -1184,7 +1184,7 @@ void onRound(void *, CmiCounter) {
   round++;
   expect(mem, round, 0, 0, sizeof(mem), "the round's data");
   if (round == 4) {
-    CmiDetachTarget(a);
+    CmiDetachTarget(a, nullptr, nullptr);
     CmiRegionDestroy(reg, 0, nullptr, nullptr);
     CmiCounterDestroy(c, 0, nullptr, nullptr);
     pass("each early round fired at its re-arm");
@@ -1230,7 +1230,7 @@ void onLocal(void *, CmiCounter) {
   }
   if (actions == 5) {
     if (CmiCounterValue(L) != 0) fail("value %d after five rounds", CmiCounterValue(L));
-    CmiDetachTarget(a);
+    CmiDetachTarget(a, nullptr, nullptr);
     CmiCounterDestroy(L, 0, nullptr, nullptr);
     CmiRegionDestroy(reg, 0, nullptr, nullptr);
     pass("early local completions: each round fired once, at its re-arm");
@@ -1267,7 +1267,7 @@ void finish(void *) {
 }
 void autoAction(void *, CmiCounter c) {
   autoRuns++;
-  CmiDetachTarget(aa);
+  CmiDetachTarget(aa, nullptr, nullptr);
   CmiCounterDestroy(c, 0, finish, nullptr);
 }
 void newAction(void *, CmiCounter c) {
@@ -1285,13 +1285,13 @@ void start() {
   CmiTarget t = CmiTargetMake(nullptr, 0, c);
   CmiAttachment a = CmiAttachTarget(&t);
   ok(CmiSignal(a), "CmiSignal"); // fires: the message is queued
-  CmiDetachTarget(a);
+  CmiDetachTarget(a, nullptr, nullptr);
   CmiCounterDestroy(c, 0, nullptr, nullptr);
   c2 = CmiCounterCreate(1, CmiCounterActionFn(newAction, nullptr), 0);
   CmiTarget t2 = CmiTargetMake(nullptr, 0, c2);
   CmiAttachment a2 = CmiAttachTarget(&t2);
   ok(CmiSignal(a2), "CmiSignal");
-  CmiDetachTarget(a2);
+  CmiDetachTarget(a2, nullptr, nullptr);
 }
 void startEarly() {
   earlyRound = true;
@@ -1466,13 +1466,13 @@ void onCtl(Ctl *m) {
       CmiAttachment v[3];
       if (CmiAttachTargets(ts, 3, v) != 3) fail("CmiAttachTargets");
       if (i & 1) {
-        CmiDetachTarget(a);
-        CmiDetachTargets(v, 3);
+        CmiDetachTarget(a, nullptr, nullptr);
+        CmiDetachTargets(v, 3, nullptr, nullptr);
       } else {
-        CmiDetachTargets(v, 3);
-        CmiDetachTarget(a);
+        CmiDetachTargets(v, 3, nullptr, nullptr);
+        CmiDetachTarget(a, nullptr, nullptr);
       }
-      CmiDetachTarget(b);
+      CmiDetachTarget(b, nullptr, nullptr);
       iters.fetch_add(1);
       if ((i & 63) == 0) std::this_thread::yield();
     }
@@ -1665,7 +1665,7 @@ void detachedHandle() {
   CmiRegion r = CmiRegionCreate(mem, sizeof(mem), CMI_MEM_HOST, 0, 0);
   CmiTarget t = CmiTargetMake(r, CMI_PIECE_ALL, nullptr);
   CmiAttachment old = CmiAttachTarget(&t);
-  CmiDetachTarget(old);
+  CmiDetachTarget(old, nullptr, nullptr);
   CmiAttachment fresh = CmiAttachTarget(&t);
   (void)fresh;
   unsigned char b[8] = {0};
@@ -1679,7 +1679,7 @@ void doubleDetach() {
   CmiAttachment pair[2];
   pair[0] = CmiAttachTarget(&t);
   pair[1] = pair[0];
-  CmiDetachTargets(pair, 2);
+  CmiDetachTargets(pair, 2, nullptr, nullptr);
   fail("the same attachment twice in one CmiDetachTargets was not refused");
 }
 void badFlags() {

@@ -23,6 +23,9 @@ struct CmiAttachRec;
 
 namespace cmi_region {
 
+// One CmiDetachTargets call's done callback (conv-region-attach.cpp).
+struct DetachWait;
+
 // A PE's counters, and its regions, are numbered below this, the 16-bit
 // signal's range.
 constexpr uint32_t kMaxCountersPerPe = 65536;
@@ -105,6 +108,10 @@ struct AttachEntry {
   uint8_t kind;  // ObjKind
   uint8_t pad[3];
   uint32_t firstCount, nCounts; // this entry's CountEntries in the message
+  // a notice's reply token: the origin process's address of the detach
+  // callbacks waiting for it, sent back once the owner has applied (or
+  // dropped) the notice; 0 for none, and in every registration
+  uint64_t replyToken;
 };
 // Contributions through one registration: to a counter, or (counterIndex
 // kUncounted) puts without a counter into the region.
@@ -133,6 +140,13 @@ struct DetachRequestMsg {
   char core[CmiMsgHeaderSizeBytes];
   int32_t ownerNode;
   AttachEntry entry;
+};
+
+// Owner to origin process: a notice that carried a reply token was applied,
+// or dropped (its object's generation was destroyed).
+struct DetachReplyMsg {
+  char core[CmiMsgHeaderSizeBytes];
+  uint64_t token;
 };
 
 struct DoneMsg {
@@ -170,7 +184,10 @@ RegionSlot *regionSlotOf(int rank, uint32_t slot);
 int attachHandlerIdx();
 int detachRequestHandlerIdx();
 
+// Queues a message that runs fn(arg) on this PE (postDone) or on PE rank of
+// this process (postDoneOn), from the scheduler; nothing if fn is NULL.
 void postDone(CmiDoneFn fn, void *arg);
+void postDoneOn(int rank, CmiDoneFn fn, void *arg);
 void qdCount(int created, int processed);
 #if CMI_REGION_CHECKS
 // +region_test_completion_delay: spin in operationDone, for tests
@@ -183,6 +200,8 @@ void testCompletionDelay();
 bool applyAttach(AttachOp op, const AttachEntry &e, const CountEntry *counts,
                  int fromNode);
 void sendDetachRequest(int toNode, const AttachEntry &e);
+// Owner side: answers a notice's reply token (conv-region-attach.cpp).
+void sendDetachReply(int toNode, uint64_t token);
 
 // Init, called from conv-region-attach.cpp's module init.
 void attachNodeInit();
@@ -270,6 +289,9 @@ struct CmiAttachRec {
   // contributions of detached handles: (counter index, generation) or
   // kUncounted, to count
   std::unordered_map<uint64_t, uint64_t> retired;
+  // detach callbacks that wait for this registration's notice, until the
+  // notice is built; they then move into its reply token
+  std::vector<cmi_region::DetachWait *> waits;
 };
 constexpr uint64_t kNoticePending = 1ull << 63;
 

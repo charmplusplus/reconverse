@@ -222,7 +222,7 @@ static void ctlHandler(void *vmsg) {
   case OP_DETACH: {
     CmiAttachment &a = att(m->slot);
     if (a != nullptr) {
-      CmiDetachTarget(a);
+      CmiDetachTarget(a, nullptr, nullptr);
       a = nullptr;
     }
     break;
@@ -313,7 +313,7 @@ void onCtl(Ctl *m) {
     }
     if (p->completions != p->issued)
       fail("%d source completions for %d puts", p->completions, p->issued);
-    CmiDetachTarget(att(m->slot));
+    CmiDetachTarget(att(m->slot), nullptr, nullptr);
     att(m->slot) = nullptr;
     CmiCounterDestroy(p->local, 0, nullptr, nullptr);
     p->local = nullptr;
@@ -436,8 +436,8 @@ void onCtl(Ctl *m) {
         off += kGetSize[g];
       }
   } else if (m->op == OP_END) {
-    CmiDetachTarget(att(0));
-    CmiDetachTarget(att(1));
+    CmiDetachTarget(att(0), nullptr, nullptr);
+    CmiDetachTarget(att(1), nullptr, nullptr);
     att(0) = att(1) = nullptr;
     CmiCounterDestroy(p->local, 0, nullptr, nullptr);
     CmiRegionDestroy(p->region, 0, ownerDone, nullptr);
@@ -484,7 +484,7 @@ void onCtl(Ctl *m) {
                nullptr, nullptr) != CMI_REGION_OK)
       fail("CmiPut");
   }
-  CmiDetachTarget(a);
+  CmiDetachTarget(a, nullptr, nullptr);
   att(m->slot) = nullptr;
   ack0(OP_GO);
 }
@@ -550,8 +550,8 @@ void onCtl(Ctl *m) {
       fail("CmiPut");
     if (CmiSignal(as) != CMI_REGION_OK) fail("CmiSignal");
   }
-  CmiDetachTarget(ar);
-  CmiDetachTarget(as);
+  CmiDetachTarget(ar, nullptr, nullptr);
+  CmiDetachTarget(as, nullptr, nullptr);
   ack0(OP_GO);
 }
 void onAck(Ctl *) {
@@ -616,7 +616,7 @@ void onCtl(Ctl *m) {
     if (rc != CMI_REGION_OK) fail("CmiPut returned %d", rc);
   } else if (m->op == OP_END) {
     CmiAttachment v[2] = {att(0), att(1)};
-    CmiDetachTargets(v, 2);
+    CmiDetachTargets(v, 2, nullptr, nullptr);
     att(0) = att(1) = nullptr;
     ack0(OP_END);
   }
@@ -673,10 +673,10 @@ int nextPeOfProcess() {
 void detachBoth(CmiAttachment a, CmiAttachment b, bool batch) {
   if (batch) {
     CmiAttachment v[2] = {a, b};
-    CmiDetachTargets(v, 2);
+    CmiDetachTargets(v, 2, nullptr, nullptr);
   } else {
-    CmiDetachTarget(a);
-    CmiDetachTarget(b);
+    CmiDetachTarget(a, nullptr, nullptr);
+    CmiDetachTarget(b, nullptr, nullptr);
   }
 }
 void cycle(PeData *p, int k) {
@@ -812,7 +812,7 @@ void onCtl(Ctl *m) {
            "expected %lld and 0", cr, pr, want);
     ack0(OP_GO);
   } else if (m->op == OP_END) {
-    CmiDetachTarget(att(0));
+    CmiDetachTarget(att(0), nullptr, nullptr);
     att(0) = nullptr;
     ack0(OP_END);
   } else if (m->op == OP_POLL) {

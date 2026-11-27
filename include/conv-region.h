@@ -74,7 +74,12 @@
     if (CmiPut(a, 0, src, bytes, NULL, srcFree, NULL) != CMI_REGION_OK)
       CmiAbort("CmiPut failed\n");
     // after the last round's put, and its srcFree action
-    CmiDetachTarget(a);
+    CmiDetachTarget(a, NULL, NULL);
+
+  Without a counter fired by every origin's last put (puts without a
+  counter, or a destroy before the last round), each origin detaches with a
+  done callback and sends the owner its message from there; the owner
+  destroys once it has every origin's message (CmiDetachTarget).
 
   doc/internals/persistent-family.md describes the implementation; the
   design is charm's doc/persistent-family-design.md (section 4.9 has the
@@ -133,7 +138,13 @@ typedef struct CmiLayout CmiLayout;
    to another process that was issued before the request arrived is waited
    for. Origins in the owner's process must have stopped before the
    destroy: a transfer of theirs under way when the request is handled is
-   neither waited for nor caught. */
+   neither waited for nor caught. Like every destroy, it can wait only for
+   processes whose registration has arrived, so CmiRegionDestroy's rule
+   still applies: for puts without a counter, or a counter destroyed before
+   its last round fired, origins detach with a done callback and send their
+   message to the owner from it, and the owner destroys once it has every
+   origin's message. A done callback on an attachment the owner ended this
+   way runs without waiting for the owner (CmiDetachTarget). */
 #define CMI_DESTROY_DETACH_ALL 0x1
 
 /* What CmiPut, CmiGet and CmiSignal return. */
@@ -187,7 +198,10 @@ static inline CmiCounterAction CmiCounterActionHandler(int handler) {
   return a;
 }
 
-/* Runs on the owner PE, from the scheduler, once a destroy has completed. */
+/* A completion callback, run from the scheduler: on the owner PE once a
+   destroy has completed (CmiRegionDestroy, CmiCounterDestroy), or on the
+   detaching PE once the owners have applied its detach notices
+   (CmiDetachTarget). */
 typedef void (*CmiDoneFn)(void *arg);
 
 /* A target: plain data of a fixed size, made by the owner and copied into
@@ -235,20 +249,22 @@ size_t CmiRegionPieceLength(CmiRegion r, int piece);
    their detach notices report has landed; then done(arg) runs on this PE,
    and memory from CmiRegionAlloc is freed. Memory given to CmiRegionCreate
    may be freed once done has run. done may be NULL.
-   When to call it: once nothing of any origin can still be in flight into
-   the region, which the application knows when the region's counter has
-   fired a round that every origin's puts counted toward, and no origin puts
-   again. Do not destroy on an application message alone ("I am done") in
-   two cases, puts without a counter and a counter whose last round has not
-   fired: messages are not ordered, so that message can overtake the
-   origin's registration, the destroy then completes without waiting for
-   that origin, and its puts land in freed memory. Puts without a counter
-   have no firing to wait for, and neither side can tell when one has
-   landed, so the current calls give no safe point to destroy a region
-   that took them: give them a counter unless the region lives until the
-   end of the run. A get reads the region until it completes: destroy only
-   after every origin's gets have completed (their local counter has
-   fired), not just been issued.
+   When to call it: once the owner knows of every origin, in one of two ways.
+   (1) The region's counter has fired a round that every origin's puts
+   counted toward, and no origin puts again: every contribution of that
+   round has landed, whether or not its origin's registration has arrived.
+   (2) For puts without a counter, or a counter destroyed before its last
+   round fired: each origin calls CmiDetachTarget with a done callback after
+   its last put and sends the owner a message from the callback; the owner
+   destroys once it has every origin's message. The callback runs once the
+   owner has applied the origin's detach notice, so the destroy then waits
+   for everything the origin reported. A message sent right after
+   CmiDetachTarget without a callback ("I am done") is not enough in these
+   cases: messages are not ordered, so it can overtake the origin's
+   registration and notice, the destroy then completes without waiting for
+   that origin, and its puts land in freed memory. A get reads the region
+   until it completes: destroy only after every origin's gets have
+   completed (their local counter has fired), not just been issued.
    If the region's counter also serves another region still in use, or a
    target with no region, call this only after the counter has fired the last
    round that a put into this region counted toward (the shared-counter
@@ -277,25 +293,30 @@ int32_t CmiCounterValue(CmiCounter c);
    contribution their notices report has landed, and every region it was
    paired with in CmiTargetMake has been destroyed. Call it after the
    counter has fired the last round that every origin's contributions
-   counted toward (see CmiRegionDestroy: an earlier destroy can complete
-   before an origin's registration arrives). A counter passed as `local` to
-   a CmiPut or CmiGet must not be destroyed until those transfers have
-   completed: their completion decrements it. */
+   counted toward, or, to destroy it before its last round fired, once
+   every origin has sent its message from a CmiDetachTarget done callback
+   (see CmiRegionDestroy: a destroy on a message sent without the callback
+   can complete before an origin's registration arrives). A counter passed
+   as `local` to a CmiPut or CmiGet must not be destroyed until those
+   transfers have completed: their completion decrements it. */
 void CmiCounterDestroy(CmiCounter c, int flags, CmiDoneFn done, void *arg);
 
 /* Targets (owner PE): piece `piece` of r (or CMI_PIECE_ALL) with counter c.
    r may be NULL (a counter alone, for CmiSignal); c may be NULL (puts are not
    counted). r and c must belong to the calling PE.
-   A put without a counter tells no one that it has landed. From another
-   process, the owner learns it only from quiescence detection (Charm++),
-   which counts such puts until they land, or not at all: use them for data
-   whose age does not matter, or in a region that lives until the end of
-   the run. A message from the origin saying it has put is no sign, since it
+   A put without a counter tells no one that it has landed. During the
+   run, a message from the origin saying it has put is no sign, since it
    can arrive before the data; nor is the put's local completion, which
-   means only that src may be reused. Within the owner's process the data
-   is in place when CmiPut returns. When the owner must know, give the
-   target a counter: one with no action costs the same, one atomic
-   decrement where the put lands, and CmiCounterValue shows it. */
+   means only that src may be reused. From another process, the owner
+   learns it from quiescence detection (Charm++), which counts such puts
+   until they land, or at teardown: the origin detaches with a done
+   callback and sends its message from there, and the region's destroy,
+   called once the owner has every origin's message, completes only after
+   every such put has landed (CmiRegionDestroy). Within the owner's process
+   the data is in place when CmiPut returns. When the owner must know
+   during the run, give the target a counter: one with no action costs the
+   same, one atomic decrement where the put lands, and CmiCounterValue
+   shows it. */
 CmiTarget CmiTargetMake(CmiRegion r, int piece, CmiCounter c);
 
 /* Origins (any PE). An attachment is one origin's handle on a target; the
@@ -308,14 +329,33 @@ CmiAttachment CmiAttachTarget(const CmiTarget *t);
    are read until then, so keep them unchanged. The handle is invalid
    afterwards: a put, get, signal or detach through it aborts ("detached
    already") until 4096 later detaches in the process have passed, after
-   which the handle may be reused for another attachment. */
-void CmiDetachTarget(CmiAttachment a);
+   which the handle may be reused for another attachment.
+   done, if not NULL, says when the owner has taken the detach into account:
+   * done(arg) runs once, on the calling PE, from its scheduler (never
+     inside this call), after the owner PE of every region and counter
+     behind the attachments has applied the detach notice that covers them.
+     From then on, a destroy of those objects waits for every contribution
+     this process reported, so a message the callback sends to the owner is
+     a safe point for the owner to destroy (CmiRegionDestroy).
+   * The process sends one notice per region (or counter), when its last
+     attachment to it is detached, and only once its transfers in flight
+     through it have completed locally. So done can also wait for detaches
+     by other PEs of this process that share the registration.
+   * An attachment whose registration the owner already ended (destroyed
+     with CMI_DESTROY_DETACH_ALL, or attached after the object was
+     destroyed, both of which send the notice without a detach) is not
+     waited for: its owner is already destroying. If nothing is left to
+     wait for, done still runs from the scheduler.
+   With done NULL nothing is requested and no extra message is sent. Puts,
+   gets and signals cost the same either way. */
+void CmiDetachTarget(CmiAttachment a, CmiDoneFn done, void *arg);
 /* The batch forms send one message per owner process. CmiAttachTargets
    returns n, the number of attachments written to out; an invalid target
-   aborts. */
+   aborts. CmiDetachTargets runs done once, after the notices covering all n
+   attachments have been applied (as for CmiDetachTarget). */
 CMI_REGION_CHECK_RESULT int CmiAttachTargets(const CmiTarget *t, int n,
                                              CmiAttachment *out);
-void CmiDetachTargets(CmiAttachment *a, int n);
+void CmiDetachTargets(CmiAttachment *a, int n, CmiDoneFn done, void *arg);
 
 /* Writes bytes from src at offset within the target's piece, and decrements
    the target's counter, if it has one. srcLayout and stream must be NULL.

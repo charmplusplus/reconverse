@@ -397,7 +397,7 @@ for (each step) {
   if (CmiPut(a, 0, src, bytes, NULL, srcFree, NULL) != CMI_REGION_OK)
     CmiAbort("CmiPut failed\n");
 }
-CmiDetachTarget(a);                 /* after the last put */
+CmiDetachTarget(a, NULL, NULL);     /* after the last put */
 ```
 
 Rules that the example follows:

@@ -48,7 +48,7 @@ static void regionCheck(void) {
   if (CmiSignal(a) != CMI_REGION_OK || CmiCounterValue(c) != 1)
     CmiAbort("c_program: a signal left the counter at %d, not 1\n",
              (int)CmiCounterValue(c));
-  CmiDetachTarget(a);
+  CmiDetachTarget(a, NULL, NULL);
   CmiCounterDestroy(c, 0, NULL, NULL);
 }
 
