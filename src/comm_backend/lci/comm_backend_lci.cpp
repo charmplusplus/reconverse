@@ -325,7 +325,7 @@ void CommBackendLCI::init(char **argv) {
   if (m_rdvMax < 1) m_rdvMax = 1;
   CmiGetArgIntDesc(argv, "+lci_post_tries", &m_postTries,
                    "attempts to hand LCI a send, with progress in between, "
-                   "before it is queued and the PE goes on (default: 1)");
+                   "before it is queued and the PE goes on (default: 16)");
   if (m_postTries < 1) m_postTries = 1;
   m_pendingOfRank.reset(new std::atomic<uint32_t>[lci::get_rank_n()]);
   for (int i = 0; i < lci::get_rank_n(); i++)
