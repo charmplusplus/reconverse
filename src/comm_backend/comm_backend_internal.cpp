@@ -128,6 +128,33 @@ void issueRput(int rank, const void *local_buf, size_t size, mr_t local_mr,
                           localComp, user_context);
 }
 
+bool isPutSignalCapable() {
+  return gCommBackend != nullptr && gCommBackend->isPutSignalCapable();
+}
+
+bool isPutSignalNative() {
+  return isPutSignalCapable() && gCommBackend->isPutSignalNative();
+}
+
+int registerPutSignalKind(PutSignalHandler handler, void *ctx, int nranks) {
+  if (!isPutSignalCapable()) {
+    return -1;
+  }
+  return gCommBackend->registerPutSignalKind(handler, ctx, nranks);
+}
+
+void issueRputSignal(int rank, const void *local_buf, size_t size,
+                     mr_t local_mr, uintptr_t remote_disp, void *rmr,
+                     int dest_rank, int kind, uint16_t signal,
+                     CompHandler localComp, void *user_context) {
+  if (gCommBackend == nullptr) {
+    return;
+  }
+  gCommBackend->issueRputSignal(rank, local_buf, size, local_mr, remote_disp,
+                                rmr, dest_rank, kind, signal, localComp,
+                                user_context);
+}
+
 void *malloc(int nbytes, int header)
 {
   if (gCommBackend) {

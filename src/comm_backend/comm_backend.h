@@ -2,6 +2,7 @@
 #define RECONVERSE_COMM_BACKEND_H
 
 #include <cstddef>
+#include <cstdint>
 
 #define MEMPOOL_INIT_SIZE_MB_DEFAULT   32
 #define MEMPOOL_EXPAND_SIZE_MB_DEFAULT 64
@@ -18,6 +19,19 @@ struct Status {
 };
 using CompHandler = void (*)(Status status);
 using AmHandler = int;
+// Raised on the target of a put issued with issueRputSignal, once the data
+// is in place. ctx is what registerPutSignalKind was given; dest_rank (the
+// local rank of a PE of this process) and signal are what the initiator
+// passed. src_rank is the initiating process, or -1 when the backend does not
+// report it; size is the number of bytes written, or 0 when the backend does
+// not report it. The LCI backend reports neither for a native write with
+// immediate data (LCI's completion of a remote write carries the immediate
+// data only), and only the source when LCI emulates the signal with a
+// zero-length message, so a caller that needs the length must carry it with
+// the data. The handler runs on whatever thread polls the backend, inside
+// progress(), so it must not block or poll.
+using PutSignalHandler = void (*)(void *ctx, int dest_rank, uint16_t signal,
+                                  int src_rank, size_t size);
 using mr_t = void *;
 const mr_t MR_NULL = nullptr;
 
@@ -78,6 +92,38 @@ void issueRget(int rank, const void *local_buf, size_t size, mr_t local_mr,
  */
 void issueRput(int rank, const void *local_buf, size_t size, mr_t local_mr,
                uintptr_t remote_disp, void *rmr, CompHandler localComp, void *user_context);
+/**
+ * @brief Whether issueRputSignal is supported. Thread-safe. When false, a
+ * caller must announce a put's data some other way, e.g. a message sent
+ * after the put's local completion.
+ */
+bool isPutSignalCapable();
+/**
+ * @brief Whether a put with signal is one network operation (a write with
+ * immediate data), rather than the write followed, once it has completed,
+ * by a message carrying the signal (LCI's emulation where the provider has
+ * no write with immediate data, or +lci_put_signal_emulate). An emulated
+ * one costs about a round trip more, so a small put may be cheaper as one
+ * message with the data and the signal. False when !isPutSignalCapable().
+ */
+bool isPutSignalNative();
+/**
+ * @brief Add a kind of put signal, raising handler(ctx, ...) for puts of this
+ * kind to any of the nranks local ranks of this process; returns the kind's
+ * number, 0 for the first. Collective: every process adds the same kinds in
+ * the same order, from one thread, before any peer can issue a put of the
+ * new kind. Only when isPutSignalCapable().
+ */
+int registerPutSignalKind(PutSignalHandler handler, void *ctx, int nranks);
+/**
+ * @brief issueRput whose arrival raises the handler of `kind` on process
+ * `rank`, with dest_rank and signal, after the data is visible in the target
+ * buffer. localComp runs when local_buf may be reused. Thread-safe.
+ */
+void issueRputSignal(int rank, const void *local_buf, size_t size,
+                     mr_t local_mr, uintptr_t remote_disp, void *rmr,
+                     int dest_rank, int kind, uint16_t signal,
+                     CompHandler localComp, void *user_context);
 /**
  * @brief Make progress on the communication backend. Thread-safe.
  */
