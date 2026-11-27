@@ -257,6 +257,17 @@ it sets the bit, and until the notice has been sent the registration is
 not freed. A completion that sees any other value does not touch the
 registration again.
 
+Every transfer to another process is counted: a put with signal or a get
+until its local completion, a put or signal that a message carries until
+just after the send (by then its contribution is in the attachment's count
+that the notice reports). A transfer increments `outstanding` and then
+loads the registration's state; the owner's detach request stores
+`DetachedByOwner` and then sets the pending bit; all four are seq_cst.
+Either the transfer is counted before the detach looks, and the notice
+waits for it, or the transfer sees the state and aborts, in every build,
+without issuing anything. No transfer is therefore counted after its
+notice has been sent, and no completion can queue the notice twice.
+
 ### Detach callbacks
 
 `CmiDetachTarget(a, done, arg)` and `CmiDetachTargets(a, n, done, arg)` with
@@ -270,7 +281,8 @@ two attachments of one target do); each append increments `remaining`.
 A registration the owner ended (detach request) is out of the table, its
 notice already built or sent, and is not waited for. If `remaining` is 0
 when the loop ends, still under the lock, `done` is queued on the calling PE
-at once (`postDone`); otherwise the wait belongs to the replies from then on.
+at once (`postDone`); otherwise the reply that brings `remaining` to 0
+queues `done` and frees the wait, and the detach does not touch it again.
 
 When a notice entry is built (in `oweNotice` when it is sent at once, in
 the notice message's handler when it waited for transfers in flight), the
@@ -291,17 +303,6 @@ on the wait's PE (`postDoneOn`, the message that runs a destroy's `done`)
 for each that reaches 0, frees those waits and the token. QD does not count
 replies. With `done` NULL nothing of this happens: the entry's token is 0
 and no reply is sent; the put, get and signal paths do not look at waits.
-
-Every transfer to another process is counted: a put with signal or a get
-until its local completion, a put or signal that a message carries until
-just after the send (by then its contribution is in the attachment's count
-that the notice reports). A transfer increments `outstanding` and then
-loads the registration's state; the owner's detach request stores
-`DetachedByOwner` and then sets the pending bit; all four are seq_cst.
-Either the transfer is counted before the detach looks, and the notice
-waits for it, or the transfer sees the state and aborts, in every build,
-without issuing anything. No transfer is therefore counted after its
-notice has been sent, and no completion can queue the notice twice.
 
 ## Destroy
 
