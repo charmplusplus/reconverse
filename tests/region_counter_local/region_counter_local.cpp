@@ -62,6 +62,8 @@
                  put through it is refused
     detach_all_put  another PE keeps putting while the owner destroys the
                  region with CMI_DESTROY_DETACH_ALL
+    detached_handle  a put through a detached attachment after another
+                 attach
   With +randomized_msgq, teardown does not check that a destroy waits for
   origins it may not have heard of yet: that relies on the default
   scheduler serving the urgent queue first.
@@ -1488,6 +1490,20 @@ void staleRegion() {
   int rc = CmiPut(a, 0, b, sizeof(b), nullptr, nullptr, nullptr);
   fail("a put through a destroyed region's target returned %d", rc);
 }
+// A detached handle is not reused by the next attach, so a put through it
+// is refused, not counted as the new attachment's.
+void detachedHandle() {
+  unsigned char mem[64];
+  CmiRegion r = CmiRegionCreate(mem, sizeof(mem), CMI_MEM_HOST, 0, 0);
+  CmiTarget t = CmiTargetMake(r, CMI_PIECE_ALL, nullptr);
+  CmiAttachment old = CmiAttachTarget(&t);
+  CmiDetachTarget(old);
+  CmiAttachment fresh = CmiAttachTarget(&t);
+  (void)fresh;
+  unsigned char b[8] = {0};
+  int rc = CmiPut(old, 0, b, sizeof(b), nullptr, nullptr, nullptr);
+  fail("a put through a detached attachment returned %d", rc);
+}
 // With CMI_DESTROY_DETACH_ALL the owner's detach request reaches this
 // process before the done callback (the urgent queue first), and every
 // build refuses the attachment itself.
@@ -1616,6 +1632,7 @@ static const Case kCases[] = {
     {"round_skip", aborts::roundSkip},
     {"stale", aborts::stale},       {"detached", aborts::detached},
     {"stale_region", aborts::staleRegion},
+    {"detached_handle", aborts::detachedHandle},
     {"late_attach", aborts::lateAttach},
     {"detach_all_put", aborts::detachAllPut},
     {"wrong_pe", aborts::wrongPe},  {"table_limit", aborts::tableLimit},

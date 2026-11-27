@@ -3,6 +3,7 @@
 // (design 10.1, 10.2). See doc/internals/persistent-family.md.
 
 #include <cstddef>
+#include <deque>
 #include <map>
 
 #include "conv-region-internal.h"
@@ -32,9 +33,10 @@ struct KeyHash {
 // request and a notice that waited touch it, never a put.
 CmiNodeLock g_lock;
 std::unordered_map<Key, CmiAttachRec *, KeyHash> *g_table = nullptr;
-// Detached handles, kept for later attachments and never freed, so that the
-// check of a handle detached already reads memory that is still ours.
-std::vector<CmiAttachmentRec *> *g_freeHandles = nullptr;
+// Detached handles, oldest first, never freed, so that the check of a
+// handle detached already reads memory that is still ours. A handle is
+// reused only once more than kDetachedHandlesKept wait.
+std::deque<CmiAttachmentRec *> *g_freeHandles = nullptr;
 
 Key keyOf(int ownerNode, const AttachEntry &e) {
   return Key{ownerNode, e.ownerPe, e.slot, e.gen, e.kind};
@@ -292,10 +294,19 @@ void operationDone(CmiAttachRec *rec) {
     CmiPushPE(rec->noticeRank, rec->noticeMsg);
 }
 
+void checkAttachment(const CmiAttachmentRec *a, const char *call) {
+  uint32_t m = a == nullptr ? 0 : a->magic.load(std::memory_order_relaxed);
+  if (m == CMI_TARGET_MAGIC) return;
+  if (m == kAttachmentDetached)
+    CmiAbort("%s: the attachment was detached already (CmiDetachTarget)\n",
+             call);
+  CmiAbort("%s: not an attachment from CmiAttachTarget\n", call);
+}
+
 void attachNodeInit() {
   g_lock = CmiCreateLock();
   g_table = new std::unordered_map<Key, CmiAttachRec *, KeyHash>();
-  g_freeHandles = new std::vector<CmiAttachmentRec *>();
+  g_freeHandles = new std::deque<CmiAttachmentRec *>();
 }
 
 void attachPeInit() {
@@ -333,13 +344,13 @@ int CmiAttachTargets(const CmiTarget *t, int n, CmiAttachment *out) {
     }
     rec->refs++;
     CmiAttachmentRec *a;
-    if (g_freeHandles->empty()) {
-      a = new CmiAttachmentRec();
+    if (g_freeHandles->size() > kDetachedHandlesKept) {
+      a = g_freeHandles->front();
+      g_freeHandles->pop_front();
     } else {
-      a = g_freeHandles->back();
-      g_freeHandles->pop_back();
+      a = new CmiAttachmentRec();
     }
-    a->magic = CMI_TARGET_MAGIC;
+    a->magic.store(CMI_TARGET_MAGIC, std::memory_order_relaxed);
     a->target = t[i];
     a->rec = rec;
     a->contributions.store(0, std::memory_order_relaxed);
@@ -358,17 +369,14 @@ CmiAttachment CmiAttachTarget(const CmiTarget *t) {
 }
 
 void CmiDetachTargets(CmiAttachment *a, int n) {
-  for (int i = 0; i < n; i++)
-    if (a[i] == nullptr || a[i]->magic != CMI_TARGET_MAGIC)
-      CmiAbort("CmiDetachTarget: not an attachment from CmiAttachTarget, or "
-               "one already detached\n");
+  for (int i = 0; i < n; i++) checkAttachment(a[i], "CmiDetachTarget");
   std::map<int, std::vector<Pending>> notices; // by owner process
   std::vector<CmiAttachRec *> unused;
   CmiLock(g_lock);
   for (int i = 0; i < n; i++) {
     CmiAttachRec *rec = a[i]->rec;
     retire(rec, a[i]);
-    a[i]->magic = 0;
+    a[i]->magic.store(kAttachmentDetached, std::memory_order_relaxed);
     g_freeHandles->push_back(a[i]);
     a[i] = nullptr;
     if (--rec->refs > 0) continue;

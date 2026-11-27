@@ -24,7 +24,7 @@ are refused where they would be given.
 | region record (`CmiRegionRec`) | heap of the owner's process | the owner PE only |
 | target (`CmiTarget`) | a 160-byte value, copied into messages | read by origins |
 | registration (`CmiAttachRec`) | the origin process's attachment table | its PEs, under the table lock, and its in-flight count |
-| attachment (`CmiAttachmentRec`, what a `CmiAttachment` points to) | heap of the origin's process, never freed | the origin |
+| attachment (`CmiAttachmentRec`, what a `CmiAttachment` points to) | heap of the origin's process, never freed, reused after 4096 later detaches | the origin |
 
 Only atomics are written by more than one thread, or read by other
 threads while their owner writes them: the fields of a counter line, a
@@ -211,10 +211,14 @@ The attachments of one process to one region (or, for a counter-only target,
 one counter) of one generation share a registration, a `CmiAttachRec` in the
 process's attachment table, keyed by owner process, owner PE, kind, slot and
 generation. Each `CmiAttachTarget` returns an attachment holding a copy of
-the target and a reference to the registration. Detached attachments go to a
-list that later attachments take from, and are never freed, so that the
-check of an attachment detached already reads memory that is still the
-runtime's.
+the target and a reference to the registration. A detached attachment is
+marked detached and goes to the end of a FIFO; it is never freed, so that
+the check of an attachment detached already reads memory that is still the
+runtime's. An attach takes the oldest one only once more than 4096 wait, and
+allocates a new one otherwise. A put, get, signal or detach through a
+detached attachment therefore aborts ("the attachment was detached
+already") until 4096 later detaches in the process have passed; after that
+the handle may belong to a later attachment, and a stale use is not caught.
 
 Messages, all sent urgent (`CmiSyncSendAndFreeUrgent`) so that they do not
 wait behind application work:

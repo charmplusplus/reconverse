@@ -1038,9 +1038,7 @@ CmiTarget CmiTargetMake(CmiRegion r, int piece, CmiCounter c) {
 namespace {
 
 CmiAttachmentRec *checkHandle(CmiAttachment a, const char *call) {
-  if (a == nullptr || a->magic != CMI_TARGET_MAGIC)
-    CmiAbort("%s: not an attachment from CmiAttachTarget, or one already "
-             "detached\n", call);
+  checkAttachment(a, call);
   return a;
 }
 

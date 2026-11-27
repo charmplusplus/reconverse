@@ -192,6 +192,10 @@ void attachPeInit();
 // side); the last one of a registration whose notice waits sends it.
 void operationDone(CmiAttachRec *rec);
 
+// Aborts unless a is a live attachment: names the call, and says whether a
+// was detached already.
+void checkAttachment(const CmiAttachmentRec *a, const char *call);
+
 } // namespace cmi_region
 
 using cmi_region::CounterLine;
@@ -264,9 +268,17 @@ struct CmiAttachRec {
 };
 constexpr uint64_t kNoticePending = 1ull << 63;
 
+// CmiAttachmentRec::magic of a detached handle; a live one's is
+// CMI_TARGET_MAGIC.
+constexpr uint32_t kAttachmentDetached = 0x44544443u; // "CDTD"
+// Detached handles wait in a FIFO and are reused only once more than this
+// many wait, so that a use after detach is caught until that many later
+// detaches have passed.
+constexpr size_t kDetachedHandlesKept = 4096;
+
 // One CmiAttachTarget's handle.
 struct CmiAttachmentRec {
-  uint32_t magic;
+  std::atomic<uint32_t> magic; // read by any PE that is handed the handle
   CmiTarget target;
   CmiAttachRec *rec;
   // contributions through this handle; also the round check's k
